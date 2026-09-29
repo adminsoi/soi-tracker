@@ -13,7 +13,6 @@ const {
   adminMiddleware,
 } = require("./auth");
 const { getUsers, getTasks, withUsers, withTasks } = require("./s3store");
-
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 if (!ADMIN_PASSWORD) {
   console.error("Missing required env var: ADMIN_PASSWORD");
@@ -209,9 +208,15 @@ app.delete("/api/admin/users/:username", adminMiddleware, async (req, res) => {
   res.status(204).end();
 });
 
-// ---------- Static frontend ----------
+// ---------- Frontend (flat layout: html files sit next to this file) ----------
 
-app.use(express.static(path.join(__dirname, "..", "public")));
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "index.html"));
+});
+
+app.get("/admin.html", (req, res) => {
+  res.sendFile(path.join(__dirname, "admin.html"));
+});
 
 app.listen(PORT, () => {
   console.log(`SOI tracker listening on :${PORT}`);
