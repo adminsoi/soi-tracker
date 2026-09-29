@@ -1,17 +1,12 @@
-# This server is internal-only (VPN / office network), so we use Caddy's
-# built-in internal CA instead of a public Let's Encrypt certificate — no
-# internet reachability needed. Replace 10.0.0.0 below with your EC2
-# instance's actual PRIVATE IPv4 address (EC2 console → your instance →
-# "Private IPv4 addresses"). The first time each person visits, their
-# browser will show a one-time "not private" warning to click past —
-# that's expected for a self-signed cert.
-
-
-
-
+# Disable HTTP/3 (it runs over UDP, and only TCP 443 is open in the
+# security group) — stick to HTTP/1.1 and HTTP/2, both plain TCP.
+# default_sni tells Caddy which certificate to serve when a client
+# connects by raw IP and doesn't send an SNI hint (common — curl and
+# some browsers skip SNI for IP-literal addresses).
 {
     servers {
         protocols h1 h2
+        default_sni 10.2.1.185
     }
 }
 
