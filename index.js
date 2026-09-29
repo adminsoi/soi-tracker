@@ -1,6 +1,9 @@
 require("dotenv").config();
 
 const path = require("path");
+const fs = require("fs");
+const https = require("https");
+const { execSync } = require("child_process");
 const express = require("express");
 
 const {
@@ -19,7 +22,8 @@ if (!ADMIN_PASSWORD) {
   process.exit(1);
 }
 
-const PORT = process.env.PORT || 4000;
+const PORT = process.env.PORT || 443;
+const SERVER_IP = process.env.SERVER_IP;
 
 const app = express();
 app.use(express.json());
@@ -218,6 +222,42 @@ app.get("/admin.html", (req, res) => {
   res.sendFile(path.join(__dirname, "admin.html"));
 });
 
-app.listen(PORT, () => {
-  console.log(`SOI tracker listening on :${PORT}`);
-});
+// ---------- Self-signed HTTPS ----------
+// This is an internal-only server (VPN / office network), so instead of a
+// public certificate authority, we generate one self-signed certificate
+// the first time the container starts and reuse it after that. Browsers
+// will show a one-time "not private" warning to click past on first visit
+// — expected for a self-signed cert.
+
+const CERT_DIR = "/app/certs";
+const CERT_PATH = path.join(CERT_DIR, "server.crt");
+const KEY_PATH = path.join(CERT_DIR, "server.key");
+
+function ensureCert() {
+  if (fs.existsSync(CERT_PATH) && fs.existsSync(KEY_PATH)) return;
+  if (!SERVER_IP) {
+    console.error(
+      "Missing required env var: SERVER_IP (the server's private IP — used as the certificate's subject)"
+    );
+    process.exit(1);
+  }
+  fs.mkdirSync(CERT_DIR, { recursive: true });
+  execSync(
+    `openssl req -x509 -nodes -newkey rsa:2048 -days 3650 ` +
+      `-keyout ${KEY_PATH} -out ${CERT_PATH} ` +
+      `-subj "/CN=${SERVER_IP}" -addext "subjectAltName=IP:${SERVER_IP}"`,
+    { stdio: "inherit" }
+  );
+  console.log(`Generated a new self-signed certificate for ${SERVER_IP}`);
+}
+
+ensureCert();
+
+https
+  .createServer(
+    { key: fs.readFileSync(KEY_PATH), cert: fs.readFileSync(CERT_PATH) },
+    app
+  )
+  .listen(PORT, () => {
+    console.log(`SOI tracker listening on https://0.0.0.0:${PORT}`);
+  });
