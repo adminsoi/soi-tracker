@@ -3,7 +3,6 @@ version: "3.8"
 services:
   soi-tracker:
     build: .
-    image: soi-tracker:latest
     container_name: soi-tracker
     restart: unless-stopped
     expose:
@@ -24,7 +23,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.caddy
-    image: soi-tracker-caddy:latest
     container_name: soi-tracker-proxy
     restart: unless-stopped
     ports:
