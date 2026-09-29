@@ -329,6 +329,7 @@
     "Warehouse": "#0f6a72"
   };
 
+  var DEPARTMENTS_FALLBACK = ["Procurement", "Purchasing", "IT", "HR", "Operations", "US Government", "Warehouse"];
   var DEPARTMENTS = []; // loaded from /api/departments
   var me = null; // { username, department }
   var activeTab = null;
@@ -428,17 +429,32 @@
     loadDepartmentsThenStart();
   }
 
-  function loadDepartmentsThenStart() {
+  function loadDepartmentsThenStart(isRetry) {
     api("/api/departments").then(function (depts) {
       DEPARTMENTS = depts;
-      buildTabs();
-      populateDeptSelect();
-      render();
-      fetchTasks();
-      pollTimer = setInterval(fetchTasks, 15000);
+      startApp();
     }).catch(function () {
-      toast("Couldn't load department list.", true);
+      if (!isRetry) {
+        // Don't strand the page on one bad request — start with the known
+        // list now, and quietly retry the real fetch a couple seconds later.
+        toast("Having trouble reaching the server — showing cached department list.", true);
+        DEPARTMENTS = DEPARTMENTS_FALLBACK;
+        startApp();
+        setTimeout(function () { loadDepartmentsThenStart(true); }, 3000);
+      }
+      // If the background retry also fails, we just keep running on the
+      // fallback list rather than nagging the person again.
     });
+  }
+
+  function startApp() {
+    buildTabs();
+    populateDeptSelect();
+    render();
+    fetchTasks();
+    if (!pollTimer) {
+      pollTimer = setInterval(fetchTasks, 15000);
+    }
   }
 
   // ---------- Tabs ----------
