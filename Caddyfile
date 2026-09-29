@@ -5,6 +5,16 @@
 # "Private IPv4 addresses"). The first time each person visits, their
 # browser will show a one-time "not private" warning to click past —
 # that's expected for a self-signed cert.
+
+
+
+
+{
+    servers {
+        protocols h1 h2
+    }
+}
+
 https://10.2.1.185 {
     tls internal
     reverse_proxy soi-tracker:4000
