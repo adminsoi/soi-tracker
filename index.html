@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>SOI Aviation — Department Task Tracker</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<style>
+  :root {
+    --navy: #1d2c47;
+    --navy-light: #2c4067;
+    --red: #a6192e;
+    --red-light: #c23a4f;
+    --bg: #f3f4f7;
+    --surface: #ffffff;
+    --surface-2: #eceef2;
+    --border: #d9dce3;
+    --text: #1a1d24;
+    --text-dim: #5b6270;
+    --text-faint: #8b909c;
+    --shadow: 0 1px 2px rgba(20, 24, 33, 0.06), 0 4px 12px rgba(20, 24, 33, 0.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151c; --surface: #1a1e28; --surface-2: #20242f;
+      --border: #2c313d; --text: #e7e9ee; --text-dim: #a4aab8; --text-faint: #6c7280;
+      --navy: #2c4067; --navy-light: #3a5280;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 4px 14px rgba(0,0,0,0.25);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", "Inter", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  header.top {
+    background: var(--navy); color: #fff;
+    padding: 14px 20px; display: flex; align-items: center; gap: 14px;
+    flex-wrap: wrap; position: sticky; top: 0; z-index: 20; box-shadow: var(--shadow);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand-mark {
+    width: 32px; height: 32px; border-radius: 7px; background: var(--red);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 14px; flex-shrink: 0;
+  }
+  .brand-text { display: flex; flex-direction: column; line-height: 1.15; }
+  .brand-text strong { font-size: 15px; font-weight: 650; }
+  .brand-text span { font-size: 11.5px; color: #c7cede; }
+  .top-spacer { flex: 1; }
+  .who {
+    font-size: 12px; color: #dfe3ee; display: flex; align-items: center; gap: 8px;
+  }
+  .who b { color: #fff; }
+  .top-btn {
+    background: rgba(255,255,255,0.1); border: none; color: #fff;
+    font-size: 11.5px; padding: 6px 11px; border-radius: 100px; cursor: pointer;
+  }
+  .top-btn:hover { background: rgba(255,255,255,0.18); }
+  .sync-pill {
+    font-size: 11px; padding: 4px 9px; border-radius: 100px;
+    background: rgba(255,255,255,0.1); color: #dfe3ee;
+    display: flex; align-items: center; gap: 6px; white-space: nowrap;
+  }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: #8fd19e; }
+  .dot.off { background: var(--text-faint); }
+  .dot.busy { background: #e0b23c; }
+
+  nav.tabs {
+    display: flex; gap: 2px; padding: 0 16px; background: var(--surface);
+    border-bottom: 1px solid var(--border); overflow-x: auto;
+    position: sticky; top: 0; z-index: 19;
+  }
+  nav.tabs button {
+    appearance: none; border: none; background: none;
+    padding: 13px 14px 11px; font-size: 13.5px; font-weight: 500;
+    color: var(--text-dim); border-bottom: 2px solid transparent; cursor: pointer;
+    white-space: nowrap; font-family: inherit;
+  }
+  nav.tabs button:hover { color: var(--text); }
+  nav.tabs button.active { color: var(--navy); border-bottom-color: var(--red); font-weight: 650; }
+  @media (prefers-color-scheme: dark) { nav.tabs button.active { color: #cfd9ef; } }
+
+  main { padding: 18px 20px 60px; max-width: 1280px; margin: 0 auto; }
+  .banner {
+    display: flex; gap: 10px; background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 11px 14px; font-size: 12.5px; color: var(--text-dim); margin-bottom: 18px;
+  }
+  .banner b { color: var(--text); }
+
+  .panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 4px; flex-wrap: wrap; }
+  .panel-head h1 { font-size: 19px; margin: 0; font-weight: 650; }
+  .panel-head .sub { font-size: 12.5px; color: var(--text-faint); }
+
+  .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 16px 0; }
+  .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .stat-card .n { font-size: 22px; font-weight: 650; line-height: 1.1; }
+  .stat-card .l { font-size: 11.5px; color: var(--text-faint); margin-top: 2px; }
+  .stat-card.alert .n { color: var(--red); }
+
+  .chart-row { display: grid; grid-template-columns: 1.3fr 1fr; gap: 12px; margin-bottom: 22px; }
+  @media (max-width: 760px) { .chart-row { grid-template-columns: 1fr; } }
+  .chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px 10px; }
+  .chart-card h3 { font-size: 12.5px; font-weight: 600; margin: 0 0 10px; color: var(--text-dim); }
+  .chart-card .chart-wrap { position: relative; height: 190px; }
+
+  .board-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; gap: 10px; flex-wrap: wrap; }
+  .add-btn {
+    background: var(--red); color: #fff; border: none; border-radius: 8px;
+    padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit;
+  }
+  .add-btn:hover { background: var(--red-light); }
+
+  .board { display: grid; grid-template-columns: repeat(4, minmax(220px, 1fr)); gap: 12px; overflow-x: auto; padding-bottom: 8px; }
+  @media (max-width: 900px) { .board { grid-template-columns: 1fr; } }
+  .col { background: var(--surface-2); border-radius: 10px; padding: 10px; min-height: 120px; display: flex; flex-direction: column; gap: 8px; }
+  .col.dragover { outline: 2px dashed var(--navy-light); outline-offset: -2px; }
+  .col-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 650; color: var(--text-dim); padding: 2px 4px 4px; }
+  .col-head .count { background: var(--surface); border-radius: 100px; padding: 1px 7px; font-size: 11px; color: var(--text-faint); }
+  .col-body { display: flex; flex-direction: column; gap: 8px; min-height: 40px; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 10px 11px; cursor: grab; box-shadow: var(--shadow); }
+  .card:active { cursor: grabbing; }
+  .card.dragging { opacity: 0.4; }
+  .card .row1 { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; }
+  .card .title { font-size: 13px; font-weight: 600; line-height: 1.3; }
+  .card .del { background: none; border: none; color: var(--text-faint); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 0 0 4px; font-family: inherit; }
+  .card .del:hover { color: var(--red); }
+  .card .meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+  .badge { font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 100px; white-space: nowrap; }
+  .badge.dept { background: var(--navy); color: #fff; }
+  .badge.pri-high { background: #f6dadc; color: #8c1c2a; }
+  .badge.pri-medium { background: #fbe8c8; color: #8a5c14; }
+  .badge.pri-low { background: #dbeee1; color: #276240; }
+  @media (prefers-color-scheme: dark) {
+    .badge.pri-high { background: #46232a; color: #f2a9b1; }
+    .badge.pri-medium { background: #453a20; color: #f0cd8c; }
+    .badge.pri-low { background: #1f3c2c; color: #8fd6a8; }
+  }
+  .card .owner { font-size: 11.5px; color: var(--text-dim); margin-top: 6px; }
+  .card .due { font-size: 11px; color: var(--text-faint); margin-top: 2px; }
+  .card .due.overdue { color: var(--red); font-weight: 650; }
+  .card .notes { font-size: 11.5px; color: var(--text-dim); margin-top: 6px; line-height: 1.35; }
+  .empty-col { font-size: 11.5px; color: var(--text-faint); text-align: center; padding: 14px 4px; }
+
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(10,12,18,0.5); display: none; align-items: center; justify-content: center; padding: 20px; z-index: 50; }
+  .modal-backdrop.open { display: flex; }
+  .modal { background: var(--surface); border-radius: 12px; padding: 20px; width: 100%; max-width: 420px; max-height: 90vh; overflow-y: auto; box-shadow: 0 10px 40px rgba(0,0,0,0.25); }
+  .modal h2 { font-size: 16px; margin: 0 0 14px; }
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 12px; font-weight: 600; color: var(--text-dim); margin-bottom: 5px; }
+  .field input, .field select, .field textarea {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px;
+    background: var(--bg); color: var(--text); font-size: 13.5px; font-family: inherit;
+  }
+  .field textarea { resize: vertical; min-height: 56px; }
+  .field-row { display: flex; gap: 10px; }
+  .field-row .field { flex: 1; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  .btn-secondary { background: none; border: 1px solid var(--border); color: var(--text-dim); padding: 8px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
+  .msg { font-size: 12px; color: var(--red); margin-top: 8px; min-height: 1em; }
+
+  footer.foot { text-align: center; font-size: 11px; color: var(--text-faint); padding: 20px 0; }
+
+  /* Login screen */
+  .login-screen {
+    position: fixed; inset: 0; background: var(--bg);
+    display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 60;
+  }
+  .login-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+    padding: 28px; max-width: 340px; width: 100%; box-shadow: var(--shadow);
+  }
+  .login-card .brand-mark { margin-bottom: 14px; }
+  .login-card h2 { margin: 0 0 6px; font-size: 18px; }
+  .login-card p { margin: 0 0 18px; font-size: 13px; color: var(--text-dim); }
+  .login-card .field { margin-bottom: 12px; }
+  .login-card button[type="submit"] { width: 100%; margin-top: 4px; }
+  .login-msg { font-size: 12.5px; color: var(--red); min-height: 1.2em; margin-top: 6px; }
+  .app-hidden { display: none; }
+
+  .toast {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(8px);
+    background: var(--navy); color: #fff; font-size: 12.5px; padding: 9px 16px; border-radius: 100px;
+    box-shadow: var(--shadow); opacity: 0; pointer-events: none; transition: opacity 0.2s, transform 0.2s;
+    z-index: 70; max-width: 90vw; text-align: center;
+  }
+  .toast.error { background: var(--red); }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<div class="login-screen" id="loginScreen">
+  <div class="login-card">
+    <div class="brand-mark" style="display:inline-flex;">SOI</div>
+    <h2>Department Task Tracker</h2>
+    <p>Sign in with the credentials your IT admin gave you.</p>
+    <form id="loginForm">
+      <div class="field">
+        <label for="li-user">Username</label>
+        <input id="li-user" autocomplete="username" required />
+      </div>
+      <div class="field">
+        <label for="li-pass">Password</label>
+        <input id="li-pass" type="password" autocomplete="current-password" required />
+      </div>
+      <button type="submit" class="add-btn">Sign in</button>
+      <div class="login-msg" id="loginMsg"></div>
+    </form>
+  </div>
+</div>
+
+<div id="app" class="app-hidden">
+  <header class="top">
+    <div class="brand">
+      <div class="brand-mark">SOI</div>
+      <div class="brand-text">
+        <strong>Department Task Tracker</strong>
+        <span>SOI · CAS · NanoTech · RedSun</span>
+      </div>
+    </div>
+    <div class="top-spacer"></div>
+    <div class="who"><b id="whoName"></b>&nbsp;· <span id="whoDept"></span></div>
+    <button class="top-btn" id="logoutBtn">Sign out</button>
+    <div class="sync-pill" id="syncPill"><span class="dot off" id="syncDot"></span><span id="syncText">Connecting…</span></div>
+  </header>
+
+  <nav class="tabs" id="tabs"></nav>
+
+  <main>
+    <div class="banner">
+      <span>ⓘ</span>
+      <span><b>Manual entry for now.</b> This board will auto-populate once tied into Pentagon. Everyone with a login can add and move tasks in their own department.</span>
+    </div>
+
+    <div class="panel-head">
+      <h1 id="panelTitle">Operations — All Departments</h1>
+      <span class="sub" id="panelSub">0 tasks</span>
+    </div>
+
+    <div class="stat-row" id="statRow"></div>
+
+    <div class="chart-row">
+      <div class="chart-card">
+        <h3 id="chartTitle1">Tasks by status per department</h3>
+        <div class="chart-wrap"><canvas id="chartMain"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <h3>Priority breakdown</h3>
+        <div class="chart-wrap"><canvas id="chartPriority"></canvas></div>
+      </div>
+    </div>
+
+    <div class="board-head">
+      <span class="sub" style="font-size:12.5px;color:var(--text-faint);">Drag cards between columns to update status</span>
+      <button class="add-btn" id="addBtn">+ Add task</button>
+    </div>
+
+    <div class="board" id="board"></div>
+
+    <footer class="foot">SOI Aviation internal tool</footer>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<div class="modal-backdrop" id="modalBackdrop">
+  <div class="modal">
+    <h2>Add task</h2>
+    <form id="taskForm">
+      <div class="field">
+        <label for="f-title">Title</label>
+        <input id="f-title" required maxlength="140" placeholder="e.g. Follow up on RFQ response" />
+      </div>
+      <div class="field" id="deptField">
+        <label for="f-dept">Department</label>
+        <select id="f-dept"></select>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="f-priority">Priority</label>
+          <select id="f-priority">
+            <option value="medium" selected>Medium</option>
+            <option value="high">High</option>
+            <option value="low">Low</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="f-due">Due date</label>
+          <input id="f-due" type="date" />
+        </div>
+      </div>
+      <div class="field">
+        <label for="f-owner">Owner</label>
+        <input id="f-owner" maxlength="60" placeholder="Who's on it" />
+      </div>
+      <div class="field">
+        <label for="f-notes">Notes (optional)</label>
+        <textarea id="f-notes" maxlength="500" placeholder="No pricing, contract numbers, or certification data — placeholder only"></textarea>
+      </div>
+      <div class="msg" id="formMsg"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn-secondary" id="cancelBtn">Cancel</button>
+        <button type="submit" class="add-btn">Add task</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var TOKEN_KEY = "soi_tracker_token";
+  var STATUSES = [
+    { key: "todo", label: "To Do" },
+    { key: "in_progress", label: "In Progress" },
+    { key: "blocked", label: "Blocked" },
+    { key: "done", label: "Done" }
+  ];
+  var PRIORITIES = ["high", "medium", "low"];
+  var DEPT_COLORS = {
+    "Procurement": "#1d2c47", "Purchasing": "#3a5280", "IT": "#a6192e",
+    "HR": "#8a5c14", "Operations": "#276240", "US Government": "#5b3fa0",
+    "Warehouse": "#0f6a72"
+  };
+
+  var DEPARTMENTS = []; // loaded from /api/departments
+  var me = null; // { username, department }
+  var activeTab = null;
+  var allTasks = [];
+  var chartMain = null, chartPriority = null;
+  var draggingId = null;
+  var pollTimer = null;
+
+  function token() { return localStorage.getItem(TOKEN_KEY); }
+  function setToken(t) { localStorage.setItem(TOKEN_KEY, t); }
+  function clearToken() { localStorage.removeItem(TOKEN_KEY); }
+
+  function api(path, options) {
+    options = options || {};
+    var headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
+    var t = token();
+    if (t) headers.Authorization = "Bearer " + t;
+    return fetch(path, Object.assign({}, options, { headers: headers })).then(function (res) {
+      if (res.status === 401) {
+        signOut();
+        throw new Error("Session expired");
+      }
+      if (res.status === 204) return null;
+      return res.json().then(function (data) {
+        if (!res.ok) throw new Error(data.error || "Request failed");
+        return data;
+      });
+    });
+  }
+
+  // ---------- Toast ----------
+  var toastTimer = null;
+  function toast(msg, isError) {
+    var el = document.getElementById("toast");
+    el.textContent = msg;
+    el.className = "toast" + (isError ? " error" : "") + " show";
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.classList.remove("show"); }, 3200);
+  }
+
+  function setSync(state, text) {
+    var dot = document.getElementById("syncDot");
+    var txt = document.getElementById("syncText");
+    dot.className = "dot" + (state === "off" ? " off" : state === "busy" ? " busy" : "");
+    txt.textContent = text;
+  }
+
+  // ---------- Auth screens ----------
+  function showLogin() {
+    document.getElementById("loginScreen").style.display = "flex";
+    document.getElementById("app").classList.add("app-hidden");
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+  function showApp() {
+    document.getElementById("loginScreen").style.display = "none";
+    document.getElementById("app").classList.remove("app-hidden");
+  }
+
+  function signOut() {
+    clearToken();
+    me = null;
+    showLogin();
+  }
+
+  document.getElementById("logoutBtn").addEventListener("click", signOut);
+
+  document.getElementById("loginForm").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var username = document.getElementById("li-user").value.trim();
+    var password = document.getElementById("li-pass").value;
+    var msg = document.getElementById("loginMsg");
+    msg.textContent = "";
+    fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: username, password: password })
+    }).then(function (res) {
+      return res.json().then(function (data) {
+        if (!res.ok) throw new Error(data.error || "Sign-in failed");
+        return data;
+      });
+    }).then(function (data) {
+      setToken(data.token);
+      me = { username: data.username, department: data.department };
+      onSignedIn();
+    }).catch(function (err) {
+      msg.textContent = err.message;
+    });
+  });
+
+  function onSignedIn() {
+    document.getElementById("li-pass").value = "";
+    activeTab = me.department;
+    document.getElementById("whoName").textContent = me.username;
+    document.getElementById("whoDept").textContent = me.department === "Operations" ? "Operations (all departments)" : me.department;
+    showApp();
+    loadDepartmentsThenStart();
+  }
+
+  function loadDepartmentsThenStart() {
+    api("/api/departments").then(function (depts) {
+      DEPARTMENTS = depts;
+      buildTabs();
+      populateDeptSelect();
+      render();
+      fetchTasks();
+      pollTimer = setInterval(fetchTasks, 15000);
+    }).catch(function () {
+      toast("Couldn't load department list.", true);
+    });
+  }
+
+  // ---------- Tabs ----------
+  var tabsEl = document.getElementById("tabs");
+  function buildTabs() {
+    tabsEl.innerHTML = "";
+    var visible = me.department === "Operations" ? DEPARTMENTS : [me.department];
+    tabsEl.style.display = visible.length <= 1 ? "none" : "flex";
+    visible.forEach(function (dept) {
+      var b = document.createElement("button");
+      b.textContent = dept === "Operations" ? "Overview" : dept;
+      b.dataset.dept = dept;
+      if (dept === activeTab) b.classList.add("active");
+      b.addEventListener("click", function () {
+        activeTab = dept;
+        Array.prototype.forEach.call(tabsEl.children, function (el) {
+          el.classList.toggle("active", el.dataset.dept === dept);
+        });
+        render();
+      });
+      tabsEl.appendChild(b);
+    });
+  }
+
+  function populateDeptSelect() {
+    var sel = document.getElementById("f-dept");
+    sel.innerHTML = "";
+    DEPARTMENTS.filter(function (d) { return d !== "Operations"; }).forEach(function (d) {
+      var opt = document.createElement("option");
+      opt.value = d; opt.textContent = d;
+      sel.appendChild(opt);
+    });
+  }
+
+  // ---------- Data ----------
+  function fetchTasks() {
+    setSync("busy", "Syncing…");
+    return api("/api/tasks").then(function (tasks) {
+      allTasks = tasks;
+      setSync("on", "Live");
+      render();
+    }).catch(function (err) {
+      if (err.message !== "Session expired") {
+        setSync("off", "Sync error");
+      }
+    });
+  }
+
+  function tasksForActiveTab() {
+    if (activeTab === "Operations") return allTasks;
+    return allTasks.filter(function (t) { return t.department === activeTab; });
+  }
+
+  function isOverdue(t) {
+    if (!t.dueDate || t.status === "done") return false;
+    var today = new Date(); today.setHours(0,0,0,0);
+    var due = new Date(t.dueDate + "T00:00:00");
+    return due < today;
+  }
+  function fmtDate(s) {
+    if (!s) return "";
+    var d = new Date(s + "T00:00:00");
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  }
+  function escapeHtml(s) {
+    return String(s || "").replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  // ---------- Stats ----------
+  function renderStats(list) {
+    var counts = { todo: 0, in_progress: 0, blocked: 0, done: 0 };
+    var overdue = 0, high = 0;
+    list.forEach(function (t) {
+      counts[t.status] = (counts[t.status] || 0) + 1;
+      if (isOverdue(t)) overdue++;
+      if (t.priority === "high" && t.status !== "done") high++;
+    });
+    var items = [
+      { n: list.length, l: "Total tasks" },
+      { n: counts.todo, l: "To do" },
+      { n: counts.in_progress, l: "In progress" },
+      { n: counts.blocked, l: "Blocked" },
+      { n: counts.done, l: "Done" },
+      { n: overdue, l: "Overdue", alert: overdue > 0 },
+      { n: high, l: "Open high priority", alert: high > 0 }
+    ];
+    document.getElementById("statRow").innerHTML = items.map(function (it) {
+      return '<div class="stat-card' + (it.alert ? " alert" : "") + '"><div class="n">' + it.n + '</div><div class="l">' + it.l + "</div></div>";
+    }).join("");
+  }
+
+  // ---------- Charts ----------
+  function renderCharts(list) {
+    var ctx1 = document.getElementById("chartMain").getContext("2d");
+    var ctx2 = document.getElementById("chartPriority").getContext("2d");
+    var isDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    var gridColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
+    var tickColor = isDark ? "#a4aab8" : "#5b6270";
+
+    if (chartMain) chartMain.destroy();
+    if (chartPriority) chartPriority.destroy();
+
+    document.getElementById("chartTitle1").textContent =
+      activeTab === "Operations" ? "Open tasks by department" : "Tasks by status";
+
+    if (activeTab === "Operations") {
+      var deptList = DEPARTMENTS.filter(function (d) { return d !== "Operations"; });
+      var byStatus = STATUSES.map(function (s) {
+        return {
+          label: s.label,
+          data: deptList.map(function (d) {
+            return list.filter(function (t) { return t.department === d && t.status === s.key; }).length;
+          }),
+          backgroundColor: { todo: "#8b909c", in_progress: "#3a5280", blocked: "#a6192e", done: "#2f7a4f" }[s.key]
+        };
+      });
+      chartMain = new Chart(ctx1, {
+        type: "bar",
+        data: { labels: deptList, datasets: byStatus },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { position: "bottom", labels: { color: tickColor, boxWidth: 10, font: { size: 10.5 } } } },
+          scales: {
+            x: { stacked: true, ticks: { color: tickColor, font: { size: 10.5 } }, grid: { display: false } },
+            y: { stacked: true, beginAtZero: true, ticks: { color: tickColor, precision: 0 }, grid: { color: gridColor } }
+          }
+        }
+      });
+    } else {
+      var statusData = STATUSES.map(function (s) { return list.filter(function (t) { return t.status === s.key; }).length; });
+      chartMain = new Chart(ctx1, {
+        type: "bar",
+        data: {
+          labels: STATUSES.map(function (s) { return s.label; }),
+          datasets: [{ data: statusData, backgroundColor: ["#8b909c", "#3a5280", "#a6192e", "#2f7a4f"] }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: tickColor, font: { size: 10.5 } }, grid: { display: false } },
+            y: { beginAtZero: true, ticks: { color: tickColor, precision: 0 }, grid: { color: gridColor } }
+          }
+        }
+      });
+    }
+
+    var priData = PRIORITIES.map(function (p) { return list.filter(function (t) { return t.priority === p; }).length; });
+    chartPriority = new Chart(ctx2, {
+      type: "doughnut",
+      data: { labels: ["High", "Medium", "Low"], datasets: [{ data: priData, backgroundColor: ["#a6192e", "#b5791e", "#2f7a4f"], borderWidth: 0 }] },
+      options: {
+        responsive: true, maintainAspectRatio: false, cutout: "62%",
+        plugins: { legend: { position: "bottom", labels: { color: tickColor, boxWidth: 10, font: { size: 10.5 } } } }
+      }
+    });
+  }
+
+  // ---------- Board ----------
+  function renderBoard(list) {
+    var board = document.getElementById("board");
+    board.innerHTML = "";
+    STATUSES.forEach(function (s) {
+      var col = document.createElement("div");
+      col.className = "col";
+      col.dataset.status = s.key;
+
+      var items = list.filter(function (t) { return t.status === s.key; });
+      var head = document.createElement("div");
+      head.className = "col-head";
+      head.innerHTML = "<span>" + s.label + "</span><span class=\"count\">" + items.length + "</span>";
+      col.appendChild(head);
+
+      var body = document.createElement("div");
+      body.className = "col-body";
+      if (items.length === 0) {
+        var empty = document.createElement("div");
+        empty.className = "empty-col";
+        empty.textContent = "No tasks here";
+        body.appendChild(empty);
+      }
+      items.forEach(function (t) { body.appendChild(renderCard(t)); });
+      col.appendChild(body);
+
+      col.addEventListener("dragover", function (e) { e.preventDefault(); col.classList.add("dragover"); });
+      col.addEventListener("dragleave", function () { col.classList.remove("dragover"); });
+      col.addEventListener("drop", function (e) {
+        e.preventDefault();
+        col.classList.remove("dragover");
+        if (!draggingId) return;
+        updateTaskStatus(draggingId, col.dataset.status);
+      });
+
+      board.appendChild(col);
+    });
+  }
+
+  function renderCard(t) {
+    var card = document.createElement("div");
+    card.className = "card";
+    card.draggable = true;
+
+    var overdue = isOverdue(t);
+    var deptBadge = activeTab === "Operations"
+      ? '<span class="badge dept" style="background:' + (DEPT_COLORS[t.department] || "#1d2c47") + '">' + escapeHtml(t.department) + "</span>"
+      : "";
+
+    card.innerHTML =
+      '<div class="row1"><div class="title">' + escapeHtml(t.title) + '</div>' +
+      '<button class="del" title="Delete" data-id="' + t.id + '">×</button></div>' +
+      '<div class="meta">' + deptBadge +
+      '<span class="badge pri-' + t.priority + '">' + t.priority.charAt(0).toUpperCase() + t.priority.slice(1) + " priority</span></div>" +
+      (t.owner ? '<div class="owner">' + escapeHtml(t.owner) + "</div>" : "") +
+      (t.dueDate ? '<div class="due' + (overdue ? " overdue" : "") + '">' + (overdue ? "Overdue — was due " : "Due ") + fmtDate(t.dueDate) + "</div>" : "") +
+      (t.notes ? '<div class="notes">' + escapeHtml(t.notes) + "</div>" : "");
+
+    card.addEventListener("dragstart", function (e) {
+      draggingId = t.id;
+      card.classList.add("dragging");
+      e.dataTransfer.setData("text/plain", t.id);
+    });
+    card.addEventListener("dragend", function () { draggingId = null; card.classList.remove("dragging"); });
+
+    card.querySelector(".del").addEventListener("click", function (e) {
+      e.stopPropagation();
+      if (confirm('Delete "' + t.title + '"?')) deleteTask(t.id);
+    });
+
+    return card;
+  }
+
+  function render() {
+    var list = tasksForActiveTab();
+    document.getElementById("panelTitle").textContent = activeTab === "Operations" ? "Operations — All Departments" : activeTab;
+    document.getElementById("panelSub").textContent = list.length + (list.length === 1 ? " task" : " tasks");
+    renderStats(list);
+    renderCharts(list);
+    renderBoard(list);
+  }
+
+  // ---------- Writes ----------
+  function updateTaskStatus(id, status) {
+    setSync("busy", "Saving…");
+    api("/api/tasks/" + id, { method: "PATCH", body: JSON.stringify({ status: status }) })
+      .then(function () { setSync("on", "Live"); fetchTasks(); })
+      .catch(function (err) {
+        setSync("on", "Live");
+        if (err.message !== "Session expired") toast("Couldn't move that card: " + err.message, true);
+        fetchTasks();
+      });
+  }
+  function deleteTask(id) {
+    setSync("busy", "Saving…");
+    api("/api/tasks/" + id, { method: "DELETE" })
+      .then(function () { setSync("on", "Live"); fetchTasks(); })
+      .catch(function (err) {
+        setSync("on", "Live");
+        if (err.message !== "Session expired") toast("Couldn't delete: " + err.message, true);
+        fetchTasks();
+      });
+  }
+
+  // ---------- Modal ----------
+  var modalBackdrop = document.getElementById("modalBackdrop");
+  document.getElementById("addBtn").addEventListener("click", function () {
+    document.getElementById("formMsg").textContent = "";
+    document.getElementById("taskForm").reset();
+    var deptField = document.getElementById("deptField");
+    var deptSelect = document.getElementById("f-dept");
+    if (me.department !== "Operations") {
+      deptField.style.display = "none";
+    } else {
+      deptField.style.display = "block";
+      deptSelect.value = activeTab !== "Operations" ? activeTab : DEPARTMENTS.filter(function(d){return d!=="Operations";})[0];
+    }
+    modalBackdrop.classList.add("open");
+    document.getElementById("f-title").focus();
+  });
+  document.getElementById("cancelBtn").addEventListener("click", function () { modalBackdrop.classList.remove("open"); });
+  modalBackdrop.addEventListener("click", function (e) { if (e.target === modalBackdrop) modalBackdrop.classList.remove("open"); });
+
+  document.getElementById("taskForm").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var title = document.getElementById("f-title").value.trim();
+    if (!title) return;
+    var body = {
+      title: title,
+      priority: document.getElementById("f-priority").value,
+      owner: document.getElementById("f-owner").value.trim(),
+      dueDate: document.getElementById("f-due").value,
+      notes: document.getElementById("f-notes").value.trim()
+    };
+    if (me.department === "Operations") {
+      body.department = document.getElementById("f-dept").value;
+    }
+    var msg = document.getElementById("formMsg");
+    msg.textContent = "";
+    setSync("busy", "Saving…");
+    api("/api/tasks", { method: "POST", body: JSON.stringify(body) })
+      .then(function () {
+        setSync("on", "Live");
+        modalBackdrop.classList.remove("open");
+        fetchTasks();
+      })
+      .catch(function (err) {
+        setSync("on", "Live");
+        msg.textContent = err.message || "Couldn't save that task.";
+      });
+  });
+
+  // ---------- Init ----------
+  function init() {
+    if (!token()) { showLogin(); return; }
+    api("/api/me").then(function (data) {
+      me = data;
+      onSignedIn();
+    }).catch(function () {
+      clearToken();
+      showLogin();
+    });
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

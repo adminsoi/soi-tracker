@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>SOI Tracker — Admin</title>
+<style>
+  :root {
+    --navy: #1d2c47; --red: #a6192e; --red-light: #c23a4f;
+    --bg: #f3f4f7; --surface: #fff; --surface-2: #eceef2; --border: #d9dce3;
+    --text: #1a1d24; --text-dim: #5b6270; --text-faint: #8b909c;
+    --shadow: 0 1px 2px rgba(20,24,33,0.06), 0 4px 12px rgba(20,24,33,0.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151c; --surface: #1a1e28; --surface-2: #20242f; --border: #2c313d;
+      --text: #e7e9ee; --text-dim: #a4aab8; --text-faint: #6c7280;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 4px 14px rgba(0,0,0,0.25);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text); min-height: 100vh;
+    font-family: -apple-system, "Segoe UI", "Inter", system-ui, sans-serif;
+    padding: 24px 16px;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
+  .mark { width: 30px; height: 30px; border-radius: 7px; background: var(--red); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; }
+  h1 { font-size: 17px; margin: 0; }
+  a.back { font-size: 12.5px; color: var(--text-dim); margin-left: auto; text-decoration: none; }
+
+  .login-card, .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 22px; box-shadow: var(--shadow); margin-bottom: 18px;
+  }
+  .login-card { max-width: 340px; margin: 60px auto; }
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 12px; font-weight: 600; color: var(--text-dim); margin-bottom: 5px; }
+  .field input, .field select {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px;
+    background: var(--bg); color: var(--text); font-size: 13.5px; font-family: inherit;
+  }
+  .field-row { display: flex; gap: 10px; }
+  .field-row .field { flex: 1; }
+  button {
+    background: var(--red); color: #fff; border: none; border-radius: 8px; padding: 9px 16px;
+    font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit;
+  }
+  button:hover { background: var(--red-light); }
+  button.secondary { background: none; border: 1px solid var(--border); color: var(--text-dim); }
+  .msg { font-size: 12.5px; color: var(--red); margin-top: 8px; min-height: 1.2em; }
+  .msg.ok { color: #2f7a4f; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: left; padding: 9px 6px; border-bottom: 1px solid var(--border); }
+  th { font-size: 11.5px; text-transform: none; color: var(--text-faint); font-weight: 600; }
+  .dept-tag { background: var(--surface-2); border-radius: 100px; padding: 2px 9px; font-size: 11.5px; }
+  .row-actions { display: flex; gap: 6px; }
+  .row-actions button { padding: 5px 10px; font-size: 12px; }
+  .empty { color: var(--text-faint); font-size: 13px; padding: 14px 0; }
+  h2 { font-size: 14px; margin: 0 0 14px; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <div class="login-card" id="adminLogin">
+    <h2>Admin sign-in</h2>
+    <p style="font-size:12.5px;color:var(--text-dim);margin-top:-6px;">Enter the admin password set on the server (Portainer stack env vars).</p>
+    <form id="adminLoginForm">
+      <div class="field">
+        <label for="ap">Admin password</label>
+        <input id="ap" type="password" required />
+      </div>
+      <button type="submit">Sign in</button>
+      <div class="msg" id="adminLoginMsg"></div>
+    </form>
+  </div>
+
+  <div id="adminPanel" style="display:none;">
+    <header>
+      <div class="mark">SOI</div>
+      <h1>Manage logins</h1>
+      <a class="back" href="/">← Back to tracker</a>
+    </header>
+
+    <div class="card">
+      <h2>Add / update a login</h2>
+      <form id="userForm">
+        <div class="field-row">
+          <div class="field">
+            <label for="u-name">Username</label>
+            <input id="u-name" required maxlength="60" />
+          </div>
+          <div class="field">
+            <label for="u-pass">Password</label>
+            <input id="u-pass" type="password" minlength="8" required placeholder="8+ characters" />
+          </div>
+        </div>
+        <div class="field">
+          <label for="u-dept">Department</label>
+          <select id="u-dept"></select>
+        </div>
+        <button type="submit">Save login</button>
+        <div class="msg" id="userMsg"></div>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Existing logins</h2>
+      <table id="userTable">
+        <thead><tr><th>Username</th><th>Department</th><th></th></tr></thead>
+        <tbody id="userTableBody"></tbody>
+      </table>
+      <div class="empty" id="userEmpty" style="display:none;">No logins yet — add one above.</div>
+    </div>
+
+    <button class="secondary" id="signOutBtn">Sign out of admin</button>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var TOKEN_KEY = "soi_admin_token";
+  var DEPARTMENTS = [];
+
+  function token() { return sessionStorage.getItem(TOKEN_KEY); }
+  function setToken(t) { sessionStorage.setItem(TOKEN_KEY, t); }
+  function clearToken() { sessionStorage.removeItem(TOKEN_KEY); }
+
+  function api(path, options) {
+    options = options || {};
+    var headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
+    var t = token();
+    if (t) headers.Authorization = "Bearer " + t;
+    return fetch(path, Object.assign({}, options, { headers: headers })).then(function (res) {
+      if (res.status === 204) return null;
+      return res.json().then(function (data) {
+        if (!res.ok) throw new Error(data.error || "Request failed");
+        return data;
+      });
+    });
+  }
+
+  function showLogin() {
+    document.getElementById("adminLogin").style.display = "block";
+    document.getElementById("adminPanel").style.display = "none";
+  }
+  function showPanel() {
+    document.getElementById("adminLogin").style.display = "none";
+    document.getElementById("adminPanel").style.display = "block";
+  }
+
+  document.getElementById("adminLoginForm").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var pw = document.getElementById("ap").value;
+    var msg = document.getElementById("adminLoginMsg");
+    msg.textContent = "";
+    fetch("/api/admin/login", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: pw })
+    }).then(function (res) {
+      return res.json().then(function (data) {
+        if (!res.ok) throw new Error(data.error || "Sign-in failed");
+        return data;
+      });
+    }).then(function (data) {
+      setToken(data.token);
+      start();
+    }).catch(function (err) { msg.textContent = err.message; });
+  });
+
+  document.getElementById("signOutBtn").addEventListener("click", function () {
+    clearToken();
+    showLogin();
+  });
+
+  function loadDepartments() {
+    return fetch("/api/departments").then(function (r) { return r.json(); }).then(function (depts) {
+      DEPARTMENTS = depts;
+      var sel = document.getElementById("u-dept");
+      sel.innerHTML = "";
+      depts.forEach(function (d) {
+        var opt = document.createElement("option");
+        opt.value = d; opt.textContent = d === "Operations" ? "Operations (sees everything)" : d;
+        sel.appendChild(opt);
+      });
+    });
+  }
+
+  function loadUsers() {
+    return api("/api/admin/users").then(function (users) {
+      var body = document.getElementById("userTableBody");
+      var empty = document.getElementById("userEmpty");
+      body.innerHTML = "";
+      if (users.length === 0) { empty.style.display = "block"; return; }
+      empty.style.display = "none";
+      users.forEach(function (u) {
+        var tr = document.createElement("tr");
+        tr.innerHTML =
+          "<td>" + escapeHtml(u.username) + "</td>" +
+          "<td><span class=\"dept-tag\">" + escapeHtml(u.department) + "</span></td>" +
+          "<td class=\"row-actions\"><button class=\"secondary\" data-del=\"" + escapeHtml(u.username) + "\">Remove</button></td>";
+        body.appendChild(tr);
+      });
+      body.querySelectorAll("[data-del]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var username = btn.getAttribute("data-del");
+          if (!confirm('Remove login "' + username + '"?')) return;
+          api("/api/admin/users/" + encodeURIComponent(username), { method: "DELETE" })
+            .then(loadUsers)
+            .catch(function (err) { alert(err.message); });
+        });
+      });
+    }).catch(function (err) {
+      if (err.message && err.message.indexOf("Admin") !== -1) { clearToken(); showLogin(); }
+    });
+  }
+
+  function escapeHtml(s) {
+    return String(s || "").replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  document.getElementById("userForm").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var msg = document.getElementById("userMsg");
+    msg.textContent = "";
+    msg.className = "msg";
+    var body = {
+      username: document.getElementById("u-name").value.trim(),
+      password: document.getElementById("u-pass").value,
+      department: document.getElementById("u-dept").value
+    };
+    api("/api/admin/users", { method: "POST", body: JSON.stringify(body) })
+      .then(function () {
+        msg.textContent = "Saved.";
+        msg.className = "msg ok";
+        document.getElementById("userForm").reset();
+        loadUsers();
+      })
+      .catch(function (err) { msg.textContent = err.message; });
+  });
+
+  function start() {
+    showPanel();
+    loadDepartments().then(loadUsers);
+  }
+
+  if (token()) { start(); } else { showLogin(); }
+})();
+</script>
+</body>
+</html>
