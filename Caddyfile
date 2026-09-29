@@ -1,0 +1,11 @@
+# This server is internal-only (VPN / office network), so we use Caddy's
+# built-in internal CA instead of a public Let's Encrypt certificate — no
+# internet reachability needed. Replace 10.0.0.0 below with your EC2
+# instance's actual PRIVATE IPv4 address (EC2 console → your instance →
+# "Private IPv4 addresses"). The first time each person visits, their
+# browser will show a one-time "not private" warning to click past —
+# that's expected for a self-signed cert.
+https://10.2.1.185 {
+    tls internal
+    reverse_proxy soi-tracker:4000
+}

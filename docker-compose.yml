@@ -1,0 +1,38 @@
+version: "3.8"
+
+services:
+  soi-tracker:
+    build: .
+    image: soi-tracker:latest
+    container_name: soi-tracker
+    restart: unless-stopped
+    expose:
+      - "4000"
+    environment:
+      PORT: "4000"
+      JWT_SECRET: ${JWT_SECRET}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      S3_BUCKET: ${S3_BUCKET}
+      S3_PREFIX: ${S3_PREFIX:-soi-tracker}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      # Only needed if this host does NOT already have an IAM role attached
+      # (e.g. an EC2 instance profile). If it does, leave these two unset.
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: soi-tracker-proxy
+    restart: unless-stopped
+    ports:
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - soi-tracker
+
+volumes:
+  caddy_data:
+  caddy_config:
