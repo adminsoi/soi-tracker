@@ -67,7 +67,10 @@ function getUsers() {
   return readJson("users", []);
 }
 function getTasks() {
-  return readJson("tasks", []);
+  return readJson("tasks", []).then((tasks) => {
+    console.log(`[${new Date().toISOString()}] GET tasks: returning ${tasks.length} task(s)`);
+    return tasks;
+  });
 }
 
 // In-process queues so concurrent requests to this same container don't
@@ -88,7 +91,11 @@ function withUsers(mutator) {
 function withTasks(mutator) {
   tasksQueue = tasksQueue.then(async () => {
     const tasks = await getTasks();
+    const before = tasks.length;
     const result = await mutator(tasks);
+    console.log(
+      `[${new Date().toISOString()}] WRITE tasks: ${before} -> ${tasks.length} task(s)`
+    );
     await writeJson("tasks", tasks);
     return result;
   });
