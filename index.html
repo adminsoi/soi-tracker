@@ -447,11 +447,12 @@
     });
   }
 
+  var tasksLoadedOnce = false;
+
   function startApp() {
     buildTabs();
     populateDeptSelect();
-    render();
-    fetchTasks();
+    fetchTasks(true);
     if (!pollTimer) {
       pollTimer = setInterval(fetchTasks, 15000);
     }
@@ -490,15 +491,21 @@
   }
 
   // ---------- Data ----------
-  function fetchTasks() {
+  function fetchTasks(isInitial) {
     setSync("busy", "Syncing…");
     return api("/api/tasks").then(function (tasks) {
       allTasks = tasks;
+      tasksLoadedOnce = true;
       setSync("on", "Live");
       render();
     }).catch(function (err) {
-      if (err.message !== "Session expired") {
-        setSync("off", "Sync error");
+      if (err.message === "Session expired") return;
+      setSync("off", "Sync error");
+      if (!tasksLoadedOnce) {
+        // Don't leave the page stuck on an empty board because of one
+        // transient failure — keep retrying quietly until it succeeds.
+        toast("Having trouble loading tasks — retrying…", true);
+        setTimeout(function () { fetchTasks(true); }, 2000);
       }
     });
   }
