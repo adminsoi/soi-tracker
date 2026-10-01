@@ -165,6 +165,19 @@
 
   footer.foot { text-align: center; font-size: 11px; color: var(--text-faint); padding: 20px 0; }
 
+  .global-company {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 18px; margin-bottom: 16px;
+  }
+  .global-company h2 { font-size: 15px; margin: 0 0 4px; }
+  .global-company .sub { font-size: 12px; color: var(--text-faint); margin-bottom: 12px; }
+  .global-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .global-table th, .global-table td { text-align: center; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  .global-table th { color: var(--text-faint); font-weight: 600; font-size: 11px; }
+  .global-table td:first-child, .global-table th:first-child { text-align: left; font-weight: 600; }
+  .global-table td.total, .global-table th.total { font-weight: 700; color: var(--text); }
+  .global-table tr.dept-total td { border-top: 2px solid var(--border); font-weight: 700; }
+
   /* Login screen */
   .login-screen {
     position: fixed; inset: 0; background: var(--bg);
@@ -224,6 +237,7 @@
       </div>
     </div>
     <div class="top-spacer"></div>
+    <select id="companySelect" class="top-btn" style="display:none;"></select>
     <div class="who"><b id="whoName"></b>&nbsp;· <span id="whoDept"></span></div>
     <button class="top-btn" id="logoutBtn">Sign out</button>
     <div class="sync-pill" id="syncPill"><span class="dot off" id="syncDot"></span><span id="syncText">Connecting…</span></div>
@@ -232,35 +246,45 @@
   <nav class="tabs" id="tabs"></nav>
 
   <main>
-    <div class="banner">
-      <span>ⓘ</span>
-      <span><b>Manual entry for now.</b> This board will auto-populate once tied into Pentagon. Everyone with a login can add and move tasks in their own department.</span>
-    </div>
-
-    <div class="panel-head">
-      <h1 id="panelTitle">Operations — All Departments</h1>
-      <span class="sub" id="panelSub">0 tasks</span>
-    </div>
-
-    <div class="stat-row" id="statRow"></div>
-
-    <div class="chart-row">
-      <div class="chart-card">
-        <h3 id="chartTitle1">Tasks by status per department</h3>
-        <div class="chart-wrap"><canvas id="chartMain"></canvas></div>
+    <div id="companyPanel">
+      <div class="banner">
+        <span>ⓘ</span>
+        <span><b>Manual entry for now.</b> This board will auto-populate once tied into Pentagon. Everyone with a login can add and move tasks in their own department.</span>
       </div>
-      <div class="chart-card">
-        <h3>Priority breakdown</h3>
-        <div class="chart-wrap"><canvas id="chartPriority"></canvas></div>
+
+      <div class="panel-head">
+        <h1 id="panelTitle">Operations — All Departments</h1>
+        <span class="sub" id="panelSub">0 tasks</span>
       </div>
+
+      <div class="stat-row" id="statRow"></div>
+
+      <div class="chart-row">
+        <div class="chart-card">
+          <h3 id="chartTitle1">Tasks by status per department</h3>
+          <div class="chart-wrap"><canvas id="chartMain"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <h3>Priority breakdown</h3>
+          <div class="chart-wrap"><canvas id="chartPriority"></canvas></div>
+        </div>
+      </div>
+
+      <div class="board-head">
+        <span class="sub" style="font-size:12.5px;color:var(--text-faint);">Drag cards between columns to update status</span>
+        <button class="add-btn" id="addBtn">+ Add task</button>
+      </div>
+
+      <div class="board" id="board"></div>
     </div>
 
-    <div class="board-head">
-      <span class="sub" style="font-size:12.5px;color:var(--text-faint);">Drag cards between columns to update status</span>
-      <button class="add-btn" id="addBtn">+ Add task</button>
+    <div id="globalPanel" style="display:none;">
+      <div class="panel-head">
+        <h1>Global — Every Company</h1>
+        <span class="sub" id="globalSub">0 tasks</span>
+      </div>
+      <div id="globalBody"></div>
     </div>
-
-    <div class="board" id="board"></div>
 
     <footer class="foot">SOI Aviation internal tool</footer>
   </main>
@@ -346,8 +370,11 @@
   // than leaving the person stuck on an empty board.
   var DEPARTMENTS_FALLBACK = ["Procurement", "Purchasing", "IT", "HR", "Operations", "US Government", "Warehouse"];
   var DEPARTMENTS = []; // loaded from /api/departments
-  var OVERVIEW_KEY = "__overview__"; // virtual tab, not a real department
-  var me = null; // { username, department, fullAccess }
+  var OVERVIEW_KEY = "__overview__"; // virtual tab: aggregate of all departments within the active company
+  var GLOBAL_KEY = "__global__"; // virtual tab: every company at once, only for multi-company accounts
+  var me = null; // { username, companies, department, fullAccess }
+  var activeCompany = null;
+  var COMPANY_KEY = "soi_tracker_company";
   var activeTab = null;
   var allTasks = [];
   var chartMain = null, chartPriority = null;
@@ -429,7 +456,7 @@
       });
     }).then(function (data) {
       setToken(data.token);
-      me = { username: data.username, department: data.department };
+      me = { username: data.username, companies: data.companies, department: data.department, fullAccess: data.fullAccess };
       onSignedIn();
     }).catch(function (err) {
       msg.textContent = err.message;
@@ -438,12 +465,48 @@
 
   function onSignedIn() {
     document.getElementById("li-pass").value = "";
+
+    var saved = null;
+    try { saved = localStorage.getItem(COMPANY_KEY); } catch (e) {}
+    activeCompany = (saved && me.companies.indexOf(saved) !== -1) ? saved : me.companies[0];
+
+    setupCompanySelect();
+
     activeTab = me.fullAccess ? OVERVIEW_KEY : me.department;
     document.getElementById("whoName").textContent = me.username;
-    document.getElementById("whoDept").textContent = me.fullAccess ? me.department + " (sees all departments)" : me.department;
+    document.getElementById("whoDept").textContent =
+      (me.fullAccess ? "Full access" : me.department) +
+      (me.companies.length === 1 ? " · " + me.companies[0] : "");
     showApp();
     loadDepartmentsThenStart();
   }
+
+  function setupCompanySelect() {
+    var sel = document.getElementById("companySelect");
+    if (me.companies.length <= 1) {
+      sel.style.display = "none";
+      return;
+    }
+    sel.innerHTML = "";
+    me.companies.forEach(function (c) {
+      var opt = document.createElement("option");
+      opt.value = c; opt.textContent = c;
+      sel.appendChild(opt);
+    });
+    sel.value = activeCompany;
+    sel.style.display = "inline-block";
+  }
+
+  document.getElementById("companySelect").addEventListener("change", function () {
+    activeCompany = this.value;
+    try { localStorage.setItem(COMPANY_KEY, activeCompany); } catch (e) {}
+    activeTab = me.fullAccess ? OVERVIEW_KEY : me.department;
+    allTasks = [];
+    tasksLoadedOnce = false;
+    showCompanyPanel();
+    buildTabs();
+    fetchTasks(true);
+  });
 
   function loadDepartmentsThenStart(isRetry) {
     api("/api/departments").then(function (depts) {
@@ -479,10 +542,11 @@
   function buildTabs() {
     tabsEl.innerHTML = "";
     var visible = me.fullAccess ? [OVERVIEW_KEY].concat(DEPARTMENTS) : [me.department];
+    if (me.companies.length > 1) visible = [GLOBAL_KEY].concat(visible);
     tabsEl.style.display = visible.length <= 1 ? "none" : "flex";
     visible.forEach(function (dept) {
       var b = document.createElement("button");
-      b.textContent = dept === OVERVIEW_KEY ? "Overview" : dept;
+      b.textContent = dept === GLOBAL_KEY ? "Global" : dept === OVERVIEW_KEY ? "Overview" : dept;
       b.dataset.dept = dept;
       if (dept === activeTab) b.classList.add("active");
       b.addEventListener("click", function () {
@@ -490,10 +554,25 @@
         Array.prototype.forEach.call(tabsEl.children, function (el) {
           el.classList.toggle("active", el.dataset.dept === dept);
         });
-        render();
+        if (dept === GLOBAL_KEY) {
+          showGlobalPanel();
+        } else {
+          showCompanyPanel();
+          render();
+        }
       });
       tabsEl.appendChild(b);
     });
+  }
+
+  function showGlobalPanel() {
+    document.getElementById("companyPanel").style.display = "none";
+    document.getElementById("globalPanel").style.display = "block";
+    renderGlobalView();
+  }
+  function showCompanyPanel() {
+    document.getElementById("globalPanel").style.display = "none";
+    document.getElementById("companyPanel").style.display = "block";
   }
 
   function populateDeptSelect() {
@@ -509,7 +588,7 @@
   // ---------- Data ----------
   function fetchTasks(isInitial) {
     setSync("busy", "Syncing…");
-    return api("/api/tasks").then(function (tasks) {
+    return api("/api/tasks?company=" + encodeURIComponent(activeCompany)).then(function (tasks) {
       allTasks = tasks;
       tasksLoadedOnce = true;
       setSync("on", "Live");
@@ -736,6 +815,46 @@
     try { renderBoard(list); } catch (e) { console.error("renderBoard failed:", e); }
   }
 
+  // ---------- Global view (every company at once) ----------
+  function renderGlobalView() {
+    setSync("busy", "Loading…");
+    api("/api/tasks").then(function (tasks) {
+      setSync("on", "Live");
+      document.getElementById("globalSub").textContent = tasks.length + (tasks.length === 1 ? " task" : " tasks");
+      var body = document.getElementById("globalBody");
+      body.innerHTML = "";
+
+      me.companies.forEach(function (company) {
+        var companyTasks = tasks.filter(function (t) { return (t.company || "SOI Aviation") === company; });
+        var section = document.createElement("div");
+        section.className = "global-company";
+
+        var statusHeaders = STATUSES.map(function (s) { return "<th>" + s.label + "</th>"; }).join("");
+        var rows = DEPARTMENTS.map(function (dept) {
+          var deptTasks = companyTasks.filter(function (t) { return t.department === dept; });
+          var cells = STATUSES.map(function (s) {
+            return "<td>" + deptTasks.filter(function (t) { return t.status === s.key; }).length + "</td>";
+          }).join("");
+          return "<tr><td>" + escapeHtml(dept) + "</td>" + cells + "<td class=\"total\">" + deptTasks.length + "</td></tr>";
+        }).join("");
+
+        section.innerHTML =
+          "<h2>" + escapeHtml(company) + "</h2>" +
+          "<div class=\"sub\">" + companyTasks.length + (companyTasks.length === 1 ? " task" : " tasks") + "</div>" +
+          "<table class=\"global-table\">" +
+          "<thead><tr><th>Department</th>" + statusHeaders + "<th class=\"total\">Total</th></tr></thead>" +
+          "<tbody>" + rows + "</tbody>" +
+          "</table>";
+
+        body.appendChild(section);
+      });
+    }).catch(function (err) {
+      if (err.message === "Session expired") return;
+      setSync("off", "Sync error");
+      toast("Couldn't load the global view: " + err.message, true);
+    });
+  }
+
   // ---------- Writes ----------
   function updateTaskStatus(id, status) {
     setSync("busy", "Saving…");
@@ -765,7 +884,7 @@
   function loadOwnerOptions(department) {
     var sel = document.getElementById("f-owner");
     var currentValue = sel.value;
-    return api("/api/users?department=" + encodeURIComponent(department)).then(function (users) {
+    return api("/api/users?company=" + encodeURIComponent(activeCompany) + "&department=" + encodeURIComponent(department)).then(function (users) {
       sel.innerHTML = '<option value="">Unassigned</option>';
       users.forEach(function (u) {
         var opt = document.createElement("option");
@@ -875,6 +994,7 @@
           msg.textContent = err.message || "Couldn't save that task.";
         });
     } else {
+      body.company = activeCompany;
       if (me.fullAccess) {
         body.department = document.getElementById("f-dept").value;
       }
