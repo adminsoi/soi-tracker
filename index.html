@@ -783,6 +783,10 @@
       '<button class="add-btn" id="plv-search">Search</button>' +
       '<span id="plv-status-msg" style="font-size:12.5px;color:var(--text-faint);"></span>' +
       "</div>" +
+      '<div class="chart-row" id="plv-chart-row" style="display:none;">' +
+      '<div class="chart-card"><h3 id="plv-chart-line-title">Total value over time</h3><div class="chart-wrap"><canvas id="plv-chart-line"></canvas></div></div>' +
+      '<div class="chart-card"><h3 id="plv-chart-pie-title">By status</h3><div class="chart-wrap"><canvas id="plv-chart-pie"></canvas></div></div>' +
+      "</div>" +
       '<div class="chart-card"><div style="overflow:auto;max-height:65vh;">' +
       '<table class="global-table" id="plv-table" style="display:none;"></table>' +
       '<div id="plv-empty" style="font-size:12.5px;color:var(--text-faint);">Set filters above and click Search.</div>' +
@@ -795,6 +799,125 @@
     // Run immediately with blank filters — the query itself defaults to
     // the last 14 days, so this shows real data without an extra click.
     runPentagonListSearch(view);
+  }
+
+  var plvLineChart = null;
+  var plvPieChart = null;
+
+  // Picks the first row key matching one of the preferred exact names, or
+  // failing that, the first key containing one of the given substrings.
+  // Lets the same chart code work across RFQs/Quotes/SOs/POs/Invoices even
+  // though the exact column names differ slightly between them.
+  function findField(row, preferredNames, substrings) {
+    var keys = Object.keys(row);
+    for (var i = 0; i < preferredNames.length; i++) {
+      if (keys.indexOf(preferredNames[i]) !== -1) return preferredNames[i];
+    }
+    for (var j = 0; j < keys.length; j++) {
+      for (var k = 0; k < substrings.length; k++) {
+        if (keys[j].toUpperCase().indexOf(substrings[k]) !== -1) return keys[j];
+      }
+    }
+    return null;
+  }
+
+  function renderPentagonListCharts(rows) {
+    var row = document.getElementById("plv-chart-row");
+    if (plvLineChart) { plvLineChart.destroy(); plvLineChart = null; }
+    if (plvPieChart) { plvPieChart.destroy(); plvPieChart = null; }
+
+    if (typeof Chart === "undefined" || !rows || rows.length === 0) {
+      row.style.display = "none";
+      return;
+    }
+
+    var dateField = findField(rows[0], ["ENTER_DATE", "DOC_DATE"], ["DATE"]);
+    var amountField = findField(rows[0], ["DOC_TOTAL"], ["TOTAL", "AMT", "AMOUNT"]);
+    var statusField = findField(rows[0], ["DOC_STATUS"], ["STATUS"]);
+
+    if (!dateField && !statusField) {
+      row.style.display = "none";
+      return;
+    }
+    row.style.display = "grid";
+
+    var isDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    var gridColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
+    var tickColor = isDark ? "#a4aab8" : "#5b6270";
+
+    // ---- Line chart: total value per day ----
+    var lineCard = document.getElementById("plv-chart-line").closest(".chart-card");
+    if (dateField && amountField) {
+      lineCard.style.display = "block";
+      document.getElementById("plv-chart-line-title").textContent = "Total value over time (" + amountField + ")";
+      var byDate = {};
+      rows.forEach(function (r) {
+        var raw = r[dateField];
+        if (!raw) return;
+        var day = String(raw).slice(0, 10); // YYYY-MM-DD
+        var amt = parseFloat(r[amountField]) || 0;
+        byDate[day] = (byDate[day] || 0) + amt;
+      });
+      var days = Object.keys(byDate).sort();
+      var ctx1 = document.getElementById("plv-chart-line").getContext("2d");
+      plvLineChart = new Chart(ctx1, {
+        type: "line",
+        data: {
+          labels: days,
+          datasets: [{
+            label: amountField,
+            data: days.map(function (d) { return byDate[d]; }),
+            borderColor: "#a6192e",
+            backgroundColor: "rgba(166,25,46,0.12)",
+            fill: true,
+            tension: 0.25,
+            pointRadius: 2
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: tickColor, font: { size: 10.5 }, maxRotation: 45 }, grid: { display: false } },
+            y: { beginAtZero: true, ticks: { color: tickColor }, grid: { color: gridColor } }
+          }
+        }
+      });
+    } else {
+      lineCard.style.display = "none";
+    }
+
+    // ---- Pie chart: count by status ----
+    var pieCard = document.getElementById("plv-chart-pie").closest(".chart-card");
+    if (statusField) {
+      pieCard.style.display = "block";
+      document.getElementById("plv-chart-pie-title").textContent = "By " + statusField;
+      var byStatus = {};
+      rows.forEach(function (r) {
+        var s = r[statusField] === null || r[statusField] === undefined ? "(none)" : String(r[statusField]);
+        byStatus[s] = (byStatus[s] || 0) + 1;
+      });
+      var statuses = Object.keys(byStatus);
+      var palette = ["#a6192e", "#1d2c47", "#b5791e", "#2f7a4f", "#5b3fa0", "#0f6a72", "#8b909c", "#c23a4f"];
+      var ctx2 = document.getElementById("plv-chart-pie").getContext("2d");
+      plvPieChart = new Chart(ctx2, {
+        type: "pie",
+        data: {
+          labels: statuses,
+          datasets: [{
+            data: statuses.map(function (s) { return byStatus[s]; }),
+            backgroundColor: statuses.map(function (_, i) { return palette[i % palette.length]; }),
+            borderWidth: 0
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { position: "bottom", labels: { color: tickColor, boxWidth: 10, font: { size: 10.5 } } } }
+        }
+      });
+    } else {
+      pieCard.style.display = "none";
+    }
   }
 
   function runPentagonListSearch(view) {
@@ -820,6 +943,9 @@
     }).then(function (data) {
       msg.textContent = "";
       var rows = findResultRows(data);
+
+      try { renderPentagonListCharts(rows); } catch (e) { console.error("Pentagon chart render failed:", e); }
+
       var html = buildAutoTableHtml(rows);
       if (!html) {
         table.style.display = "none";
@@ -835,6 +961,7 @@
       table.style.display = "none";
       empty.style.display = "block";
       empty.textContent = err.message || "Search failed.";
+      document.getElementById("plv-chart-row").style.display = "none";
     });
   }
 
@@ -1331,12 +1458,7 @@
       users.forEach(function (u) {
         var opt = document.createElement("option");
         opt.value = u.username;
-        var inThisDept = u.departments && u.departments.indexOf(department) !== -1;
-        var label = u.username;
-        if (!inThisDept) {
-          label += u.fullAccess ? " (full access)" : u.departments && u.departments.length ? " (" + u.departments.join(", ") + ")" : "";
-        }
-        opt.textContent = label;
+        opt.textContent = u.username;
         sel.appendChild(opt);
       });
       sel.value = currentValue || "";
