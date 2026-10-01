@@ -286,6 +286,43 @@
       <div id="globalBody"></div>
     </div>
 
+    <div id="calendarPanel" style="display:none;">
+      <div class="panel-head">
+        <h1>HR Calendar</h1>
+      </div>
+      <iframe id="calendarFrame"
+        style="width:100%; height:78vh; border:1px solid var(--border); border-radius:10px; background:#fff;"
+        src="" title="HR Calendar"></iframe>
+    </div>
+
+    <div id="pentagonPanel" style="display:none;">
+      <div class="panel-head">
+        <h1>Pentagon Query Tester</h1>
+      </div>
+      <div class="chart-card" style="margin-bottom:16px;">
+        <div class="field-row" style="display:flex;gap:10px;margin-bottom:10px;">
+          <div class="field" style="flex:1;">
+            <label for="pq-name" style="display:block;font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:5px;">Query name</label>
+            <input id="pq-name" value="claude.account_search" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--text);font-size:13.5px;font-family:inherit;" />
+          </div>
+          <div class="field" style="width:100px;">
+            <label for="pq-limit" style="display:block;font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:5px;">Limit</label>
+            <input id="pq-limit" type="number" value="10" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--text);font-size:13.5px;font-family:inherit;" />
+          </div>
+        </div>
+        <div class="field" style="margin-bottom:10px;">
+          <label for="pq-params" style="display:block;font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:5px;">Params (JSON)</label>
+          <textarea id="pq-params" rows="3" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--text);font-size:13px;font-family:monospace;resize:vertical;">{"name": ""}</textarea>
+        </div>
+        <button class="add-btn" id="pq-run">Run query</button>
+        <span id="pq-status" style="margin-left:10px;font-size:12.5px;color:var(--text-faint);"></span>
+      </div>
+      <div class="chart-card">
+        <h3 style="margin:0 0 10px;">Result</h3>
+        <pre id="pq-result" style="margin:0;white-space:pre-wrap;word-break:break-word;font-size:12px;max-height:60vh;overflow:auto;background:var(--bg);padding:12px;border-radius:7px;border:1px solid var(--border);">Run a query to see results here.</pre>
+      </div>
+    </div>
+
     <footer class="foot">SOI Aviation internal tool</footer>
   </main>
 </div>
@@ -376,6 +413,13 @@
   var DEPARTMENTS = []; // loaded from /api/departments
   var OVERVIEW_KEY = "__overview__"; // virtual tab: aggregate of all departments within the active company
   var GLOBAL_KEY = "__global__"; // virtual tab: every company at once, only for multi-company accounts
+  var CALENDAR_KEY = "__calendar__"; // virtual tab: embedded HR calendar, only for multi-company accounts
+  var PENTAGON_KEY = "__pentagon__"; // virtual tab: Pentagon query tester, Procurement + full-access only
+
+  // Paste your Outlook "Publish to web" HTML link here (Calendar → the
+  // calendar → "..." → Sharing and permissions → Publish a calendar →
+  // copy the HTML link, not the ICS one).
+  var HR_CALENDAR_URL = "PASTE_YOUR_PUBLISHED_CALENDAR_HTML_LINK_HERE";
   var me = null; // { username, companies, department, fullAccess }
   var activeCompany = null;
   var COMPANY_KEY = "soi_tracker_company";
@@ -548,14 +592,19 @@
 
   // ---------- Tabs ----------
   var tabsEl = document.getElementById("tabs");
+  function canUsePentagon() {
+    return me.fullAccess || me.department === "Procurement";
+  }
+
   function buildTabs() {
     tabsEl.innerHTML = "";
     var visible = me.fullAccess ? [OVERVIEW_KEY].concat(DEPARTMENTS) : [me.department];
-    if (me.companies.length > 1) visible = [GLOBAL_KEY].concat(visible);
+    if (me.companies.length > 1) visible = [GLOBAL_KEY, CALENDAR_KEY].concat(visible);
+    if (canUsePentagon()) visible = visible.concat([PENTAGON_KEY]);
     tabsEl.style.display = visible.length <= 1 ? "none" : "flex";
     visible.forEach(function (dept) {
       var b = document.createElement("button");
-      b.textContent = dept === GLOBAL_KEY ? "Global" : dept === OVERVIEW_KEY ? "Overview" : dept;
+      b.textContent = dept === GLOBAL_KEY ? "Global" : dept === CALENDAR_KEY ? "Calendar" : dept === PENTAGON_KEY ? "Pentagon" : dept === OVERVIEW_KEY ? "Overview" : dept;
       b.dataset.dept = dept;
       if (dept === activeTab) b.classList.add("active");
       b.addEventListener("click", function () {
@@ -565,6 +614,10 @@
         });
         if (dept === GLOBAL_KEY) {
           showGlobalPanel();
+        } else if (dept === CALENDAR_KEY) {
+          showCalendarPanel();
+        } else if (dept === PENTAGON_KEY) {
+          showPentagonPanel();
         } else {
           showCompanyPanel();
           render();
@@ -574,14 +627,36 @@
     });
   }
 
-  function showGlobalPanel() {
+  function hideAllPanels() {
     document.getElementById("companyPanel").style.display = "none";
+    document.getElementById("globalPanel").style.display = "none";
+    document.getElementById("calendarPanel").style.display = "none";
+    document.getElementById("pentagonPanel").style.display = "none";
+  }
+
+  function showCalendarPanel() {
+    hideAllPanels();
+    document.getElementById("calendarPanel").style.display = "block";
+    var frame = document.getElementById("calendarFrame");
+    // Only set src the first time, so switching tabs back and forth
+    // doesn't reload the calendar unnecessarily.
+    if (!frame.src || frame.src === "about:blank") {
+      frame.src = HR_CALENDAR_URL;
+    }
+  }
+
+  function showGlobalPanel() {
+    hideAllPanels();
     document.getElementById("globalPanel").style.display = "block";
     renderGlobalView();
   }
   function showCompanyPanel() {
-    document.getElementById("globalPanel").style.display = "none";
+    hideAllPanels();
     document.getElementById("companyPanel").style.display = "block";
+  }
+  function showPentagonPanel() {
+    hideAllPanels();
+    document.getElementById("pentagonPanel").style.display = "block";
   }
 
   function populateDeptSelect() {
@@ -867,6 +942,45 @@
       toast("Couldn't load the global view: " + err.message, true);
     });
   }
+
+  // ---------- Pentagon query tester ----------
+  document.getElementById("pq-run").addEventListener("click", function () {
+    var nameEl = document.getElementById("pq-name");
+    var limitEl = document.getElementById("pq-limit");
+    var paramsEl = document.getElementById("pq-params");
+    var statusEl = document.getElementById("pq-status");
+    var resultEl = document.getElementById("pq-result");
+
+    var queryName = nameEl.value.trim();
+    if (!queryName) {
+      statusEl.textContent = "Enter a query name.";
+      return;
+    }
+
+    var params;
+    try {
+      params = paramsEl.value.trim() ? JSON.parse(paramsEl.value) : {};
+    } catch (e) {
+      statusEl.textContent = "Params isn't valid JSON: " + e.message;
+      return;
+    }
+
+    var limit = parseInt(limitEl.value, 10) || 10;
+
+    statusEl.textContent = "Running…";
+    resultEl.textContent = "";
+
+    api("/api/pentagon/" + encodeURIComponent(queryName), {
+      method: "POST",
+      body: JSON.stringify({ params: params, limit: limit })
+    }).then(function (data) {
+      statusEl.textContent = "Done.";
+      resultEl.textContent = JSON.stringify(data, null, 2);
+    }).catch(function (err) {
+      statusEl.textContent = "Error.";
+      resultEl.textContent = err.message || "Query failed.";
+    });
+  });
 
   // ---------- Writes ----------
   function updateTaskStatus(id, status) {
