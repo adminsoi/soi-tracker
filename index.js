@@ -8,6 +8,7 @@ const express = require("express");
 
 const {
   DEPARTMENTS,
+  hasFullAccess,
   hashPassword,
   verifyPassword,
   signUserToken,
@@ -104,7 +105,11 @@ app.post(
 );
 
 app.get("/api/me", authMiddleware, (req, res) => {
-  res.json({ username: req.user.username, department: req.user.department });
+  res.json({
+    username: req.user.username,
+    department: req.user.department,
+    fullAccess: hasFullAccess(req.user.department),
+  });
 });
 
 app.get("/api/departments", (req, res) => {
@@ -121,7 +126,7 @@ app.get(
     const dept = req.query.department;
     const users = await getUsers();
     const filtered = users
-      .filter((u) => !dept || u.department === dept || u.department === "Operations")
+      .filter((u) => !dept || u.department === dept || hasFullAccess(u.department))
       .map((u) => ({ username: u.username, department: u.department }));
     res.json(filtered);
   })
@@ -134,10 +139,9 @@ app.get(
   authMiddleware,
   asyncHandler(async (req, res) => {
     const tasks = await getTasks();
-    const scoped =
-      req.user.department === "Operations"
-        ? tasks
-        : tasks.filter((t) => t.department === req.user.department);
+    const scoped = hasFullAccess(req.user.department)
+      ? tasks
+      : tasks.filter((t) => t.department === req.user.department);
     res.json(scoped);
   })
 );
@@ -151,8 +155,8 @@ app.post(
     if (!title) return res.status(400).json({ error: "Title is required" });
 
     let department = req.user.department;
-    if (req.user.department === "Operations") {
-      if (!DEPARTMENTS.includes(body.department) || body.department === "Operations") {
+    if (hasFullAccess(req.user.department)) {
+      if (!DEPARTMENTS.includes(body.department)) {
         return res.status(400).json({ error: "Choose a valid department" });
       }
       department = body.department;
@@ -185,7 +189,7 @@ app.post(
 );
 
 function canTouch(user, task) {
-  return user.department === "Operations" || user.department === task.department;
+  return hasFullAccess(user.department) || user.department === task.department;
 }
 
 app.patch(
