@@ -21,6 +21,14 @@ services:
       # (e.g. an EC2 instance profile). If it does, leave these two unset.
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      # Microsoft Graph — task-assignment emails. Leave unset to skip emails.
+      MS_TENANT_ID: ${MS_TENANT_ID:-}
+      MS_CLIENT_ID: ${MS_CLIENT_ID:-}
+      MS_CLIENT_SECRET: ${MS_CLIENT_SECRET:-}
+      MS_FROM_EMAIL: ${MS_FROM_EMAIL:-}
+      # Pentagon query API
+      PENTAGON_API_URL: ${PENTAGON_API_URL:-}
+      PENTAGON_API_KEY: ${PENTAGON_API_KEY:-}
 
 volumes:
   soi-tracker-certs:
