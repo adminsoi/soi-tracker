@@ -689,15 +689,15 @@
   // sub-tab, filter bar, and table all build themselves from this config.
   var PENTAGON_VIEWS = {
     "Procurement": [
-      { id: "rfqs", label: "RFQs", queryName: "claude.rfq_search" },
-      { id: "quotes", label: "Quotes", queryName: "claude.quote_search" }
+      { id: "rfqs", label: "RFQs", queryName: "dashboards.rfq" },
+      { id: "quotes", label: "Quotes", queryName: "dashboards.quotes" }
     ],
     "Purchasing": [
-      { id: "sales_orders", label: "Sales Orders", queryName: "claude.sales_order_search" },
-      { id: "purchase_orders", label: "Purchase Orders", queryName: "claude.purchase_order_search" }
+      { id: "sales_orders", label: "Sales Orders", queryName: "dashboards.so" },
+      { id: "purchase_orders", label: "Purchase Orders", queryName: "dashboards.po" }
     ],
     "Accounting": [
-      { id: "invoices", label: "Invoices", queryName: "claude.invoice_search" }
+      { id: "invoices", label: "Invoices", queryName: "dashboards.invoice_search" }
     ]
   };
   var activeSubView = "tasks";
