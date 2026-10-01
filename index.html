@@ -649,6 +649,7 @@
   // ---------- Tabs ----------
   var tabsEl = document.getElementById("tabs");
   function canUsePentagon() {
+    if (activeCompany !== "SOI Aviation") return false;
     return me.fullAccess || me.department === "Procurement";
   }
 
@@ -704,7 +705,7 @@
 
   function updateDeptSubTabs() {
     var wrap = document.getElementById("deptSubTabs");
-    var views = PENTAGON_VIEWS[activeTab];
+    var views = activeCompany === "SOI Aviation" ? PENTAGON_VIEWS[activeTab] : null;
     if (!views) {
       wrap.style.display = "none";
       activeSubView = "tasks";
