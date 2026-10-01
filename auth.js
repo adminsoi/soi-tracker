@@ -7,6 +7,8 @@ if (!JWT_SECRET) {
   process.exit(1);
 }
 
+const COMPANIES = ["RedSun Aviation", "SOI Aviation", "NanoTech Aviation", "CAS"];
+
 const DEPARTMENTS = [
   "Procurement",
   "Purchasing",
@@ -17,15 +19,10 @@ const DEPARTMENTS = [
   "Warehouse",
 ];
 
-// Accounts in any of these departments see and can touch every
-// department's tasks, in addition to having their own department's board
-// like everyone else. Everyone not listed here is scoped to just their own
-// department. Edit this list to change who has full access.
-const FULL_ACCESS_DEPARTMENTS = ["HR", "Operations", "IT"];
-
-function hasFullAccess(department) {
-  return FULL_ACCESS_DEPARTMENTS.includes(department);
-}
+// Tasks created before companies existed have no "company" field. Treat
+// those as belonging to SOI Aviation, since that's the only company that
+// existed at the time.
+const DEFAULT_COMPANY = "SOI Aviation";
 
 function hashPassword(password) {
   return bcrypt.hash(password, 10);
@@ -37,7 +34,13 @@ function verifyPassword(password, hash) {
 
 function signUserToken(user) {
   return jwt.sign(
-    { sub: user.username, department: user.department, kind: "user" },
+    {
+      sub: user.username,
+      companies: user.companies,
+      department: user.department || null,
+      fullAccess: !!user.fullAccess,
+      kind: "user",
+    },
     JWT_SECRET,
     { expiresIn: "12h" }
   );
@@ -60,7 +63,12 @@ function authMiddleware(req, res, next) {
     if (payload.kind !== "user") {
       return res.status(401).json({ error: "Invalid token" });
     }
-    req.user = { username: payload.sub, department: payload.department };
+    req.user = {
+      username: payload.sub,
+      companies: payload.companies || [],
+      department: payload.department || null,
+      fullAccess: !!payload.fullAccess,
+    };
     next();
   } catch (e) {
     return res.status(401).json({ error: "Invalid or expired session" });
@@ -82,9 +90,9 @@ function adminMiddleware(req, res, next) {
 }
 
 module.exports = {
+  COMPANIES,
   DEPARTMENTS,
-  FULL_ACCESS_DEPARTMENTS,
-  hasFullAccess,
+  DEFAULT_COMPANY,
   hashPassword,
   verifyPassword,
   signUserToken,
