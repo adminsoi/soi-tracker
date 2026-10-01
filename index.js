@@ -53,6 +53,7 @@ function normalizeUser(u) {
     companies: u.companies && u.companies.length ? u.companies : [DEFAULT_COMPANY],
     departments,
     fullAccess: !!u.fullAccess,
+    pentagonCode: u.pentagonCode || "",
   };
 }
 
@@ -137,6 +138,7 @@ app.post(
       companies: user.companies,
       departments: user.departments,
       fullAccess: user.fullAccess,
+      pentagonCode: user.pentagonCode,
     });
   })
 );
@@ -147,6 +149,7 @@ app.get("/api/me", authMiddleware, (req, res) => {
     companies: req.user.companies,
     departments: req.user.departments,
     fullAccess: req.user.fullAccess,
+    pentagonCode: req.user.pentagonCode,
   });
 });
 
@@ -329,10 +332,13 @@ app.post(
   "/api/pentagon/:queryName",
   authMiddleware,
   asyncHandler(async (req, res) => {
-    if (!canUsePentagon(req.user, "SOI Aviation")) {
+    const { queryName } = req.params;
+    // "Mentions you" is personal data, not departmental — any SOI Aviation
+    // account can run it. Every other Pentagon query stays restricted.
+    const allowed = queryName === "dashboards.mine" || canUsePentagon(req.user, "SOI Aviation");
+    if (!allowed) {
       return res.status(403).json({ error: "Not available for your account" });
     }
-    const { queryName } = req.params;
     const body = req.body || {};
     try {
       const data = await pentagonQuery(queryName, body);
@@ -434,6 +440,7 @@ app.get(
         companies: u.companies,
         departments: u.departments,
         fullAccess: u.fullAccess,
+        pentagonCode: u.pentagonCode || "",
       }))
     );
   })
@@ -443,7 +450,7 @@ app.post(
   "/api/admin/users",
   adminMiddleware,
   asyncHandler(async (req, res) => {
-    const { username, password, email, companies, departments, fullAccess } = req.body || {};
+    const { username, password, email, companies, departments, fullAccess, pentagonCode } = req.body || {};
     if (!username || !email) {
       return res.status(400).json({ error: "Username and email are required" });
     }
@@ -483,6 +490,7 @@ app.post(
       companies,
       fullAccess: !!fullAccess,
       departments: deptList,
+      pentagonCode: String(pentagonCode || "").trim(),
     };
 
     await withUsers((users) => {
