@@ -7,7 +7,6 @@ if (!JWT_SECRET) {
   process.exit(1);
 }
 
-// "Operations" is the one department that can see and touch every task.
 const DEPARTMENTS = [
   "Procurement",
   "Purchasing",
@@ -17,6 +16,16 @@ const DEPARTMENTS = [
   "US Government",
   "Warehouse",
 ];
+
+// Accounts in any of these departments see and can touch every
+// department's tasks, in addition to having their own department's board
+// like everyone else. Everyone not listed here is scoped to just their own
+// department. Edit this list to change who has full access.
+const FULL_ACCESS_DEPARTMENTS = ["HR", "Operations", "IT"];
+
+function hasFullAccess(department) {
+  return FULL_ACCESS_DEPARTMENTS.includes(department);
+}
 
 function hashPassword(password) {
   return bcrypt.hash(password, 10);
@@ -74,6 +83,8 @@ function adminMiddleware(req, res, next) {
 
 module.exports = {
   DEPARTMENTS,
+  FULL_ACCESS_DEPARTMENTS,
+  hasFullAccess,
   hashPassword,
   verifyPassword,
   signUserToken,
