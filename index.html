@@ -346,7 +346,8 @@
   // than leaving the person stuck on an empty board.
   var DEPARTMENTS_FALLBACK = ["Procurement", "Purchasing", "IT", "HR", "Operations", "US Government", "Warehouse"];
   var DEPARTMENTS = []; // loaded from /api/departments
-  var me = null; // { username, department }
+  var OVERVIEW_KEY = "__overview__"; // virtual tab, not a real department
+  var me = null; // { username, department, fullAccess }
   var activeTab = null;
   var allTasks = [];
   var chartMain = null, chartPriority = null;
@@ -437,9 +438,9 @@
 
   function onSignedIn() {
     document.getElementById("li-pass").value = "";
-    activeTab = me.department;
+    activeTab = me.fullAccess ? OVERVIEW_KEY : me.department;
     document.getElementById("whoName").textContent = me.username;
-    document.getElementById("whoDept").textContent = me.department === "Operations" ? "Operations (all departments)" : me.department;
+    document.getElementById("whoDept").textContent = me.fullAccess ? me.department + " (sees all departments)" : me.department;
     showApp();
     loadDepartmentsThenStart();
   }
@@ -477,11 +478,11 @@
   var tabsEl = document.getElementById("tabs");
   function buildTabs() {
     tabsEl.innerHTML = "";
-    var visible = me.department === "Operations" ? DEPARTMENTS : [me.department];
+    var visible = me.fullAccess ? [OVERVIEW_KEY].concat(DEPARTMENTS) : [me.department];
     tabsEl.style.display = visible.length <= 1 ? "none" : "flex";
     visible.forEach(function (dept) {
       var b = document.createElement("button");
-      b.textContent = dept === "Operations" ? "Overview" : dept;
+      b.textContent = dept === OVERVIEW_KEY ? "Overview" : dept;
       b.dataset.dept = dept;
       if (dept === activeTab) b.classList.add("active");
       b.addEventListener("click", function () {
@@ -498,7 +499,7 @@
   function populateDeptSelect() {
     var sel = document.getElementById("f-dept");
     sel.innerHTML = "";
-    DEPARTMENTS.filter(function (d) { return d !== "Operations"; }).forEach(function (d) {
+    DEPARTMENTS.forEach(function (d) {
       var opt = document.createElement("option");
       opt.value = d; opt.textContent = d;
       sel.appendChild(opt);
@@ -526,7 +527,7 @@
   }
 
   function tasksForActiveTab() {
-    if (activeTab === "Operations") return allTasks;
+    if (activeTab === OVERVIEW_KEY) return allTasks;
     return allTasks.filter(function (t) { return t.department === activeTab; });
   }
 
@@ -591,10 +592,10 @@
     if (chartPriority) chartPriority.destroy();
 
     document.getElementById("chartTitle1").textContent =
-      activeTab === "Operations" ? "Open tasks by department" : "Tasks by status";
+      activeTab === OVERVIEW_KEY ? "Open tasks by department" : "Tasks by status";
 
-    if (activeTab === "Operations") {
-      var deptList = DEPARTMENTS.filter(function (d) { return d !== "Operations"; });
+    if (activeTab === OVERVIEW_KEY) {
+      var deptList = DEPARTMENTS;
       var byStatus = STATUSES.map(function (s) {
         return {
           label: s.label,
@@ -691,7 +692,7 @@
     card.draggable = true;
 
     var overdue = isOverdue(t);
-    var deptBadge = activeTab === "Operations"
+    var deptBadge = activeTab === OVERVIEW_KEY
       ? '<span class="badge dept" style="background:' + (DEPT_COLORS[t.department] || "#1d2c47") + '">' + escapeHtml(t.department) + "</span>"
       : "";
 
@@ -725,7 +726,7 @@
 
   function render() {
     var list = tasksForActiveTab();
-    document.getElementById("panelTitle").textContent = activeTab === "Operations" ? "Operations — All Departments" : activeTab;
+    document.getElementById("panelTitle").textContent = activeTab === OVERVIEW_KEY ? "Overview — All Departments" : activeTab;
     document.getElementById("panelSub").textContent = list.length + (list.length === 1 ? " task" : " tasks");
     // Each piece renders independently — if one throws (e.g. the charting
     // library failed to load over a restricted network), the others still
@@ -790,12 +791,12 @@
     var deptField = document.getElementById("deptField");
     var deptSelect = document.getElementById("f-dept");
     var ownerDept;
-    if (me.department !== "Operations") {
+    if (!me.fullAccess) {
       deptField.style.display = "none";
       ownerDept = me.department;
     } else {
       deptField.style.display = "block";
-      ownerDept = activeTab !== "Operations" ? activeTab : DEPARTMENTS.filter(function (d) { return d !== "Operations"; })[0];
+      ownerDept = activeTab !== OVERVIEW_KEY ? activeTab : me.department;
       deptSelect.value = ownerDept;
     }
     loadOwnerOptions(ownerDept);
@@ -819,7 +820,7 @@
 
     var deptField = document.getElementById("deptField");
     var deptSelect = document.getElementById("f-dept");
-    if (me.department !== "Operations") {
+    if (!me.fullAccess) {
       deptField.style.display = "none";
     } else {
       deptField.style.display = "block";
@@ -874,7 +875,7 @@
           msg.textContent = err.message || "Couldn't save that task.";
         });
     } else {
-      if (me.department === "Operations") {
+      if (me.fullAccess) {
         body.department = document.getElementById("f-dept").value;
       }
       api("/api/tasks", { method: "POST", body: JSON.stringify(body) })
