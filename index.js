@@ -17,7 +17,14 @@ const {
   authMiddleware,
   adminMiddleware,
 } = require("./auth");
-const { getUsers, getTasks, withUsers, withTasks } = require("./s3store");
+const {
+  getUsers,
+  getTasks,
+  withUsers,
+  withTasks,
+  getPentagonPresets,
+  withPentagonPresets,
+} = require("./s3store");
 const { sendMail } = require("./mailer");
 const { pentagonQuery } = require("./pentagon");
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
@@ -333,6 +340,71 @@ app.post(
       console.error(`Pentagon query failed: ${err.message}`);
       res.status(502).json({ error: "Pentagon query failed: " + err.message });
     }
+  })
+);
+
+// Shared saved searches — visible to and editable by anyone who can use
+// the Pentagon tab (same audience as running queries themselves).
+
+app.get(
+  "/api/pentagon-presets",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!canUsePentagon(req.user)) {
+      return res.status(403).json({ error: "Not available for your account" });
+    }
+    const presets = await getPentagonPresets();
+    res.json(presets);
+  })
+);
+
+app.post(
+  "/api/pentagon-presets",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!canUsePentagon(req.user)) {
+      return res.status(403).json({ error: "Not available for your account" });
+    }
+    const body = req.body || {};
+    const name = String(body.name || "").trim().slice(0, 80);
+    const queryName = String(body.queryName || "").trim();
+    if (!name || !queryName) {
+      return res.status(400).json({ error: "Name and query name are required" });
+    }
+    const preset = {
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+      name,
+      queryName,
+      params: body.params && typeof body.params === "object" ? body.params : {},
+      limit: Number.isFinite(body.limit) ? body.limit : 10,
+      createdBy: req.user.username,
+      createdAt: Date.now(),
+    };
+    await withPentagonPresets((presets) => {
+      presets.push(preset);
+    });
+    res.status(201).json(preset);
+  })
+);
+
+app.delete(
+  "/api/pentagon-presets/:id",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!canUsePentagon(req.user)) {
+      return res.status(403).json({ error: "Not available for your account" });
+    }
+    const { id } = req.params;
+    let removed = false;
+    await withPentagonPresets((presets) => {
+      const idx = presets.findIndex((p) => p.id === id);
+      if (idx !== -1) {
+        presets.splice(idx, 1);
+        removed = true;
+      }
+    });
+    if (!removed) return res.status(404).json({ error: "Preset not found" });
+    res.status(204).end();
   })
 );
 
