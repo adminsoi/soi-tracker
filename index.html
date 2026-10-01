@@ -270,7 +270,7 @@
 
 <div class="modal-backdrop" id="modalBackdrop">
   <div class="modal">
-    <h2>Add task</h2>
+    <h2 id="modalTitle">Add task</h2>
     <form id="taskForm">
       <div class="field">
         <label for="f-title">Title</label>
@@ -279,6 +279,15 @@
       <div class="field" id="deptField">
         <label for="f-dept">Department</label>
         <select id="f-dept"></select>
+      </div>
+      <div class="field" id="statusField" style="display:none;">
+        <label for="f-status">Status</label>
+        <select id="f-status">
+          <option value="todo">To Do</option>
+          <option value="in_progress">In Progress</option>
+          <option value="blocked">Blocked</option>
+          <option value="done">Done</option>
+        </select>
       </div>
       <div class="field-row">
         <div class="field">
@@ -296,7 +305,9 @@
       </div>
       <div class="field">
         <label for="f-owner">Owner</label>
-        <input id="f-owner" maxlength="60" placeholder="Who's on it" />
+        <select id="f-owner">
+          <option value="">Unassigned</option>
+        </select>
       </div>
       <div class="field">
         <label for="f-notes">Notes (optional)</label>
@@ -304,8 +315,9 @@
       </div>
       <div class="msg" id="formMsg"></div>
       <div class="modal-actions">
+        <button type="button" class="btn-secondary" id="deleteTaskBtn" style="display:none;margin-right:auto;">Delete task</button>
         <button type="button" class="btn-secondary" id="cancelBtn">Cancel</button>
-        <button type="submit" class="add-btn">Add task</button>
+        <button type="submit" class="add-btn" id="submitTaskBtn">Add task</button>
       </div>
     </form>
   </div>
@@ -329,6 +341,9 @@
     "Warehouse": "#0f6a72"
   };
 
+  // Fallback in case /api/departments has a transient hiccup — this list
+  // rarely changes, so we can start the app with it immediately rather
+  // than leaving the person stuck on an empty board.
   var DEPARTMENTS_FALLBACK = ["Procurement", "Purchasing", "IT", "HR", "Operations", "US Government", "Warehouse"];
   var DEPARTMENTS = []; // loaded from /api/departments
   var me = null; // { username, department }
@@ -557,8 +572,17 @@
 
   // ---------- Charts ----------
   function renderCharts(list) {
-    var ctx1 = document.getElementById("chartMain").getContext("2d");
-    var ctx2 = document.getElementById("chartPriority").getContext("2d");
+    var chartMainEl = document.getElementById("chartMain");
+    var chartPriorityEl = document.getElementById("chartPriority");
+    if (typeof Chart === "undefined") {
+      var msg = "Charts unavailable — couldn't load the charting library (likely blocked by network/firewall). Task counts above and the board below are unaffected.";
+      if (chartMainEl) chartMainEl.parentElement.innerHTML = '<div class="empty-col" style="padding:20px 4px;">' + msg + '</div>';
+      if (chartPriorityEl) chartPriorityEl.parentElement.innerHTML = '<div class="empty-col" style="padding:20px 4px;">' + msg + '</div>';
+      return;
+    }
+    if (!chartMainEl || !chartPriorityEl) return; // already replaced by the fallback above
+    var ctx1 = chartMainEl.getContext("2d");
+    var ctx2 = chartPriorityEl.getContext("2d");
     var isDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
     var gridColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
     var tickColor = isDark ? "#a4aab8" : "#5b6270";
@@ -687,6 +711,10 @@
     });
     card.addEventListener("dragend", function () { draggingId = null; card.classList.remove("dragging"); });
 
+    card.addEventListener("click", function () {
+      openEditModal(t);
+    });
+
     card.querySelector(".del").addEventListener("click", function (e) {
       e.stopPropagation();
       if (confirm('Delete "' + t.title + '"?')) deleteTask(t.id);
@@ -699,9 +727,12 @@
     var list = tasksForActiveTab();
     document.getElementById("panelTitle").textContent = activeTab === "Operations" ? "Operations — All Departments" : activeTab;
     document.getElementById("panelSub").textContent = list.length + (list.length === 1 ? " task" : " tasks");
-    renderStats(list);
-    renderCharts(list);
-    renderBoard(list);
+    // Each piece renders independently — if one throws (e.g. the charting
+    // library failed to load over a restricted network), the others still
+    // show up instead of the whole page going blank.
+    try { renderStats(list); } catch (e) { console.error("renderStats failed:", e); }
+    try { renderCharts(list); } catch (e) { console.error("renderCharts failed:", e); }
+    try { renderBoard(list); } catch (e) { console.error("renderBoard failed:", e); }
   }
 
   // ---------- Writes ----------
@@ -726,24 +757,94 @@
       });
   }
 
-  // ---------- Modal ----------
+  // ---------- Modal (shared between Add and Edit) ----------
   var modalBackdrop = document.getElementById("modalBackdrop");
-  document.getElementById("addBtn").addEventListener("click", function () {
+  var editingTaskId = null; // null = adding a new task; otherwise the task id being edited
+
+  function loadOwnerOptions(department) {
+    var sel = document.getElementById("f-owner");
+    var currentValue = sel.value;
+    return api("/api/users?department=" + encodeURIComponent(department)).then(function (users) {
+      sel.innerHTML = '<option value="">Unassigned</option>';
+      users.forEach(function (u) {
+        var opt = document.createElement("option");
+        opt.value = u.username;
+        opt.textContent = u.username + (u.department !== department ? " (" + u.department + ")" : "");
+        sel.appendChild(opt);
+      });
+      sel.value = currentValue || "";
+    }).catch(function () {
+      toast("Couldn't load the list of people to assign.", true);
+    });
+  }
+
+  function openAddModal() {
+    editingTaskId = null;
+    document.getElementById("modalTitle").textContent = "Add task";
+    document.getElementById("submitTaskBtn").textContent = "Add task";
+    document.getElementById("deleteTaskBtn").style.display = "none";
+    document.getElementById("statusField").style.display = "none";
     document.getElementById("formMsg").textContent = "";
     document.getElementById("taskForm").reset();
+
+    var deptField = document.getElementById("deptField");
+    var deptSelect = document.getElementById("f-dept");
+    var ownerDept;
+    if (me.department !== "Operations") {
+      deptField.style.display = "none";
+      ownerDept = me.department;
+    } else {
+      deptField.style.display = "block";
+      ownerDept = activeTab !== "Operations" ? activeTab : DEPARTMENTS.filter(function (d) { return d !== "Operations"; })[0];
+      deptSelect.value = ownerDept;
+    }
+    loadOwnerOptions(ownerDept);
+    modalBackdrop.classList.add("open");
+    document.getElementById("f-title").focus();
+  }
+
+  function openEditModal(t) {
+    editingTaskId = t.id;
+    document.getElementById("modalTitle").textContent = "Edit task";
+    document.getElementById("submitTaskBtn").textContent = "Save changes";
+    document.getElementById("deleteTaskBtn").style.display = "inline-block";
+    document.getElementById("statusField").style.display = "block";
+    document.getElementById("formMsg").textContent = "";
+
+    document.getElementById("f-title").value = t.title;
+    document.getElementById("f-status").value = t.status;
+    document.getElementById("f-priority").value = t.priority;
+    document.getElementById("f-due").value = t.dueDate || "";
+    document.getElementById("f-notes").value = t.notes || "";
+
     var deptField = document.getElementById("deptField");
     var deptSelect = document.getElementById("f-dept");
     if (me.department !== "Operations") {
       deptField.style.display = "none";
     } else {
       deptField.style.display = "block";
-      deptSelect.value = activeTab !== "Operations" ? activeTab : DEPARTMENTS.filter(function(d){return d!=="Operations";})[0];
+      deptSelect.value = t.department;
     }
+    loadOwnerOptions(t.department).then(function () {
+      document.getElementById("f-owner").value = t.owner || "";
+    });
+
     modalBackdrop.classList.add("open");
-    document.getElementById("f-title").focus();
+  }
+
+  document.getElementById("addBtn").addEventListener("click", openAddModal);
+  document.getElementById("f-dept").addEventListener("change", function () {
+    loadOwnerOptions(this.value);
   });
   document.getElementById("cancelBtn").addEventListener("click", function () { modalBackdrop.classList.remove("open"); });
   modalBackdrop.addEventListener("click", function (e) { if (e.target === modalBackdrop) modalBackdrop.classList.remove("open"); });
+
+  document.getElementById("deleteTaskBtn").addEventListener("click", function () {
+    if (!editingTaskId) return;
+    if (!confirm("Delete this task?")) return;
+    deleteTask(editingTaskId);
+    modalBackdrop.classList.remove("open");
+  });
 
   document.getElementById("taskForm").addEventListener("submit", function (e) {
     e.preventDefault();
@@ -752,26 +853,41 @@
     var body = {
       title: title,
       priority: document.getElementById("f-priority").value,
-      owner: document.getElementById("f-owner").value.trim(),
+      owner: document.getElementById("f-owner").value,
       dueDate: document.getElementById("f-due").value,
       notes: document.getElementById("f-notes").value.trim()
     };
-    if (me.department === "Operations") {
-      body.department = document.getElementById("f-dept").value;
-    }
     var msg = document.getElementById("formMsg");
     msg.textContent = "";
     setSync("busy", "Saving…");
-    api("/api/tasks", { method: "POST", body: JSON.stringify(body) })
-      .then(function () {
-        setSync("on", "Live");
-        modalBackdrop.classList.remove("open");
-        fetchTasks();
-      })
-      .catch(function (err) {
-        setSync("on", "Live");
-        msg.textContent = err.message || "Couldn't save that task.";
-      });
+
+    if (editingTaskId) {
+      body.status = document.getElementById("f-status").value;
+      api("/api/tasks/" + editingTaskId, { method: "PATCH", body: JSON.stringify(body) })
+        .then(function () {
+          setSync("on", "Live");
+          modalBackdrop.classList.remove("open");
+          fetchTasks();
+        })
+        .catch(function (err) {
+          setSync("on", "Live");
+          msg.textContent = err.message || "Couldn't save that task.";
+        });
+    } else {
+      if (me.department === "Operations") {
+        body.department = document.getElementById("f-dept").value;
+      }
+      api("/api/tasks", { method: "POST", body: JSON.stringify(body) })
+        .then(function () {
+          setSync("on", "Live");
+          modalBackdrop.classList.remove("open");
+          fetchTasks();
+        })
+        .catch(function (err) {
+          setSync("on", "Live");
+          msg.textContent = err.message || "Couldn't save that task.";
+        });
+    }
   });
 
   // ---------- Init ----------
