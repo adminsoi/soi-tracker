@@ -10,8 +10,6 @@ if (!JWT_SECRET) {
 const COMPANIES = ["RedSun Aviation", "SOI Aviation", "NanoTech Aviation", "CAS"];
 
 const DEPARTMENTS = [
-  "Accounting",
-  "Administrative",
   "Procurement",
   "Purchasing",
   "IT",
@@ -39,7 +37,7 @@ function signUserToken(user) {
     {
       sub: user.username,
       companies: user.companies,
-      department: user.department || null,
+      departments: user.departments || [],
       fullAccess: !!user.fullAccess,
       kind: "user",
     },
@@ -68,7 +66,7 @@ function authMiddleware(req, res, next) {
     req.user = {
       username: payload.sub,
       companies: payload.companies || [],
-      department: payload.department || null,
+      departments: payload.departments || [],
       fullAccess: !!payload.fullAccess,
     };
     next();
