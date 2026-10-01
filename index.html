@@ -300,6 +300,10 @@
         <label for="f-title">Title</label>
         <input id="f-title" required maxlength="140" placeholder="e.g. Follow up on RFQ response" />
       </div>
+      <div class="field" id="companyField" style="display:none;">
+        <label for="f-company">Company</label>
+        <select id="f-company"></select>
+      </div>
       <div class="field" id="deptField">
         <label for="f-dept">Department</label>
         <select id="f-dept"></select>
@@ -362,19 +366,20 @@
   var DEPT_COLORS = {
     "Procurement": "#1d2c47", "Purchasing": "#3a5280", "IT": "#a6192e",
     "HR": "#8a5c14", "Operations": "#276240", "US Government": "#5b3fa0",
-    "Warehouse": "#0f6a72"
+    "Warehouse": "#0f6a72", "Administrative": "#7a4a8f"
   };
 
   // Fallback in case /api/departments has a transient hiccup — this list
   // rarely changes, so we can start the app with it immediately rather
   // than leaving the person stuck on an empty board.
-  var DEPARTMENTS_FALLBACK = ["Procurement", "Purchasing", "IT", "HR", "Operations", "US Government", "Warehouse"];
+  var DEPARTMENTS_FALLBACK = ["Procurement", "Purchasing", "IT", "HR", "Operations", "US Government", "Warehouse", "Administrative"];
   var DEPARTMENTS = []; // loaded from /api/departments
   var OVERVIEW_KEY = "__overview__"; // virtual tab: aggregate of all departments within the active company
   var GLOBAL_KEY = "__global__"; // virtual tab: every company at once, only for multi-company accounts
   var me = null; // { username, companies, department, fullAccess }
   var activeCompany = null;
   var COMPANY_KEY = "soi_tracker_company";
+  var AOG = "AOG"; // virtual "all companies combined" option, dropdown-only
   var activeTab = null;
   var allTasks = [];
   var chartMain = null, chartPriority = null;
@@ -468,7 +473,8 @@
 
     var saved = null;
     try { saved = localStorage.getItem(COMPANY_KEY); } catch (e) {}
-    activeCompany = (saved && me.companies.indexOf(saved) !== -1) ? saved : me.companies[0];
+    var savedValid = saved && (saved === AOG || me.companies.indexOf(saved) !== -1) && me.companies.length > 1;
+    activeCompany = savedValid ? saved : me.companies[0];
 
     setupCompanySelect();
 
@@ -493,6 +499,9 @@
       opt.value = c; opt.textContent = c;
       sel.appendChild(opt);
     });
+    var aogOpt = document.createElement("option");
+    aogOpt.value = AOG; aogOpt.textContent = "AOG — All companies";
+    sel.appendChild(aogOpt);
     sel.value = activeCompany;
     sel.style.display = "inline-block";
   }
@@ -588,7 +597,8 @@
   // ---------- Data ----------
   function fetchTasks(isInitial) {
     setSync("busy", "Syncing…");
-    return api("/api/tasks?company=" + encodeURIComponent(activeCompany)).then(function (tasks) {
+    var url = activeCompany === AOG ? "/api/tasks" : "/api/tasks?company=" + encodeURIComponent(activeCompany);
+    return api(url).then(function (tasks) {
       allTasks = tasks;
       tasksLoadedOnce = true;
       setSync("on", "Live");
@@ -774,11 +784,14 @@
     var deptBadge = activeTab === OVERVIEW_KEY
       ? '<span class="badge dept" style="background:' + (DEPT_COLORS[t.department] || "#1d2c47") + '">' + escapeHtml(t.department) + "</span>"
       : "";
+    var companyBadge = activeCompany === AOG
+      ? '<span class="badge dept" style="background:#5b5f6b;">' + escapeHtml(t.company || "SOI Aviation") + "</span>"
+      : "";
 
     card.innerHTML =
       '<div class="row1"><div class="title">' + escapeHtml(t.title) + '</div>' +
       '<button class="del" title="Delete" data-id="' + t.id + '">×</button></div>' +
-      '<div class="meta">' + deptBadge +
+      '<div class="meta">' + companyBadge + deptBadge +
       '<span class="badge pri-' + t.priority + '">' + t.priority.charAt(0).toUpperCase() + t.priority.slice(1) + " priority</span></div>" +
       (t.owner ? '<div class="owner">' + escapeHtml(t.owner) + "</div>" : "") +
       (t.dueDate ? '<div class="due' + (overdue ? " overdue" : "") + '">' + (overdue ? "Overdue — was due " : "Due ") + fmtDate(t.dueDate) + "</div>" : "") +
@@ -881,10 +894,10 @@
   var modalBackdrop = document.getElementById("modalBackdrop");
   var editingTaskId = null; // null = adding a new task; otherwise the task id being edited
 
-  function loadOwnerOptions(department) {
+  function loadOwnerOptions(department, company) {
     var sel = document.getElementById("f-owner");
     var currentValue = sel.value;
-    return api("/api/users?company=" + encodeURIComponent(activeCompany) + "&department=" + encodeURIComponent(department)).then(function (users) {
+    return api("/api/users?company=" + encodeURIComponent(company) + "&department=" + encodeURIComponent(department)).then(function (users) {
       sel.innerHTML = '<option value="">Unassigned</option>';
       users.forEach(function (u) {
         var opt = document.createElement("option");
@@ -898,6 +911,13 @@
     });
   }
 
+  function currentOwnerCompany() {
+    // Which real company should the Owner list be scoped to right now?
+    if (activeCompany !== AOG) return activeCompany;
+    var companySelect = document.getElementById("f-company");
+    return companySelect.value || me.companies[0];
+  }
+
   function openAddModal() {
     editingTaskId = null;
     document.getElementById("modalTitle").textContent = "Add task";
@@ -907,6 +927,22 @@
     document.getElementById("formMsg").textContent = "";
     document.getElementById("taskForm").reset();
 
+    var companyField = document.getElementById("companyField");
+    var companySelect = document.getElementById("f-company");
+    companySelect.disabled = false;
+    if (activeCompany === AOG) {
+      companyField.style.display = "block";
+      companySelect.innerHTML = "";
+      me.companies.forEach(function (c) {
+        var opt = document.createElement("option");
+        opt.value = c; opt.textContent = c;
+        companySelect.appendChild(opt);
+      });
+      companySelect.value = me.companies[0];
+    } else {
+      companyField.style.display = "none";
+    }
+
     var deptField = document.getElementById("deptField");
     var deptSelect = document.getElementById("f-dept");
     var ownerDept;
@@ -915,10 +951,10 @@
       ownerDept = me.department;
     } else {
       deptField.style.display = "block";
-      ownerDept = activeTab !== OVERVIEW_KEY ? activeTab : me.department;
+      ownerDept = (activeTab !== OVERVIEW_KEY && activeTab !== AOG && DEPARTMENTS.indexOf(activeTab) !== -1) ? activeTab : me.department;
       deptSelect.value = ownerDept;
     }
-    loadOwnerOptions(ownerDept);
+    loadOwnerOptions(ownerDept, currentOwnerCompany());
     modalBackdrop.classList.add("open");
     document.getElementById("f-title").focus();
   }
@@ -937,6 +973,19 @@
     document.getElementById("f-due").value = t.dueDate || "";
     document.getElementById("f-notes").value = t.notes || "";
 
+    var companyField = document.getElementById("companyField");
+    var companySelect = document.getElementById("f-company");
+    var taskCompanyValue = t.company || "SOI Aviation";
+    if (activeCompany === AOG) {
+      companyField.style.display = "block";
+      companySelect.innerHTML = '<option value="' + taskCompanyValue + '">' + taskCompanyValue + '</option>';
+      companySelect.value = taskCompanyValue;
+      companySelect.disabled = true; // company can't be changed after creation
+    } else {
+      companyField.style.display = "none";
+      companySelect.disabled = false;
+    }
+
     var deptField = document.getElementById("deptField");
     var deptSelect = document.getElementById("f-dept");
     if (!me.fullAccess) {
@@ -945,7 +994,7 @@
       deptField.style.display = "block";
       deptSelect.value = t.department;
     }
-    loadOwnerOptions(t.department).then(function () {
+    loadOwnerOptions(t.department, taskCompanyValue).then(function () {
       document.getElementById("f-owner").value = t.owner || "";
     });
 
@@ -954,7 +1003,10 @@
 
   document.getElementById("addBtn").addEventListener("click", openAddModal);
   document.getElementById("f-dept").addEventListener("change", function () {
-    loadOwnerOptions(this.value);
+    loadOwnerOptions(this.value, currentOwnerCompany());
+  });
+  document.getElementById("f-company").addEventListener("change", function () {
+    loadOwnerOptions(document.getElementById("f-dept").value, this.value);
   });
   document.getElementById("cancelBtn").addEventListener("click", function () { modalBackdrop.classList.remove("open"); });
   modalBackdrop.addEventListener("click", function (e) { if (e.target === modalBackdrop) modalBackdrop.classList.remove("open"); });
@@ -994,7 +1046,7 @@
           msg.textContent = err.message || "Couldn't save that task.";
         });
     } else {
-      body.company = activeCompany;
+      body.company = activeCompany === AOG ? document.getElementById("f-company").value : activeCompany;
       if (me.fullAccess) {
         body.department = document.getElementById("f-dept").value;
       }
