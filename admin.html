@@ -24,7 +24,7 @@
     font-family: -apple-system, "Segoe UI", "Inter", system-ui, sans-serif;
     padding: 24px 16px;
   }
-  .wrap { max-width: 680px; margin: 0 auto; }
+  .wrap { max-width: 720px; margin: 0 auto; }
   header { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
   .mark { width: 30px; height: 30px; border-radius: 7px; background: var(--red); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; }
   h1 { font-size: 17px; margin: 0; }
@@ -35,12 +35,20 @@
     padding: 22px; box-shadow: var(--shadow); margin-bottom: 18px;
   }
   .login-card { max-width: 340px; margin: 60px auto; }
+  .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .card-head h2 { margin: 0; }
+  .editing-banner {
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 12px; font-size: 12.5px; color: var(--text-dim); margin-bottom: 14px;
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  }
   .field { margin-bottom: 14px; }
   .field label { display: block; font-size: 12px; font-weight: 600; color: var(--text-dim); margin-bottom: 5px; }
   .field input, .field select {
     width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px;
     background: var(--bg); color: var(--text); font-size: 13.5px; font-family: inherit;
   }
+  .field input:disabled { opacity: 0.6; cursor: not-allowed; }
   .field-row { display: flex; gap: 10px; }
   .field-row .field { flex: 1; }
   .check-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -67,7 +75,7 @@
   .row-actions { display: flex; gap: 6px; }
   .row-actions button { padding: 5px 10px; font-size: 12px; }
   .empty { color: var(--text-faint); font-size: 13px; padding: 14px 0; }
-  h2 { font-size: 14px; margin: 0 0 14px; }
+  h2 { font-size: 14px; margin: 0; }
   .hint { font-size: 11.5px; color: var(--text-faint); margin-top: -8px; margin-bottom: 14px; }
 </style>
 </head>
@@ -96,7 +104,13 @@
     </header>
 
     <div class="card">
-      <h2>Add / update a login</h2>
+      <div class="card-head">
+        <h2 id="formTitle">Add a login</h2>
+      </div>
+      <div class="editing-banner" id="editingBanner" style="display:none;">
+        <span>Editing <strong id="editingUsernameLabel"></strong> — password left blank keeps their current one.</span>
+        <button type="button" class="secondary" id="cancelEditBtn">New login instead</button>
+      </div>
       <form id="userForm">
         <div class="field-row">
           <div class="field">
@@ -105,7 +119,7 @@
           </div>
           <div class="field">
             <label for="u-pass">Password</label>
-            <input id="u-pass" type="password" minlength="8" required placeholder="8+ characters" />
+            <input id="u-pass" type="password" minlength="8" placeholder="8+ characters" />
           </div>
         </div>
         <div class="field">
@@ -129,12 +143,12 @@
         </div>
 
         <div class="field" id="deptField">
-          <label for="u-dept">Department (only needed without full access)</label>
-          <select id="u-dept"></select>
+          <label>Departments (only needed without full access)</label>
+          <div class="check-grid" id="deptChecks"></div>
         </div>
-        <div class="hint" id="deptHint">If "Full access" is checked, they aren't tied to one department — this is ignored.</div>
+        <div class="hint" id="deptHint">If "Full access" is checked, departments are ignored — they see everything.</div>
 
-        <button type="submit">Save login</button>
+        <button type="submit" id="submitBtn">Save login</button>
         <div class="msg" id="userMsg"></div>
       </form>
     </div>
@@ -159,6 +173,7 @@
   var TOKEN_KEY = "soi_admin_token";
   var DEPARTMENTS = [];
   var COMPANIES = [];
+  var editingUsername = null; // null = adding a new login
 
   function token() { return sessionStorage.getItem(TOKEN_KEY); }
   function setToken(t) { sessionStorage.setItem(TOKEN_KEY, t); }
@@ -230,12 +245,15 @@
   function loadDepartments() {
     return fetch("/api/departments").then(function (r) { return r.json(); }).then(function (depts) {
       DEPARTMENTS = depts;
-      var sel = document.getElementById("u-dept");
-      sel.innerHTML = "";
+      var grid = document.getElementById("deptChecks");
+      grid.innerHTML = "";
       depts.forEach(function (d) {
-        var opt = document.createElement("option");
-        opt.value = d; opt.textContent = d;
-        sel.appendChild(opt);
+        var id = "dept-" + d.replace(/\s+/g, "-");
+        var row = document.createElement("label");
+        row.className = "check-row";
+        row.setAttribute("for", id);
+        row.innerHTML = '<input type="checkbox" id="' + id + '" value="' + d + '" /> ' + d;
+        grid.appendChild(row);
       });
     });
   }
@@ -244,17 +262,27 @@
     return Array.prototype.slice.call(document.querySelectorAll('#companyChecks input[type="checkbox"]:checked'))
       .map(function (el) { return el.value; });
   }
+  function getCheckedDepartments() {
+    return Array.prototype.slice.call(document.querySelectorAll('#deptChecks input[type="checkbox"]:checked'))
+      .map(function (el) { return el.value; });
+  }
+  function setCheckedValues(selector, values) {
+    document.querySelectorAll(selector).forEach(function (el) {
+      el.checked = values.indexOf(el.value) !== -1;
+    });
+  }
 
   document.getElementById("u-fullaccess").addEventListener("change", function () {
     var deptField = document.getElementById("deptField");
     var deptHint = document.getElementById("deptHint");
+    var deptChecks = document.querySelectorAll('#deptChecks input[type="checkbox"]');
     if (this.checked) {
       deptField.style.opacity = "0.5";
-      document.getElementById("u-dept").disabled = true;
+      deptChecks.forEach(function (el) { el.disabled = true; });
       deptHint.style.display = "block";
     } else {
       deptField.style.opacity = "1";
-      document.getElementById("u-dept").disabled = false;
+      deptChecks.forEach(function (el) { el.disabled = false; });
       deptHint.style.display = "none";
     }
   });
@@ -271,21 +299,35 @@
         var companyTags = (u.companies || []).map(function (c) { return '<span class="tag">' + escapeHtml(c) + '</span>'; }).join("");
         var accessCell = u.fullAccess
           ? '<span class="tag full">Full access</span>'
-          : escapeHtml(u.department || "—");
+          : (u.departments || []).map(function (d) { return '<span class="tag">' + escapeHtml(d) + '</span>'; }).join("") || "—";
         tr.innerHTML =
           "<td>" + escapeHtml(u.username) + "</td>" +
           "<td>" + escapeHtml(u.email || "") + "</td>" +
           "<td>" + companyTags + "</td>" +
           "<td>" + accessCell + "</td>" +
-          "<td class=\"row-actions\"><button class=\"secondary\" data-del=\"" + escapeHtml(u.username) + "\">Remove</button></td>";
+          "<td class=\"row-actions\">" +
+          "<button class=\"secondary\" data-edit=\"" + escapeHtml(u.username) + "\">Edit</button>" +
+          "<button class=\"secondary\" data-del=\"" + escapeHtml(u.username) + "\">Remove</button>" +
+          "</td>";
         body.appendChild(tr);
+      });
+
+      body.querySelectorAll("[data-edit]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var username = btn.getAttribute("data-edit");
+          var user = users.filter(function (u) { return u.username === username; })[0];
+          if (user) startEditing(user);
+        });
       });
       body.querySelectorAll("[data-del]").forEach(function (btn) {
         btn.addEventListener("click", function () {
           var username = btn.getAttribute("data-del");
           if (!confirm('Remove login "' + username + '"?')) return;
           api("/api/admin/users/" + encodeURIComponent(username), { method: "DELETE" })
-            .then(loadUsers)
+            .then(function () {
+              if (editingUsername === username) stopEditing();
+              loadUsers();
+            })
             .catch(function (err) { alert(err.message); });
         });
       });
@@ -300,6 +342,45 @@
     });
   }
 
+  function startEditing(user) {
+    editingUsername = user.username;
+    document.getElementById("formTitle").textContent = "Edit login";
+    document.getElementById("submitBtn").textContent = "Save changes";
+    document.getElementById("editingBanner").style.display = "flex";
+    document.getElementById("editingUsernameLabel").textContent = user.username;
+
+    document.getElementById("u-name").value = user.username;
+    document.getElementById("u-name").disabled = true;
+    document.getElementById("u-pass").value = "";
+    document.getElementById("u-pass").required = false;
+    document.getElementById("u-email").value = user.email || "";
+
+    setCheckedValues('#companyChecks input[type="checkbox"]', user.companies || []);
+
+    var fullAccessBox = document.getElementById("u-fullaccess");
+    fullAccessBox.checked = !!user.fullAccess;
+    setCheckedValues('#deptChecks input[type="checkbox"]', user.departments || []);
+    fullAccessBox.dispatchEvent(new Event("change"));
+
+    document.getElementById("userMsg").textContent = "";
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function stopEditing() {
+    editingUsername = null;
+    document.getElementById("formTitle").textContent = "Add a login";
+    document.getElementById("submitBtn").textContent = "Save login";
+    document.getElementById("editingBanner").style.display = "none";
+    document.getElementById("u-name").disabled = false;
+    document.getElementById("userForm").reset();
+    document.querySelectorAll('#deptChecks input[type="checkbox"]').forEach(function (el) { el.disabled = false; });
+    document.getElementById("deptField").style.opacity = "1";
+    document.getElementById("deptHint").style.display = "none";
+    document.getElementById("userMsg").textContent = "";
+  }
+
+  document.getElementById("cancelEditBtn").addEventListener("click", stopEditing);
+
   document.getElementById("userForm").addEventListener("submit", function (e) {
     e.preventDefault();
     var msg = document.getElementById("userMsg");
@@ -312,23 +393,31 @@
       msg.textContent = "Select at least one company.";
       return;
     }
+    var departments = getCheckedDepartments();
+    if (!fullAccess && departments.length === 0) {
+      msg.textContent = "Select at least one department, or turn on full access.";
+      return;
+    }
+
+    var password = document.getElementById("u-pass").value;
+    if (!editingUsername && !password) {
+      msg.textContent = "Password is required for a new login.";
+      return;
+    }
 
     var body = {
       username: document.getElementById("u-name").value.trim(),
-      password: document.getElementById("u-pass").value,
+      password: password,
       email: document.getElementById("u-email").value.trim(),
       companies: companies,
       fullAccess: fullAccess,
-      department: fullAccess ? null : document.getElementById("u-dept").value
+      departments: departments
     };
     api("/api/admin/users", { method: "POST", body: JSON.stringify(body) })
       .then(function () {
+        stopEditing();
         msg.textContent = "Saved.";
         msg.className = "msg ok";
-        document.getElementById("userForm").reset();
-        document.getElementById("u-dept").disabled = false;
-        document.getElementById("deptField").style.opacity = "1";
-        document.getElementById("deptHint").style.display = "none";
         loadUsers();
       })
       .catch(function (err) { msg.textContent = err.message; });
