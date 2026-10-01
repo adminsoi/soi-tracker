@@ -178,6 +178,18 @@
   .global-table td.total, .global-table th.total { font-weight: 700; color: var(--text); }
   .global-table tr.dept-total td { border-top: 2px solid var(--border); font-weight: 700; }
 
+  .preset-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 100px;
+    padding: 5px 6px 5px 12px; font-size: 12.5px; cursor: pointer;
+  }
+  .preset-chip:hover { border-color: var(--navy-light); }
+  .preset-chip .preset-del {
+    background: none; border: none; color: var(--text-faint); cursor: pointer;
+    font-size: 14px; line-height: 1; padding: 2px 6px; border-radius: 50%; font-family: inherit;
+  }
+  .preset-chip .preset-del:hover { color: var(--red); background: var(--surface); }
+
   /* Login screen */
   .login-screen {
     position: fixed; inset: 0; background: var(--bg);
@@ -299,6 +311,13 @@
       <div class="panel-head">
         <h1>Pentagon Query Tester</h1>
       </div>
+
+      <div class="chart-card" style="margin-bottom:16px;">
+        <h3 style="margin:0 0 10px;">Saved searches</h3>
+        <div id="pq-presets" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:4px;"></div>
+        <div id="pq-presets-empty" style="font-size:12.5px;color:var(--text-faint);display:none;">No saved searches yet — run something below, then "Save as search."</div>
+      </div>
+
       <div class="chart-card" style="margin-bottom:16px;">
         <div class="field-row" style="display:flex;gap:10px;margin-bottom:10px;">
           <div class="field" style="flex:1;">
@@ -315,11 +334,20 @@
           <textarea id="pq-params" rows="3" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--text);font-size:13px;font-family:monospace;resize:vertical;">{"name": ""}</textarea>
         </div>
         <button class="add-btn" id="pq-run">Run query</button>
+        <button class="btn-secondary" id="pq-save" style="margin-left:8px;">Save as search</button>
         <span id="pq-status" style="margin-left:10px;font-size:12.5px;color:var(--text-faint);"></span>
       </div>
+
       <div class="chart-card">
         <h3 style="margin:0 0 10px;">Result</h3>
-        <pre id="pq-result" style="margin:0;white-space:pre-wrap;word-break:break-word;font-size:12px;max-height:60vh;overflow:auto;background:var(--bg);padding:12px;border-radius:7px;border:1px solid var(--border);">Run a query to see results here.</pre>
+        <div id="pq-table-wrap" style="overflow:auto;max-height:60vh;">
+          <table class="global-table" id="pq-table" style="display:none;"></table>
+        </div>
+        <div id="pq-empty" style="font-size:12.5px;color:var(--text-faint);">Run a query to see results here.</div>
+        <details style="margin-top:12px;">
+          <summary style="cursor:pointer;font-size:12px;color:var(--text-dim);">Raw response</summary>
+          <pre id="pq-result" style="margin:8px 0 0;white-space:pre-wrap;word-break:break-word;font-size:12px;max-height:40vh;overflow:auto;background:var(--bg);padding:12px;border-radius:7px;border:1px solid var(--border);"></pre>
+        </details>
       </div>
     </div>
 
@@ -657,6 +685,7 @@
   function showPentagonPanel() {
     hideAllPanels();
     document.getElementById("pentagonPanel").style.display = "block";
+    loadPentagonPresets();
   }
 
   function populateDeptSelect() {
@@ -944,41 +973,157 @@
   }
 
   // ---------- Pentagon query tester ----------
-  document.getElementById("pq-run").addEventListener("click", function () {
-    var nameEl = document.getElementById("pq-name");
-    var limitEl = document.getElementById("pq-limit");
-    var paramsEl = document.getElementById("pq-params");
-    var statusEl = document.getElementById("pq-status");
-    var resultEl = document.getElementById("pq-result");
 
-    var queryName = nameEl.value.trim();
+  function findResultRows(data) {
+    // Pentagon's responses put the actual records in a "rows" array,
+    // sometimes nested under result_sets[0].rows too. Try the common
+    // shapes rather than assuming one exact structure.
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.rows)) return data.rows;
+    if (data && Array.isArray(data.result_sets) && data.result_sets[0] && Array.isArray(data.result_sets[0].rows)) {
+      return data.result_sets[0].rows;
+    }
+    return null;
+  }
+
+  function renderPentagonResult(data) {
+    var table = document.getElementById("pq-table");
+    var empty = document.getElementById("pq-empty");
+    var resultEl = document.getElementById("pq-result");
+    resultEl.textContent = JSON.stringify(data, null, 2);
+
+    var rows = findResultRows(data);
+    if (!rows || rows.length === 0) {
+      table.style.display = "none";
+      table.innerHTML = "";
+      empty.style.display = "block";
+      empty.textContent = rows && rows.length === 0 ? "Query ran fine — no rows came back." : "No table-shaped data in this response — see raw response below.";
+      return;
+    }
+
+    // Union of keys across all rows, in first-seen order, so a field that's
+    // only present on some rows still gets its own column.
+    var columns = [];
+    rows.forEach(function (row) {
+      Object.keys(row).forEach(function (k) { if (columns.indexOf(k) === -1) columns.push(k); });
+    });
+
+    var thead = "<thead><tr>" + columns.map(function (c) { return "<th>" + escapeHtml(c) + "</th>"; }).join("") + "</tr></thead>";
+    var tbody = "<tbody>" + rows.map(function (row) {
+      return "<tr>" + columns.map(function (c) {
+        var v = row[c];
+        return "<td>" + (v === null || v === undefined ? "" : escapeHtml(String(v))) + "</td>";
+      }).join("") + "</tr>";
+    }).join("") + "</tbody>";
+
+    table.innerHTML = thead + tbody;
+    table.style.display = "table";
+    empty.style.display = "none";
+  }
+
+  function runPentagonQuery(queryName, params, limit) {
+    var statusEl = document.getElementById("pq-status");
+    document.getElementById("pq-name").value = queryName;
+    document.getElementById("pq-params").value = JSON.stringify(params || {}, null, 2);
+    document.getElementById("pq-limit").value = limit || 10;
+
+    statusEl.textContent = "Running…";
+    document.getElementById("pq-table").style.display = "none";
+    document.getElementById("pq-empty").textContent = "Loading…";
+    document.getElementById("pq-empty").style.display = "block";
+
+    api("/api/pentagon/" + encodeURIComponent(queryName), {
+      method: "POST",
+      body: JSON.stringify({ params: params || {}, limit: limit || 10 })
+    }).then(function (data) {
+      statusEl.textContent = "Done.";
+      renderPentagonResult(data);
+    }).catch(function (err) {
+      statusEl.textContent = "Error.";
+      document.getElementById("pq-table").style.display = "none";
+      document.getElementById("pq-empty").style.display = "block";
+      document.getElementById("pq-empty").textContent = err.message || "Query failed.";
+      document.getElementById("pq-result").textContent = err.message || "Query failed.";
+    });
+  }
+
+  document.getElementById("pq-run").addEventListener("click", function () {
+    var queryName = document.getElementById("pq-name").value.trim();
+    var statusEl = document.getElementById("pq-status");
     if (!queryName) {
       statusEl.textContent = "Enter a query name.";
       return;
     }
-
     var params;
     try {
-      params = paramsEl.value.trim() ? JSON.parse(paramsEl.value) : {};
+      var raw = document.getElementById("pq-params").value.trim();
+      params = raw ? JSON.parse(raw) : {};
     } catch (e) {
       statusEl.textContent = "Params isn't valid JSON: " + e.message;
       return;
     }
+    var limit = parseInt(document.getElementById("pq-limit").value, 10) || 10;
+    runPentagonQuery(queryName, params, limit);
+  });
 
-    var limit = parseInt(limitEl.value, 10) || 10;
+  // ---------- Shared saved searches ----------
+  function loadPentagonPresets() {
+    var wrap = document.getElementById("pq-presets");
+    var empty = document.getElementById("pq-presets-empty");
+    return api("/api/pentagon-presets").then(function (presets) {
+      wrap.innerHTML = "";
+      if (!presets.length) {
+        empty.style.display = "block";
+        return;
+      }
+      empty.style.display = "none";
+      presets.forEach(function (p) {
+        var chip = document.createElement("span");
+        chip.className = "preset-chip";
+        chip.innerHTML = escapeHtml(p.name) + ' <button class="preset-del" title="Remove" data-id="' + p.id + '">×</button>';
+        chip.addEventListener("click", function (e) {
+          if (e.target.classList.contains("preset-del")) return;
+          runPentagonQuery(p.queryName, p.params, p.limit);
+        });
+        chip.querySelector(".preset-del").addEventListener("click", function (e) {
+          e.stopPropagation();
+          if (!confirm('Remove saved search "' + p.name + '"?')) return;
+          api("/api/pentagon-presets/" + encodeURIComponent(p.id), { method: "DELETE" })
+            .then(loadPentagonPresets)
+            .catch(function (err) { toast(err.message, true); });
+        });
+        wrap.appendChild(chip);
+      });
+    }).catch(function () {
+      toast("Couldn't load saved searches.", true);
+    });
+  }
 
-    statusEl.textContent = "Running…";
-    resultEl.textContent = "";
-
-    api("/api/pentagon/" + encodeURIComponent(queryName), {
+  document.getElementById("pq-save").addEventListener("click", function () {
+    var queryName = document.getElementById("pq-name").value.trim();
+    if (!queryName) {
+      toast("Enter a query name first.", true);
+      return;
+    }
+    var params;
+    try {
+      var raw = document.getElementById("pq-params").value.trim();
+      params = raw ? JSON.parse(raw) : {};
+    } catch (e) {
+      toast("Params isn't valid JSON.", true);
+      return;
+    }
+    var limit = parseInt(document.getElementById("pq-limit").value, 10) || 10;
+    var name = prompt("Name this saved search:", queryName);
+    if (!name) return;
+    api("/api/pentagon-presets", {
       method: "POST",
-      body: JSON.stringify({ params: params, limit: limit })
-    }).then(function (data) {
-      statusEl.textContent = "Done.";
-      resultEl.textContent = JSON.stringify(data, null, 2);
+      body: JSON.stringify({ name: name, queryName: queryName, params: params, limit: limit })
+    }).then(function () {
+      toast("Saved.");
+      loadPentagonPresets();
     }).catch(function (err) {
-      statusEl.textContent = "Error.";
-      resultEl.textContent = err.message || "Query failed.";
+      toast(err.message || "Couldn't save.", true);
     });
   });
 
