@@ -190,6 +190,15 @@
   }
   .preset-chip .preset-del:hover { color: var(--red); background: var(--surface); }
 
+  #resourceLinks { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  .resource-link {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 100px;
+    padding: 6px 14px; font-size: 12.5px; font-weight: 600; color: var(--navy); text-decoration: none;
+  }
+  .resource-link:hover { border-color: var(--navy-light); background: var(--surface-2); }
+  @media (prefers-color-scheme: dark) { .resource-link { color: #cfd9ef; } }
+
   .sub-tabs { display: flex; gap: 6px; }
   .sub-tabs button {
     appearance: none; border: 1px solid var(--border); background: var(--surface);
@@ -289,6 +298,8 @@
         <span class="sub" id="panelSub">0 tasks</span>
       </div>
 
+      <div id="resourceLinks" style="display:none;"></div>
+
       <div id="deptSubTabs" style="display:none;margin-bottom:16px;"></div>
 
       <div id="taskBoardView">
@@ -374,6 +385,28 @@
           <summary style="cursor:pointer;font-size:12px;color:var(--text-dim);">Raw response</summary>
           <pre id="pq-result" style="margin:8px 0 0;white-space:pre-wrap;word-break:break-word;font-size:12px;max-height:40vh;overflow:auto;background:var(--bg);padding:12px;border-radius:7px;border:1px solid var(--border);"></pre>
         </details>
+      </div>
+    </div>
+
+    <div id="mentionsPanel" style="display:none;">
+      <div class="panel-head">
+        <h1>Mentions You</h1>
+        <span class="sub" id="mn-status-msg"></span>
+      </div>
+      <div id="mn-no-code" style="display:none;" class="chart-card">
+        <p style="margin:0;font-size:13px;color:var(--text-dim);">No Pentagon code is set on your account yet — ask an admin to add one at <code>/admin.html</code> so this can find RFQs, Quotes, Sales Orders, Purchase Orders, and Invoices tied to you.</p>
+      </div>
+      <div id="mn-content">
+        <div class="chart-row" id="mn-chart-row" style="display:none;">
+          <div class="chart-card"><h3 id="mn-chart-line-title">Total value over time</h3><div class="chart-wrap"><canvas id="mn-chart-line"></canvas></div></div>
+          <div class="chart-card"><h3 id="mn-chart-pie-title">By status</h3><div class="chart-wrap"><canvas id="mn-chart-pie"></canvas></div></div>
+        </div>
+        <div class="chart-card">
+          <div style="overflow:auto;max-height:65vh;">
+            <table class="global-table" id="mn-table" style="display:none;"></table>
+            <div id="mn-empty" style="font-size:12.5px;color:var(--text-faint);">Loading…</div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -469,6 +502,7 @@
   var GLOBAL_KEY = "__global__"; // virtual tab: every company at once, only for multi-company accounts
   var CALENDAR_KEY = "__calendar__"; // virtual tab: embedded HR calendar, only for multi-company accounts
   var PENTAGON_KEY = "__pentagon__"; // virtual tab: Pentagon query tester, Procurement + full-access only
+  var MENTIONS_KEY = "__mentions__"; // virtual tab: personal "mentions you" view, open to everyone on SOI Aviation
 
   // Paste your Outlook "Publish to web" HTML link here (Calendar → the
   // calendar → "..." → Sharing and permissions → Publish a calendar →
@@ -559,7 +593,7 @@
       });
     }).then(function (data) {
       setToken(data.token);
-      me = { username: data.username, companies: data.companies, departments: data.departments || [], fullAccess: data.fullAccess };
+      me = { username: data.username, companies: data.companies, departments: data.departments || [], fullAccess: data.fullAccess, pentagonCode: data.pentagonCode || "" };
       onSignedIn();
     }).catch(function (err) {
       msg.textContent = err.message;
@@ -659,6 +693,12 @@
     return me.fullAccess || me.departments.indexOf("Procurement") !== -1;
   }
 
+  function canUseMentions() {
+    // Personal data, not departmental — anyone on SOI Aviation can see
+    // their own mentions regardless of department or full-access status.
+    return activeCompany === "SOI Aviation";
+  }
+
   function buildTabs() {
     tabsEl.innerHTML = "";
     var visible;
@@ -670,11 +710,12 @@
       visible = me.departments;
     }
     if (me.companies.length > 1) visible = [GLOBAL_KEY, CALENDAR_KEY].concat(visible);
+    if (canUseMentions()) visible = visible.concat([MENTIONS_KEY]);
     if (canUsePentagon()) visible = visible.concat([PENTAGON_KEY]);
     tabsEl.style.display = visible.length <= 1 ? "none" : "flex";
     visible.forEach(function (dept) {
       var b = document.createElement("button");
-      b.textContent = dept === GLOBAL_KEY ? "Global" : dept === CALENDAR_KEY ? "Calendar" : dept === PENTAGON_KEY ? "Pentagon" : dept === OVERVIEW_KEY ? "Overview" : dept;
+      b.textContent = dept === GLOBAL_KEY ? "Global" : dept === CALENDAR_KEY ? "Calendar" : dept === PENTAGON_KEY ? "Pentagon" : dept === MENTIONS_KEY ? "Mentions You" : dept === OVERVIEW_KEY ? "Overview" : dept;
       b.dataset.dept = dept;
       if (dept === activeTab) b.classList.add("active");
       b.addEventListener("click", function () {
@@ -688,6 +729,8 @@
           showCalendarPanel();
         } else if (dept === PENTAGON_KEY) {
           showPentagonPanel();
+        } else if (dept === MENTIONS_KEY) {
+          showMentionsPanel();
         } else {
           showCompanyPanel();
           updateDeptSubTabs();
@@ -716,7 +759,33 @@
   };
   var activeSubView = "tasks";
 
+  // Quick-link bookmarks per department. Edit this list any time — no
+  // other code needs to change. Shown on every sub-view of that
+  // department's tab (Tasks, RFQs, whatever), not just one.
+  var DEPARTMENT_RESOURCES = {
+    "Procurement": [
+      { label: "ILS", url: "https://www.ilsmart.com" },
+      { label: "PartsBase", url: "https://www.partsbase.com" },
+      { label: "Claude", url: "https://claude.ai" }
+    ]
+  };
+
+  function renderResourceLinks() {
+    var wrap = document.getElementById("resourceLinks");
+    var links = DEPARTMENT_RESOURCES[activeTab];
+    if (!links || !links.length) {
+      wrap.style.display = "none";
+      wrap.innerHTML = "";
+      return;
+    }
+    wrap.style.display = "flex";
+    wrap.innerHTML = links.map(function (l) {
+      return '<a class="resource-link" href="' + l.url + '" target="_blank" rel="noopener">' + escapeHtml(l.label) + " ↗</a>";
+    }).join("");
+  }
+
   function updateDeptSubTabs() {
+    renderResourceLinks();
     var wrap = document.getElementById("deptSubTabs");
     var views = activeCompany === "SOI Aviation" ? PENTAGON_VIEWS[activeTab] : null;
     if (!views) {
@@ -801,8 +870,7 @@
     runPentagonListSearch(view);
   }
 
-  var plvLineChart = null;
-  var plvPieChart = null;
+  var pentagonChartInstances = {}; // prefix -> { line, pie }
 
   // Picks the first row key matching one of the preferred exact names, or
   // failing that, the first key containing one of the given substrings.
@@ -821,17 +889,23 @@
     return null;
   }
 
-  function renderPentagonListCharts(rows) {
-    var row = document.getElementById("plv-chart-row");
-    if (plvLineChart) { plvLineChart.destroy(); plvLineChart = null; }
-    if (plvPieChart) { plvPieChart.destroy(); plvPieChart = null; }
+  // Renders the two standard Pentagon charts (value-over-time line, status
+  // pie) into elements named "<prefix>-chart-row", "<prefix>-chart-line",
+  // etc. Reused by every Pentagon-backed view (department lists, Mentions
+  // You) — each just needs its own copy of those elements with its prefix.
+  function renderPentagonCharts(prefix, rows) {
+    if (!pentagonChartInstances[prefix]) pentagonChartInstances[prefix] = { line: null, pie: null };
+    var inst = pentagonChartInstances[prefix];
+    var row = document.getElementById(prefix + "-chart-row");
+    if (inst.line) { inst.line.destroy(); inst.line = null; }
+    if (inst.pie) { inst.pie.destroy(); inst.pie = null; }
 
     if (typeof Chart === "undefined" || !rows || rows.length === 0) {
       row.style.display = "none";
       return;
     }
 
-    var dateField = findField(rows[0], ["ENTER_DATE", "DOC_DATE"], ["DATE"]);
+    var dateField = findField(rows[0], ["ENTER_DATE", "DOC_DATE", "DOC_DATE_ANY"], ["DATE"]);
     var amountField = findField(rows[0], ["DOC_TOTAL"], ["TOTAL", "AMT", "AMOUNT"]);
     var statusField = findField(rows[0], ["DOC_STATUS"], ["STATUS"]);
 
@@ -846,10 +920,10 @@
     var tickColor = isDark ? "#a4aab8" : "#5b6270";
 
     // ---- Line chart: total value per day ----
-    var lineCard = document.getElementById("plv-chart-line").closest(".chart-card");
+    var lineCard = document.getElementById(prefix + "-chart-line").closest(".chart-card");
     if (dateField && amountField) {
       lineCard.style.display = "block";
-      document.getElementById("plv-chart-line-title").textContent = "Total value over time (" + amountField + ")";
+      document.getElementById(prefix + "-chart-line-title").textContent = "Total value over time (" + amountField + ")";
       var byDate = {};
       rows.forEach(function (r) {
         var raw = r[dateField];
@@ -859,8 +933,8 @@
         byDate[day] = (byDate[day] || 0) + amt;
       });
       var days = Object.keys(byDate).sort();
-      var ctx1 = document.getElementById("plv-chart-line").getContext("2d");
-      plvLineChart = new Chart(ctx1, {
+      var ctx1 = document.getElementById(prefix + "-chart-line").getContext("2d");
+      inst.line = new Chart(ctx1, {
         type: "line",
         data: {
           labels: days,
@@ -888,10 +962,10 @@
     }
 
     // ---- Pie chart: count by status ----
-    var pieCard = document.getElementById("plv-chart-pie").closest(".chart-card");
+    var pieCard = document.getElementById(prefix + "-chart-pie").closest(".chart-card");
     if (statusField) {
       pieCard.style.display = "block";
-      document.getElementById("plv-chart-pie-title").textContent = "By " + statusField;
+      document.getElementById(prefix + "-chart-pie-title").textContent = "By " + statusField;
       var byStatus = {};
       rows.forEach(function (r) {
         var s = r[statusField] === null || r[statusField] === undefined ? "(none)" : String(r[statusField]);
@@ -899,8 +973,8 @@
       });
       var statuses = Object.keys(byStatus);
       var palette = ["#a6192e", "#1d2c47", "#b5791e", "#2f7a4f", "#5b3fa0", "#0f6a72", "#8b909c", "#c23a4f"];
-      var ctx2 = document.getElementById("plv-chart-pie").getContext("2d");
-      plvPieChart = new Chart(ctx2, {
+      var ctx2 = document.getElementById(prefix + "-chart-pie").getContext("2d");
+      inst.pie = new Chart(ctx2, {
         type: "pie",
         data: {
           labels: statuses,
@@ -944,7 +1018,7 @@
       msg.textContent = "";
       var rows = findResultRows(data);
 
-      try { renderPentagonListCharts(rows); } catch (e) { console.error("Pentagon chart render failed:", e); }
+      try { renderPentagonCharts("plv", rows); } catch (e) { console.error("Pentagon chart render failed:", e); }
 
       var html = buildAutoTableHtml(rows);
       if (!html) {
@@ -970,6 +1044,7 @@
     document.getElementById("globalPanel").style.display = "none";
     document.getElementById("calendarPanel").style.display = "none";
     document.getElementById("pentagonPanel").style.display = "none";
+    document.getElementById("mentionsPanel").style.display = "none";
   }
 
   function showCalendarPanel() {
@@ -996,6 +1071,58 @@
     hideAllPanels();
     document.getElementById("pentagonPanel").style.display = "block";
     loadPentagonPresets();
+  }
+
+  function showMentionsPanel() {
+    hideAllPanels();
+    document.getElementById("mentionsPanel").style.display = "block";
+    runMentionsSearch();
+  }
+
+  function runMentionsSearch() {
+    var statusMsg = document.getElementById("mn-status-msg");
+    var noCode = document.getElementById("mn-no-code");
+    var content = document.getElementById("mn-content");
+    var table = document.getElementById("mn-table");
+    var empty = document.getElementById("mn-empty");
+
+    if (!me.pentagonCode) {
+      noCode.style.display = "block";
+      content.style.display = "none";
+      statusMsg.textContent = "";
+      return;
+    }
+    noCode.style.display = "none";
+    content.style.display = "block";
+    statusMsg.textContent = "Loading…";
+    table.style.display = "none";
+    empty.style.display = "block";
+    empty.textContent = "Loading…";
+
+    api("/api/pentagon/dashboards.mine", {
+      method: "POST",
+      body: JSON.stringify({ params: { code: me.pentagonCode }, limit: 200 })
+    }).then(function (data) {
+      statusMsg.textContent = "";
+      var rows = findResultRows(data);
+      try { renderPentagonCharts("mn", rows); } catch (e) { console.error("Mentions chart render failed:", e); }
+      var html = buildAutoTableHtml(rows);
+      if (!html) {
+        table.style.display = "none";
+        empty.style.display = "block";
+        empty.textContent = (rows && rows.length === 0) ? "Nothing found for your Pentagon code." : "No table-shaped data came back.";
+        return;
+      }
+      table.innerHTML = html;
+      table.style.display = "table";
+      empty.style.display = "none";
+    }).catch(function (err) {
+      statusMsg.textContent = "";
+      table.style.display = "none";
+      empty.style.display = "block";
+      empty.textContent = err.message || "Search failed.";
+      document.getElementById("mn-chart-row").style.display = "none";
+    });
   }
 
   function populateDeptSelect() {
