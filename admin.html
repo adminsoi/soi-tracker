@@ -128,6 +128,12 @@
         </div>
 
         <div class="field">
+          <label for="u-pentagon">Pentagon code (optional)</label>
+          <input id="u-pentagon" placeholder="e.g. their OURCONTACT code in Pentagon" />
+        </div>
+        <div class="hint" style="margin-top:-10px;">Used for the "Mentions You" tab — the internal code Pentagon uses for this person (not their login).</div>
+
+        <div class="field">
           <label>Companies this login can access</label>
           <div class="check-grid" id="companyChecks"></div>
         </div>
@@ -354,6 +360,7 @@
     document.getElementById("u-pass").value = "";
     document.getElementById("u-pass").required = false;
     document.getElementById("u-email").value = user.email || "";
+    document.getElementById("u-pentagon").value = user.pentagonCode || "";
 
     setCheckedValues('#companyChecks input[type="checkbox"]', user.companies || []);
 
@@ -409,6 +416,7 @@
       username: document.getElementById("u-name").value.trim(),
       password: password,
       email: document.getElementById("u-email").value.trim(),
+      pentagonCode: document.getElementById("u-pentagon").value.trim(),
       companies: companies,
       fullAccess: fullAccess,
       departments: departments
