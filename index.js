@@ -167,12 +167,10 @@ app.get(
   authMiddleware,
   asyncHandler(async (req, res) => {
     const company = req.query.company;
-    const dept = req.query.department;
     const rawUsers = await getUsers();
     const users = rawUsers.map(normalizeUser);
     const filtered = users
       .filter((u) => !company || u.companies.includes(company))
-      .filter((u) => !dept || u.fullAccess || u.departments.includes(dept))
       .map((u) => ({ username: u.username, departments: u.departments, fullAccess: u.fullAccess }));
     res.json(filtered);
   })
