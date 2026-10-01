@@ -559,12 +559,18 @@
       });
     }).then(function (data) {
       setToken(data.token);
-      me = { username: data.username, companies: data.companies, department: data.department, fullAccess: data.fullAccess };
+      me = { username: data.username, companies: data.companies, departments: data.departments || [], fullAccess: data.fullAccess };
       onSignedIn();
     }).catch(function (err) {
       msg.textContent = err.message;
     });
   });
+
+  function defaultTab() {
+    if (me.fullAccess) return OVERVIEW_KEY;
+    if (me.departments.length > 1) return OVERVIEW_KEY;
+    return me.departments[0];
+  }
 
   function onSignedIn() {
     document.getElementById("li-pass").value = "";
@@ -576,10 +582,10 @@
 
     setupCompanySelect();
 
-    activeTab = me.fullAccess ? OVERVIEW_KEY : me.department;
+    activeTab = defaultTab();
     document.getElementById("whoName").textContent = me.username;
     document.getElementById("whoDept").textContent =
-      (me.fullAccess ? "Full access" : me.department) +
+      (me.fullAccess ? "Full access" : me.departments.join(", ")) +
       (me.companies.length === 1 ? " · " + me.companies[0] : "");
     showApp();
     loadDepartmentsThenStart();
@@ -607,7 +613,7 @@
   document.getElementById("companySelect").addEventListener("change", function () {
     activeCompany = this.value;
     try { localStorage.setItem(COMPANY_KEY, activeCompany); } catch (e) {}
-    activeTab = me.fullAccess ? OVERVIEW_KEY : me.department;
+    activeTab = defaultTab();
     allTasks = [];
     tasksLoadedOnce = false;
     showCompanyPanel();
@@ -650,12 +656,19 @@
   var tabsEl = document.getElementById("tabs");
   function canUsePentagon() {
     if (activeCompany !== "SOI Aviation") return false;
-    return me.fullAccess || me.department === "Procurement";
+    return me.fullAccess || me.departments.indexOf("Procurement") !== -1;
   }
 
   function buildTabs() {
     tabsEl.innerHTML = "";
-    var visible = me.fullAccess ? [OVERVIEW_KEY].concat(DEPARTMENTS) : [me.department];
+    var visible;
+    if (me.fullAccess) {
+      visible = [OVERVIEW_KEY].concat(DEPARTMENTS);
+    } else if (me.departments.length > 1) {
+      visible = [OVERVIEW_KEY].concat(me.departments);
+    } else {
+      visible = me.departments;
+    }
     if (me.companies.length > 1) visible = [GLOBAL_KEY, CALENDAR_KEY].concat(visible);
     if (canUsePentagon()) visible = visible.concat([PENTAGON_KEY]);
     tabsEl.style.display = visible.length <= 1 ? "none" : "flex";
@@ -861,7 +874,8 @@
   function populateDeptSelect() {
     var sel = document.getElementById("f-dept");
     sel.innerHTML = "";
-    DEPARTMENTS.forEach(function (d) {
+    var options = me.fullAccess ? DEPARTMENTS : me.departments;
+    options.forEach(function (d) {
       var opt = document.createElement("option");
       opt.value = d; opt.textContent = d;
       sel.appendChild(opt);
@@ -1317,7 +1331,12 @@
       users.forEach(function (u) {
         var opt = document.createElement("option");
         opt.value = u.username;
-        opt.textContent = u.username + (u.department !== department ? " (" + u.department + ")" : "");
+        var inThisDept = u.departments && u.departments.indexOf(department) !== -1;
+        var label = u.username;
+        if (!inThisDept) {
+          label += u.fullAccess ? " (full access)" : u.departments && u.departments.length ? " (" + u.departments.join(", ") + ")" : "";
+        }
+        opt.textContent = label;
         sel.appendChild(opt);
       });
       sel.value = currentValue || "";
@@ -1360,13 +1379,17 @@
 
     var deptField = document.getElementById("deptField");
     var deptSelect = document.getElementById("f-dept");
+    var showDeptPicker = me.fullAccess || me.departments.length > 1;
     var ownerDept;
-    if (!me.fullAccess) {
+    var activeTabIsRealDept = DEPARTMENTS.indexOf(activeTab) !== -1 &&
+      (me.fullAccess || me.departments.indexOf(activeTab) !== -1);
+    if (!showDeptPicker) {
       deptField.style.display = "none";
-      ownerDept = me.department;
+      ownerDept = me.departments[0];
+      deptSelect.value = ownerDept;
     } else {
       deptField.style.display = "block";
-      ownerDept = (activeTab !== OVERVIEW_KEY && activeTab !== AOG && DEPARTMENTS.indexOf(activeTab) !== -1) ? activeTab : me.department;
+      ownerDept = activeTabIsRealDept ? activeTab : (me.fullAccess ? DEPARTMENTS[0] : me.departments[0]);
       deptSelect.value = ownerDept;
     }
     loadOwnerOptions(ownerDept, currentOwnerCompany());
@@ -1403,12 +1426,9 @@
 
     var deptField = document.getElementById("deptField");
     var deptSelect = document.getElementById("f-dept");
-    if (!me.fullAccess) {
-      deptField.style.display = "none";
-    } else {
-      deptField.style.display = "block";
-      deptSelect.value = t.department;
-    }
+    var showDeptPicker = me.fullAccess || me.departments.length > 1;
+    deptField.style.display = showDeptPicker ? "block" : "none";
+    deptSelect.value = t.department;
     loadOwnerOptions(t.department, taskCompanyValue).then(function () {
       document.getElementById("f-owner").value = t.owner || "";
     });
@@ -1462,9 +1482,7 @@
         });
     } else {
       body.company = activeCompany === AOG ? document.getElementById("f-company").value : activeCompany;
-      if (me.fullAccess) {
-        body.department = document.getElementById("f-dept").value;
-      }
+      body.department = document.getElementById("f-dept").value;
       api("/api/tasks", { method: "POST", body: JSON.stringify(body) })
         .then(function () {
           setSync("on", "Live");
