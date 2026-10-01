@@ -19,6 +19,7 @@ const {
 } = require("./auth");
 const { getUsers, getTasks, withUsers, withTasks } = require("./s3store");
 const { sendMail } = require("./mailer");
+const { pentagonQuery } = require("./pentagon");
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 if (!ADMIN_PASSWORD) {
   console.error("Missing required env var: ADMIN_PASSWORD");
@@ -303,6 +304,35 @@ app.delete(
     if (forbidden) return res.status(403).json({ error: "That task isn't accessible to you" });
     if (!removed) return res.status(404).json({ error: "Task not found" });
     res.status(204).end();
+  })
+);
+
+// ---------- Pentagon (generic query proxy) ----------
+// One route forwards any named query to Pentagon's API, so adding a new
+// query later (RFQs, actual Queries, etc.) needs no new backend code —
+// just call this route with that query's name and whatever params/limit
+// it expects. The API key never reaches the browser.
+
+function canUsePentagon(user) {
+  return user.fullAccess || user.department === "Procurement";
+}
+
+app.post(
+  "/api/pentagon/:queryName",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!canUsePentagon(req.user)) {
+      return res.status(403).json({ error: "Not available for your account" });
+    }
+    const { queryName } = req.params;
+    const body = req.body || {};
+    try {
+      const data = await pentagonQuery(queryName, body);
+      res.json(data);
+    } catch (err) {
+      console.error(`Pentagon query failed: ${err.message}`);
+      res.status(502).json({ error: "Pentagon query failed: " + err.message });
+    }
   })
 );
 
