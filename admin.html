@@ -24,7 +24,7 @@
     font-family: -apple-system, "Segoe UI", "Inter", system-ui, sans-serif;
     padding: 24px 16px;
   }
-  .wrap { max-width: 640px; margin: 0 auto; }
+  .wrap { max-width: 680px; margin: 0 auto; }
   header { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
   .mark { width: 30px; height: 30px; border-radius: 7px; background: var(--red); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; }
   h1 { font-size: 17px; margin: 0; }
@@ -35,7 +35,7 @@
     padding: 22px; box-shadow: var(--shadow); margin-bottom: 18px;
   }
   .login-card { max-width: 340px; margin: 60px auto; }
-  .field { margin-bottom: 12px; }
+  .field { margin-bottom: 14px; }
   .field label { display: block; font-size: 12px; font-weight: 600; color: var(--text-dim); margin-bottom: 5px; }
   .field input, .field select {
     width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px;
@@ -43,6 +43,13 @@
   }
   .field-row { display: flex; gap: 10px; }
   .field-row .field { flex: 1; }
+  .check-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .check-row {
+    display: flex; align-items: center; gap: 8px; font-size: 13px;
+    border: 1px solid var(--border); border-radius: 7px; padding: 8px 10px; background: var(--bg);
+  }
+  .check-row input { width: auto; margin: 0; }
+  .check-row.full-access-row { grid-column: 1 / -1; background: var(--surface-2); font-weight: 600; }
   button {
     background: var(--red); color: #fff; border: none; border-radius: 8px; padding: 9px 16px;
     font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit;
@@ -53,13 +60,15 @@
   .msg.ok { color: #2f7a4f; }
 
   table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-  th, td { text-align: left; padding: 9px 6px; border-bottom: 1px solid var(--border); }
+  th, td { text-align: left; padding: 9px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
   th { font-size: 11.5px; text-transform: none; color: var(--text-faint); font-weight: 600; }
-  .dept-tag { background: var(--surface-2); border-radius: 100px; padding: 2px 9px; font-size: 11.5px; }
+  .tag { display: inline-block; background: var(--surface-2); border-radius: 100px; padding: 2px 9px; font-size: 11px; margin: 1px 3px 1px 0; }
+  .tag.full { background: var(--navy); color: #fff; }
   .row-actions { display: flex; gap: 6px; }
   .row-actions button { padding: 5px 10px; font-size: 12px; }
   .empty { color: var(--text-faint); font-size: 13px; padding: 14px 0; }
   h2 { font-size: 14px; margin: 0 0 14px; }
+  .hint { font-size: 11.5px; color: var(--text-faint); margin-top: -8px; margin-bottom: 14px; }
 </style>
 </head>
 <body>
@@ -103,10 +112,28 @@
           <label for="u-email">Email</label>
           <input id="u-email" type="email" required placeholder="name@soiaviation.com" />
         </div>
+
         <div class="field">
-          <label for="u-dept">Department</label>
+          <label>Companies this login can access</label>
+          <div class="check-grid" id="companyChecks"></div>
+        </div>
+
+        <div class="field">
+          <label>Access level</label>
+          <div class="check-grid">
+            <div class="check-row full-access-row">
+              <input type="checkbox" id="u-fullaccess" />
+              <label for="u-fullaccess" style="margin:0;font-weight:600;color:var(--text);">Full access — sees every department in their selected companies</label>
+            </div>
+          </div>
+        </div>
+
+        <div class="field" id="deptField">
+          <label for="u-dept">Department (only needed without full access)</label>
           <select id="u-dept"></select>
         </div>
+        <div class="hint" id="deptHint">If "Full access" is checked, they aren't tied to one department — this is ignored.</div>
+
         <button type="submit">Save login</button>
         <div class="msg" id="userMsg"></div>
       </form>
@@ -115,7 +142,7 @@
     <div class="card">
       <h2>Existing logins</h2>
       <table id="userTable">
-        <thead><tr><th>Username</th><th>Email</th><th>Department</th><th></th></tr></thead>
+        <thead><tr><th>Username</th><th>Email</th><th>Companies</th><th>Access</th><th></th></tr></thead>
         <tbody id="userTableBody"></tbody>
       </table>
       <div class="empty" id="userEmpty" style="display:none;">No logins yet — add one above.</div>
@@ -131,6 +158,7 @@
   "use strict";
   var TOKEN_KEY = "soi_admin_token";
   var DEPARTMENTS = [];
+  var COMPANIES = [];
 
   function token() { return sessionStorage.getItem(TOKEN_KEY); }
   function setToken(t) { sessionStorage.setItem(TOKEN_KEY, t); }
@@ -183,6 +211,22 @@
     showLogin();
   });
 
+  function loadCompanies() {
+    return fetch("/api/companies").then(function (r) { return r.json(); }).then(function (companies) {
+      COMPANIES = companies;
+      var grid = document.getElementById("companyChecks");
+      grid.innerHTML = "";
+      companies.forEach(function (c) {
+        var id = "co-" + c.replace(/\s+/g, "-");
+        var row = document.createElement("label");
+        row.className = "check-row";
+        row.setAttribute("for", id);
+        row.innerHTML = '<input type="checkbox" id="' + id + '" value="' + c + '" /> ' + c;
+        grid.appendChild(row);
+      });
+    });
+  }
+
   function loadDepartments() {
     return fetch("/api/departments").then(function (r) { return r.json(); }).then(function (depts) {
       DEPARTMENTS = depts;
@@ -190,12 +234,30 @@
       sel.innerHTML = "";
       depts.forEach(function (d) {
         var opt = document.createElement("option");
-        var fullAccess = ["HR", "Operations", "IT"].indexOf(d) !== -1;
-        opt.value = d; opt.textContent = fullAccess ? d + " (sees everything)" : d;
+        opt.value = d; opt.textContent = d;
         sel.appendChild(opt);
       });
     });
   }
+
+  function getCheckedCompanies() {
+    return Array.prototype.slice.call(document.querySelectorAll('#companyChecks input[type="checkbox"]:checked'))
+      .map(function (el) { return el.value; });
+  }
+
+  document.getElementById("u-fullaccess").addEventListener("change", function () {
+    var deptField = document.getElementById("deptField");
+    var deptHint = document.getElementById("deptHint");
+    if (this.checked) {
+      deptField.style.opacity = "0.5";
+      document.getElementById("u-dept").disabled = true;
+      deptHint.style.display = "block";
+    } else {
+      deptField.style.opacity = "1";
+      document.getElementById("u-dept").disabled = false;
+      deptHint.style.display = "none";
+    }
+  });
 
   function loadUsers() {
     return api("/api/admin/users").then(function (users) {
@@ -206,10 +268,15 @@
       empty.style.display = "none";
       users.forEach(function (u) {
         var tr = document.createElement("tr");
+        var companyTags = (u.companies || []).map(function (c) { return '<span class="tag">' + escapeHtml(c) + '</span>'; }).join("");
+        var accessCell = u.fullAccess
+          ? '<span class="tag full">Full access</span>'
+          : escapeHtml(u.department || "—");
         tr.innerHTML =
           "<td>" + escapeHtml(u.username) + "</td>" +
           "<td>" + escapeHtml(u.email || "") + "</td>" +
-          "<td><span class=\"dept-tag\">" + escapeHtml(u.department) + "</span></td>" +
+          "<td>" + companyTags + "</td>" +
+          "<td>" + accessCell + "</td>" +
           "<td class=\"row-actions\"><button class=\"secondary\" data-del=\"" + escapeHtml(u.username) + "\">Remove</button></td>";
         body.appendChild(tr);
       });
@@ -238,17 +305,30 @@
     var msg = document.getElementById("userMsg");
     msg.textContent = "";
     msg.className = "msg";
+
+    var fullAccess = document.getElementById("u-fullaccess").checked;
+    var companies = getCheckedCompanies();
+    if (companies.length === 0) {
+      msg.textContent = "Select at least one company.";
+      return;
+    }
+
     var body = {
       username: document.getElementById("u-name").value.trim(),
       password: document.getElementById("u-pass").value,
       email: document.getElementById("u-email").value.trim(),
-      department: document.getElementById("u-dept").value
+      companies: companies,
+      fullAccess: fullAccess,
+      department: fullAccess ? null : document.getElementById("u-dept").value
     };
     api("/api/admin/users", { method: "POST", body: JSON.stringify(body) })
       .then(function () {
         msg.textContent = "Saved.";
         msg.className = "msg ok";
         document.getElementById("userForm").reset();
+        document.getElementById("u-dept").disabled = false;
+        document.getElementById("deptField").style.opacity = "1";
+        document.getElementById("deptHint").style.display = "none";
         loadUsers();
       })
       .catch(function (err) { msg.textContent = err.message; });
@@ -256,7 +336,7 @@
 
   function start() {
     showPanel();
-    loadDepartments().then(loadUsers);
+    Promise.all([loadCompanies(), loadDepartments()]).then(loadUsers);
   }
 
   if (token()) { start(); } else { showLogin(); }
