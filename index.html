@@ -366,13 +366,13 @@
   var DEPT_COLORS = {
     "Procurement": "#1d2c47", "Purchasing": "#3a5280", "IT": "#a6192e",
     "HR": "#8a5c14", "Operations": "#276240", "US Government": "#5b3fa0",
-    "Warehouse": "#0f6a72", "Administrative": "#7a4a8f"
+    "Warehouse": "#0f6a72", "Administrative": "#7a4a8f", "Accounting": "#1e6b6b"
   };
 
   // Fallback in case /api/departments has a transient hiccup — this list
   // rarely changes, so we can start the app with it immediately rather
   // than leaving the person stuck on an empty board.
-  var DEPARTMENTS_FALLBACK = ["Procurement", "Purchasing", "IT", "HR", "Operations", "US Government", "Warehouse", "Administrative"];
+  var DEPARTMENTS_FALLBACK = ["Procurement", "Purchasing", "IT", "HR", "Operations", "US Government", "Warehouse", "Administrative", "Accounting"];
   var DEPARTMENTS = []; // loaded from /api/departments
   var OVERVIEW_KEY = "__overview__"; // virtual tab: aggregate of all departments within the active company
   var GLOBAL_KEY = "__global__"; // virtual tab: every company at once, only for multi-company accounts
