@@ -10,6 +10,7 @@ if (!JWT_SECRET) {
 const COMPANIES = ["RedSun Aviation", "SOI Aviation", "NanoTech Aviation", "CAS"];
 
 const DEPARTMENTS = [
+  "Administrative",
   "Procurement",
   "Purchasing",
   "IT",
