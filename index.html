@@ -190,6 +190,26 @@
   }
   .preset-chip .preset-del:hover { color: var(--red); background: var(--surface); }
 
+  .sub-tabs { display: flex; gap: 6px; }
+  .sub-tabs button {
+    appearance: none; border: 1px solid var(--border); background: var(--surface);
+    color: var(--text-dim); padding: 7px 14px; border-radius: 100px; font-size: 12.5px;
+    font-weight: 600; cursor: pointer; font-family: inherit;
+  }
+  .sub-tabs button.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+
+  .pq-filter-bar {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 16px;
+  }
+  .pq-filter-bar .field { margin-bottom: 0; min-width: 130px; }
+  .pq-filter-bar .field label { display: block; font-size: 11.5px; font-weight: 600; color: var(--text-dim); margin-bottom: 5px; }
+  .pq-filter-bar .field input, .pq-filter-bar .field select {
+    width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 7px;
+    background: var(--bg); color: var(--text); font-size: 13px; font-family: inherit;
+  }
+
   /* Login screen */
   .login-screen {
     position: fixed; inset: 0; background: var(--bg);
@@ -269,25 +289,31 @@
         <span class="sub" id="panelSub">0 tasks</span>
       </div>
 
-      <div class="stat-row" id="statRow"></div>
+      <div id="deptSubTabs" style="display:none;margin-bottom:16px;"></div>
 
-      <div class="chart-row">
-        <div class="chart-card">
-          <h3 id="chartTitle1">Tasks by status per department</h3>
-          <div class="chart-wrap"><canvas id="chartMain"></canvas></div>
+      <div id="taskBoardView">
+        <div class="stat-row" id="statRow"></div>
+
+        <div class="chart-row">
+          <div class="chart-card">
+            <h3 id="chartTitle1">Tasks by status per department</h3>
+            <div class="chart-wrap"><canvas id="chartMain"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <h3>Priority breakdown</h3>
+            <div class="chart-wrap"><canvas id="chartPriority"></canvas></div>
+          </div>
         </div>
-        <div class="chart-card">
-          <h3>Priority breakdown</h3>
-          <div class="chart-wrap"><canvas id="chartPriority"></canvas></div>
+
+        <div class="board-head">
+          <span class="sub" style="font-size:12.5px;color:var(--text-faint);">Drag cards between columns to update status</span>
+          <button class="add-btn" id="addBtn">+ Add task</button>
         </div>
+
+        <div class="board" id="board"></div>
       </div>
 
-      <div class="board-head">
-        <span class="sub" style="font-size:12.5px;color:var(--text-faint);">Drag cards between columns to update status</span>
-        <button class="add-btn" id="addBtn">+ Add task</button>
-      </div>
-
-      <div class="board" id="board"></div>
+      <div id="pentagonListView" style="display:none;"></div>
     </div>
 
     <div id="globalPanel" style="display:none;">
@@ -586,6 +612,7 @@
     tasksLoadedOnce = false;
     showCompanyPanel();
     buildTabs();
+    updateDeptSubTabs();
     fetchTasks(true);
   });
 
@@ -612,6 +639,7 @@
   function startApp() {
     buildTabs();
     populateDeptSelect();
+    updateDeptSubTabs();
     fetchTasks(true);
     if (!pollTimer) {
       pollTimer = setInterval(fetchTasks, 15000);
@@ -648,10 +676,147 @@
           showPentagonPanel();
         } else {
           showCompanyPanel();
+          updateDeptSubTabs();
           render();
         }
       });
       tabsEl.appendChild(b);
+    });
+  }
+
+  // ---------- Department data views (Pentagon-backed lists) ----------
+  // Add an entry here once a department's query exists in Pentagon — the
+  // sub-tab, filter bar, and table all build themselves from this config.
+  var PENTAGON_VIEWS = {
+    "Procurement": [
+      { id: "rfqs", label: "RFQs", queryName: "claude.rfq_search" },
+      { id: "quotes", label: "Quotes", queryName: "claude.quote_search" }
+    ],
+    "Purchasing": [
+      { id: "sales_orders", label: "Sales Orders", queryName: "claude.sales_order_search" },
+      { id: "purchase_orders", label: "Purchase Orders", queryName: "claude.purchase_order_search" }
+    ],
+    "Accounting": [
+      { id: "invoices", label: "Invoices", queryName: "claude.invoice_search" }
+    ]
+  };
+  var activeSubView = "tasks";
+
+  function updateDeptSubTabs() {
+    var wrap = document.getElementById("deptSubTabs");
+    var views = PENTAGON_VIEWS[activeTab];
+    if (!views) {
+      wrap.style.display = "none";
+      activeSubView = "tasks";
+      document.getElementById("taskBoardView").style.display = "block";
+      document.getElementById("pentagonListView").style.display = "none";
+      return;
+    }
+    wrap.style.display = "block";
+    activeSubView = "tasks";
+    var html = '<div class="sub-tabs"><button data-view="tasks" class="active">Tasks</button>';
+    views.forEach(function (v) {
+      html += '<button data-view="' + v.id + '">' + escapeHtml(v.label) + "</button>";
+    });
+    html += "</div>";
+    wrap.innerHTML = html;
+    document.getElementById("taskBoardView").style.display = "block";
+    document.getElementById("pentagonListView").style.display = "none";
+
+    wrap.querySelectorAll("button").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        wrap.querySelectorAll("button").forEach(function (b) { b.classList.remove("active"); });
+        btn.classList.add("active");
+        var viewId = btn.dataset.view;
+        activeSubView = viewId;
+        if (viewId === "tasks") {
+          document.getElementById("taskBoardView").style.display = "block";
+          document.getElementById("pentagonListView").style.display = "none";
+        } else {
+          document.getElementById("taskBoardView").style.display = "none";
+          document.getElementById("pentagonListView").style.display = "block";
+          var view = views.filter(function (v) { return v.id === viewId; })[0];
+          renderPentagonListView(view);
+        }
+      });
+    });
+  }
+
+  function buildAutoTableHtml(rows) {
+    if (!rows || rows.length === 0) return null;
+    var columns = [];
+    rows.forEach(function (row) {
+      Object.keys(row).forEach(function (k) { if (columns.indexOf(k) === -1) columns.push(k); });
+    });
+    var thead = "<thead><tr>" + columns.map(function (c) { return "<th>" + escapeHtml(c) + "</th>"; }).join("") + "</tr></thead>";
+    var tbody = "<tbody>" + rows.map(function (row) {
+      return "<tr>" + columns.map(function (c) {
+        var v = row[c];
+        return "<td>" + (v === null || v === undefined ? "" : escapeHtml(String(v))) + "</td>";
+      }).join("") + "</tr>";
+    }).join("") + "</tbody>";
+    return thead + tbody;
+  }
+
+  function renderPentagonListView(view) {
+    var container = document.getElementById("pentagonListView");
+    container.innerHTML =
+      '<div class="pq-filter-bar">' +
+      '<div class="field"><label>From</label><input type="date" id="plv-from" /></div>' +
+      '<div class="field"><label>To</label><input type="date" id="plv-to" /></div>' +
+      '<div class="field"><label>Status</label><input type="text" id="plv-status" placeholder="Any" /></div>' +
+      '<div class="field"><label>Account #</label><input type="text" id="plv-account" placeholder="Any" /></div>' +
+      '<button class="add-btn" id="plv-search">Search</button>' +
+      '<span id="plv-status-msg" style="font-size:12.5px;color:var(--text-faint);"></span>' +
+      "</div>" +
+      '<div class="chart-card"><div style="overflow:auto;max-height:65vh;">' +
+      '<table class="global-table" id="plv-table" style="display:none;"></table>' +
+      '<div id="plv-empty" style="font-size:12.5px;color:var(--text-faint);">Set filters above and click Search.</div>' +
+      "</div></div>";
+
+    document.getElementById("plv-search").addEventListener("click", function () {
+      runPentagonListSearch(view);
+    });
+  }
+
+  function runPentagonListSearch(view) {
+    var msg = document.getElementById("plv-status-msg");
+    var table = document.getElementById("plv-table");
+    var empty = document.getElementById("plv-empty");
+
+    var params = {
+      date_from: document.getElementById("plv-from").value || "",
+      date_to: document.getElementById("plv-to").value || "",
+      status: document.getElementById("plv-status").value.trim(),
+      account_no: document.getElementById("plv-account").value.trim()
+    };
+
+    msg.textContent = "Searching…";
+    table.style.display = "none";
+    empty.style.display = "block";
+    empty.textContent = "Loading…";
+
+    api("/api/pentagon/" + encodeURIComponent(view.queryName), {
+      method: "POST",
+      body: JSON.stringify({ params: params, limit: 200 })
+    }).then(function (data) {
+      msg.textContent = "";
+      var rows = findResultRows(data);
+      var html = buildAutoTableHtml(rows);
+      if (!html) {
+        table.style.display = "none";
+        empty.style.display = "block";
+        empty.textContent = (rows && rows.length === 0) ? "No results for those filters." : "No table-shaped data came back.";
+        return;
+      }
+      table.innerHTML = html;
+      table.style.display = "table";
+      empty.style.display = "none";
+    }).catch(function (err) {
+      msg.textContent = "";
+      table.style.display = "none";
+      empty.style.display = "block";
+      empty.textContent = err.message || "Search failed.";
     });
   }
 
@@ -993,7 +1158,8 @@
     resultEl.textContent = JSON.stringify(data, null, 2);
 
     var rows = findResultRows(data);
-    if (!rows || rows.length === 0) {
+    var html = buildAutoTableHtml(rows);
+    if (!html) {
       table.style.display = "none";
       table.innerHTML = "";
       empty.style.display = "block";
@@ -1001,22 +1167,7 @@
       return;
     }
 
-    // Union of keys across all rows, in first-seen order, so a field that's
-    // only present on some rows still gets its own column.
-    var columns = [];
-    rows.forEach(function (row) {
-      Object.keys(row).forEach(function (k) { if (columns.indexOf(k) === -1) columns.push(k); });
-    });
-
-    var thead = "<thead><tr>" + columns.map(function (c) { return "<th>" + escapeHtml(c) + "</th>"; }).join("") + "</tr></thead>";
-    var tbody = "<tbody>" + rows.map(function (row) {
-      return "<tr>" + columns.map(function (c) {
-        var v = row[c];
-        return "<td>" + (v === null || v === undefined ? "" : escapeHtml(String(v))) + "</td>";
-      }).join("") + "</tr>";
-    }).join("") + "</tbody>";
-
-    table.innerHTML = thead + tbody;
+    table.innerHTML = html;
     table.style.display = "table";
     empty.style.display = "none";
   }
