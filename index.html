@@ -777,6 +777,10 @@
     document.getElementById("plv-search").addEventListener("click", function () {
       runPentagonListSearch(view);
     });
+
+    // Run immediately with blank filters — the query itself defaults to
+    // the last 14 days, so this shows real data without an extra click.
+    runPentagonListSearch(view);
   }
 
   function runPentagonListSearch(view) {
