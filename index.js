@@ -39,14 +39,19 @@ function escapeHtml(s) {
   ));
 }
 
-// Accounts created before companies existed only have a single
-// "department" field. Treat them as belonging to just SOI Aviation (the
-// only company that existed at the time) until someone re-saves them via
-// the admin page with real company/full-access settings.
+// Accounts created before companies/multi-department access existed only
+// have a single "department" string (and maybe no "companies" at all).
+// Migrate those shapes on the fly so old accounts keep working until
+// someone re-saves them via the admin page with the current fields.
 function normalizeUser(u) {
+  let departments = u.departments;
+  if (!Array.isArray(departments) || departments.length === 0) {
+    departments = u.department ? [u.department] : [];
+  }
   return {
     ...u,
     companies: u.companies && u.companies.length ? u.companies : [DEFAULT_COMPANY],
+    departments,
     fullAccess: !!u.fullAccess,
   };
 }
@@ -130,7 +135,7 @@ app.post(
       token,
       username: user.username,
       companies: user.companies,
-      department: user.department || null,
+      departments: user.departments,
       fullAccess: user.fullAccess,
     });
   })
@@ -140,7 +145,7 @@ app.get("/api/me", authMiddleware, (req, res) => {
   res.json({
     username: req.user.username,
     companies: req.user.companies,
-    department: req.user.department,
+    departments: req.user.departments,
     fullAccess: req.user.fullAccess,
   });
 });
@@ -154,7 +159,7 @@ app.get("/api/departments", (req, res) => {
 });
 
 // Directory of real logins, for picking a task's Owner. Scoped to people
-// who have access to this company, and who are either in the same
+// who have access to this company, and who are either assigned to this
 // department or have full access — so people don't see the whole
 // company's account list unnecessarily.
 app.get(
@@ -167,8 +172,8 @@ app.get(
     const users = rawUsers.map(normalizeUser);
     const filtered = users
       .filter((u) => !company || u.companies.includes(company))
-      .filter((u) => !dept || u.department === dept || u.fullAccess)
-      .map((u) => ({ username: u.username, department: u.department }));
+      .filter((u) => !dept || u.fullAccess || u.departments.includes(dept))
+      .map((u) => ({ username: u.username, departments: u.departments, fullAccess: u.fullAccess }));
     res.json(filtered);
   })
 );
@@ -198,7 +203,7 @@ app.get(
     const inCompany = tasks.filter((t) => taskCompany(t) === company);
     const scoped = req.user.fullAccess
       ? inCompany
-      : inCompany.filter((t) => t.department === req.user.department);
+      : inCompany.filter((t) => req.user.departments.includes(t.department));
     res.json(scoped);
   })
 );
@@ -215,16 +220,13 @@ app.post(
       return res.status(400).json({ error: "Choose a valid company" });
     }
 
-    let department = req.user.department;
-    if (req.user.fullAccess) {
-      if (!DEPARTMENTS.includes(body.department)) {
-        return res.status(400).json({ error: "Choose a valid department" });
-      }
-      department = body.department;
+    if (!DEPARTMENTS.includes(body.department)) {
+      return res.status(400).json({ error: "Choose a valid department" });
     }
-    if (!department) {
-      return res.status(400).json({ error: "This account has no department set — ask an admin to fix it" });
+    if (!req.user.fullAccess && !req.user.departments.includes(body.department)) {
+      return res.status(403).json({ error: "That's not one of your departments" });
     }
+    const department = body.department;
 
     const priority = ["low", "medium", "high"].includes(body.priority)
       ? body.priority
@@ -255,7 +257,7 @@ app.post(
 
 function canTouch(user, task) {
   if (!user.companies.includes(taskCompany(task))) return false;
-  return user.fullAccess || user.department === task.department;
+  return user.fullAccess || user.departments.includes(task.department);
 }
 
 app.patch(
@@ -316,19 +318,20 @@ app.delete(
 
 // ---------- Pentagon (generic query proxy) ----------
 // One route forwards any named query to Pentagon's API, so adding a new
-// query later (RFQs, actual Queries, etc.) needs no new backend code —
-// just call this route with that query's name and whatever params/limit
-// it expects. The API key never reaches the browser.
+// query later needs no new backend code — just call this route with that
+// query's name and whatever params/limit it expects. The API key never
+// reaches the browser. Currently restricted to SOI Aviation only.
 
-function canUsePentagon(user) {
-  return user.fullAccess || user.department === "Procurement";
+function canUsePentagon(user, activeCompany) {
+  if (activeCompany !== "SOI Aviation") return false;
+  return user.fullAccess || user.departments.includes("Procurement");
 }
 
 app.post(
   "/api/pentagon/:queryName",
   authMiddleware,
   asyncHandler(async (req, res) => {
-    if (!canUsePentagon(req.user)) {
+    if (!canUsePentagon(req.user, "SOI Aviation")) {
       return res.status(403).json({ error: "Not available for your account" });
     }
     const { queryName } = req.params;
@@ -350,7 +353,7 @@ app.get(
   "/api/pentagon-presets",
   authMiddleware,
   asyncHandler(async (req, res) => {
-    if (!canUsePentagon(req.user)) {
+    if (!canUsePentagon(req.user, "SOI Aviation")) {
       return res.status(403).json({ error: "Not available for your account" });
     }
     const presets = await getPentagonPresets();
@@ -362,7 +365,7 @@ app.post(
   "/api/pentagon-presets",
   authMiddleware,
   asyncHandler(async (req, res) => {
-    if (!canUsePentagon(req.user)) {
+    if (!canUsePentagon(req.user, "SOI Aviation")) {
       return res.status(403).json({ error: "Not available for your account" });
     }
     const body = req.body || {};
@@ -391,7 +394,7 @@ app.delete(
   "/api/pentagon-presets/:id",
   authMiddleware,
   asyncHandler(async (req, res) => {
-    if (!canUsePentagon(req.user)) {
+    if (!canUsePentagon(req.user, "SOI Aviation")) {
       return res.status(403).json({ error: "Not available for your account" });
     }
     const { id } = req.params;
@@ -431,7 +434,7 @@ app.get(
         username: u.username,
         email: u.email || "",
         companies: u.companies,
-        department: u.department || null,
+        departments: u.departments,
         fullAccess: u.fullAccess,
       }))
     );
@@ -442,9 +445,9 @@ app.post(
   "/api/admin/users",
   adminMiddleware,
   asyncHandler(async (req, res) => {
-    const { username, password, email, companies, department, fullAccess } = req.body || {};
-    if (!username || !password || !email) {
-      return res.status(400).json({ error: "Username, password, and email are required" });
+    const { username, password, email, companies, departments, fullAccess } = req.body || {};
+    if (!username || !email) {
+      return res.status(400).json({ error: "Username and email are required" });
     }
     if (!Array.isArray(companies) || companies.length === 0) {
       return res.status(400).json({ error: "Select at least one company" });
@@ -452,36 +455,50 @@ app.post(
     if (companies.some((c) => !COMPANIES.includes(c))) {
       return res.status(400).json({ error: "Invalid company selected" });
     }
-    if (String(password).length < 8) {
+    if (password && String(password).length < 8) {
       return res.status(400).json({ error: "Password must be at least 8 characters" });
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: "Invalid email address" });
     }
-    if (!fullAccess && !DEPARTMENTS.includes(department)) {
-      return res.status(400).json({ error: "Choose a department, or turn on full access" });
+    const deptList = Array.isArray(departments) ? departments : [];
+    if (!fullAccess) {
+      if (deptList.length === 0) {
+        return res.status(400).json({ error: "Select at least one department, or turn on full access" });
+      }
+      if (deptList.some((d) => !DEPARTMENTS.includes(d))) {
+        return res.status(400).json({ error: "Invalid department selected" });
+      }
     }
 
-    const passwordHash = await hashPassword(password);
+    const existingUsers = await getUsers();
+    const existing = existingUsers.find((u) => u.username.toLowerCase() === username.toLowerCase());
+    if (!existing && !password) {
+      return res.status(400).json({ error: "Password is required for a new login" });
+    }
+
+    const passwordHash = password ? await hashPassword(password) : existing.passwordHash;
     const record = {
       username,
       passwordHash,
       email,
       companies,
       fullAccess: !!fullAccess,
-      department: fullAccess ? department || null : department,
+      departments: deptList,
     };
 
     await withUsers((users) => {
       const idx = users.findIndex((u) => u.username.toLowerCase() === username.toLowerCase());
       if (idx !== -1) {
-        users[idx] = { ...users[idx], ...record, passwordHash };
+        const next = { ...users[idx], ...record };
+        delete next.department; // drop the old single-department field once migrated
+        users[idx] = next;
       } else {
         users.push(record);
       }
     });
 
-    res.status(201).json({ username, email, companies, department: record.department, fullAccess: record.fullAccess });
+    res.status(201).json({ username, email, companies, departments: record.departments, fullAccess: record.fullAccess });
   })
 );
 
