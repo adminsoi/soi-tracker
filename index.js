@@ -7,8 +7,9 @@ const { execSync } = require("child_process");
 const express = require("express");
 
 const {
+  COMPANIES,
   DEPARTMENTS,
-  hasFullAccess,
+  DEFAULT_COMPANY,
   hashPassword,
   verifyPassword,
   signUserToken,
@@ -30,6 +31,22 @@ function escapeHtml(s) {
   ));
 }
 
+// Accounts created before companies existed only have a single
+// "department" field. Treat them as belonging to just SOI Aviation (the
+// only company that existed at the time) until someone re-saves them via
+// the admin page with real company/full-access settings.
+function normalizeUser(u) {
+  return {
+    ...u,
+    companies: u.companies && u.companies.length ? u.companies : [DEFAULT_COMPANY],
+    fullAccess: !!u.fullAccess,
+  };
+}
+
+function taskCompany(t) {
+  return t.company || DEFAULT_COMPANY;
+}
+
 async function notifyOwner(task, previousOwner) {
   if (!task.owner || task.owner === previousOwner) return;
   const users = await getUsers();
@@ -40,7 +57,7 @@ async function notifyOwner(task, previousOwner) {
       to: ownerUser.email,
       subject: `New task assigned: ${task.title}`,
       html:
-        `<p>You've been assigned a task in the SOI Aviation tracker (${escapeHtml(task.department)}):</p>` +
+        `<p>You've been assigned a task in the SOI Aviation tracker — ${escapeHtml(taskCompany(task))} / ${escapeHtml(task.department)}:</p>` +
         `<p><strong>${escapeHtml(task.title)}</strong></p>` +
         (task.notes ? `<p>${escapeHtml(task.notes)}</p>` : "") +
         (task.dueDate ? `<p>Due: ${escapeHtml(task.dueDate)}</p>` : "") +
@@ -91,57 +108,89 @@ app.post(
       return res.status(400).json({ error: "Username and password are required" });
     }
     const users = await getUsers();
-    const user = users.find(
+    const rawUser = users.find(
       (u) => u.username.toLowerCase() === String(username).toLowerCase()
     );
-    if (!user) return res.status(401).json({ error: "Invalid username or password" });
+    if (!rawUser) return res.status(401).json({ error: "Invalid username or password" });
 
-    const ok = await verifyPassword(password, user.passwordHash);
+    const ok = await verifyPassword(password, rawUser.passwordHash);
     if (!ok) return res.status(401).json({ error: "Invalid username or password" });
 
+    const user = normalizeUser(rawUser);
     const token = signUserToken(user);
-    res.json({ token, username: user.username, department: user.department });
+    res.json({
+      token,
+      username: user.username,
+      companies: user.companies,
+      department: user.department || null,
+      fullAccess: user.fullAccess,
+    });
   })
 );
 
 app.get("/api/me", authMiddleware, (req, res) => {
   res.json({
     username: req.user.username,
+    companies: req.user.companies,
     department: req.user.department,
-    fullAccess: hasFullAccess(req.user.department),
+    fullAccess: req.user.fullAccess,
   });
+});
+
+app.get("/api/companies", (req, res) => {
+  res.json(COMPANIES);
 });
 
 app.get("/api/departments", (req, res) => {
   res.json(DEPARTMENTS);
 });
 
-// Directory of real logins, for picking a task's Owner. Scoped to a
-// department (plus Operations, since they can touch every department) so
-// people don't see the whole company's account list unnecessarily.
+// Directory of real logins, for picking a task's Owner. Scoped to people
+// who have access to this company, and who are either in the same
+// department or have full access — so people don't see the whole
+// company's account list unnecessarily.
 app.get(
   "/api/users",
   authMiddleware,
   asyncHandler(async (req, res) => {
+    const company = req.query.company;
     const dept = req.query.department;
-    const users = await getUsers();
+    const rawUsers = await getUsers();
+    const users = rawUsers.map(normalizeUser);
     const filtered = users
-      .filter((u) => !dept || u.department === dept || hasFullAccess(u.department))
+      .filter((u) => !company || u.companies.includes(company))
+      .filter((u) => !dept || u.department === dept || u.fullAccess)
       .map((u) => ({ username: u.username, department: u.department }));
     res.json(filtered);
   })
 );
 
-// ---------- Tasks (scoped by department) ----------
+// ---------- Tasks (scoped by company + department) ----------
 
 app.get(
   "/api/tasks",
   authMiddleware,
   asyncHandler(async (req, res) => {
+    const company = req.query.company;
     const tasks = await getTasks();
-    const scoped = hasFullAccess(req.user.department)
-      ? tasks
-      : tasks.filter((t) => t.department === req.user.department);
+
+    if (!company) {
+      // No company specified — this is the "Global" view, only meaningful
+      // (and allowed) for full-access accounts with more than one company.
+      if (!req.user.fullAccess || req.user.companies.length <= 1) {
+        return res.status(400).json({ error: "Missing company" });
+      }
+      const scoped = tasks.filter((t) => req.user.companies.includes(taskCompany(t)));
+      return res.json(scoped);
+    }
+
+    if (!req.user.companies.includes(company)) {
+      return res.status(403).json({ error: "You don't have access to that company" });
+    }
+    const inCompany = tasks.filter((t) => taskCompany(t) === company);
+    const scoped = req.user.fullAccess
+      ? inCompany
+      : inCompany.filter((t) => t.department === req.user.department);
     res.json(scoped);
   })
 );
@@ -154,12 +203,19 @@ app.post(
     const title = String(body.title || "").trim().slice(0, 140);
     if (!title) return res.status(400).json({ error: "Title is required" });
 
+    if (!body.company || !req.user.companies.includes(body.company)) {
+      return res.status(400).json({ error: "Choose a valid company" });
+    }
+
     let department = req.user.department;
-    if (hasFullAccess(req.user.department)) {
+    if (req.user.fullAccess) {
       if (!DEPARTMENTS.includes(body.department)) {
         return res.status(400).json({ error: "Choose a valid department" });
       }
       department = body.department;
+    }
+    if (!department) {
+      return res.status(400).json({ error: "This account has no department set — ask an admin to fix it" });
     }
 
     const priority = ["low", "medium", "high"].includes(body.priority)
@@ -169,6 +225,7 @@ app.post(
     const task = {
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
       title,
+      company: body.company,
       department,
       status: "todo",
       priority,
@@ -189,7 +246,8 @@ app.post(
 );
 
 function canTouch(user, task) {
-  return hasFullAccess(user.department) || user.department === task.department;
+  if (!user.companies.includes(taskCompany(task))) return false;
+  return user.fullAccess || user.department === task.department;
 }
 
 app.patch(
@@ -216,7 +274,7 @@ app.patch(
       updated = t;
     });
 
-    if (forbidden) return res.status(403).json({ error: "That task isn't in your department" });
+    if (forbidden) return res.status(403).json({ error: "That task isn't accessible to you" });
     if (!updated) return res.status(404).json({ error: "Task not found" });
     res.json(updated);
     notifyOwner(updated, previousOwner);
@@ -242,7 +300,7 @@ app.delete(
       removed = true;
     });
 
-    if (forbidden) return res.status(403).json({ error: "That task isn't in your department" });
+    if (forbidden) return res.status(403).json({ error: "That task isn't accessible to you" });
     if (!removed) return res.status(404).json({ error: "Task not found" });
     res.status(204).end();
   })
@@ -264,8 +322,17 @@ app.get(
   "/api/admin/users",
   adminMiddleware,
   asyncHandler(async (req, res) => {
-    const users = await getUsers();
-    res.json(users.map((u) => ({ username: u.username, department: u.department, email: u.email || "" })));
+    const rawUsers = await getUsers();
+    const users = rawUsers.map(normalizeUser);
+    res.json(
+      users.map((u) => ({
+        username: u.username,
+        email: u.email || "",
+        companies: u.companies,
+        department: u.department || null,
+        fullAccess: u.fullAccess,
+      }))
+    );
   })
 );
 
@@ -273,12 +340,15 @@ app.post(
   "/api/admin/users",
   adminMiddleware,
   asyncHandler(async (req, res) => {
-    const { username, password, department, email } = req.body || {};
-    if (!username || !password || !department || !email) {
-      return res.status(400).json({ error: "Username, password, department, and email are required" });
+    const { username, password, email, companies, department, fullAccess } = req.body || {};
+    if (!username || !password || !email) {
+      return res.status(400).json({ error: "Username, password, and email are required" });
     }
-    if (!DEPARTMENTS.includes(department)) {
-      return res.status(400).json({ error: "Invalid department" });
+    if (!Array.isArray(companies) || companies.length === 0) {
+      return res.status(400).json({ error: "Select at least one company" });
+    }
+    if (companies.some((c) => !COMPANIES.includes(c))) {
+      return res.status(400).json({ error: "Invalid company selected" });
     }
     if (String(password).length < 8) {
       return res.status(400).json({ error: "Password must be at least 8 characters" });
@@ -286,20 +356,30 @@ app.post(
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: "Invalid email address" });
     }
+    if (!fullAccess && !DEPARTMENTS.includes(department)) {
+      return res.status(400).json({ error: "Choose a department, or turn on full access" });
+    }
 
     const passwordHash = await hashPassword(password);
+    const record = {
+      username,
+      passwordHash,
+      email,
+      companies,
+      fullAccess: !!fullAccess,
+      department: fullAccess ? department || null : department,
+    };
+
     await withUsers((users) => {
       const idx = users.findIndex((u) => u.username.toLowerCase() === username.toLowerCase());
       if (idx !== -1) {
-        users[idx].passwordHash = passwordHash;
-        users[idx].department = department;
-        users[idx].email = email;
+        users[idx] = { ...users[idx], ...record, passwordHash };
       } else {
-        users.push({ username, passwordHash, department, email });
+        users.push(record);
       }
     });
 
-    res.status(201).json({ username, department, email });
+    res.status(201).json({ username, email, companies, department: record.department, fullAccess: record.fullAccess });
   })
 );
 
