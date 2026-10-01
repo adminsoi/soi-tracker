@@ -39,6 +39,7 @@ function signUserToken(user) {
       companies: user.companies,
       departments: user.departments || [],
       fullAccess: !!user.fullAccess,
+      pentagonCode: user.pentagonCode || "",
       kind: "user",
     },
     JWT_SECRET,
@@ -68,6 +69,7 @@ function authMiddleware(req, res, next) {
       companies: payload.companies || [],
       departments: payload.departments || [],
       fullAccess: !!payload.fullAccess,
+      pentagonCode: payload.pentagonCode || "",
     };
     next();
   } catch (e) {
