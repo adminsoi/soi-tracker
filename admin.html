@@ -100,6 +100,10 @@
           </div>
         </div>
         <div class="field">
+          <label for="u-email">Email</label>
+          <input id="u-email" type="email" required placeholder="name@soiaviation.com" />
+        </div>
+        <div class="field">
           <label for="u-dept">Department</label>
           <select id="u-dept"></select>
         </div>
@@ -111,7 +115,7 @@
     <div class="card">
       <h2>Existing logins</h2>
       <table id="userTable">
-        <thead><tr><th>Username</th><th>Department</th><th></th></tr></thead>
+        <thead><tr><th>Username</th><th>Email</th><th>Department</th><th></th></tr></thead>
         <tbody id="userTableBody"></tbody>
       </table>
       <div class="empty" id="userEmpty" style="display:none;">No logins yet — add one above.</div>
@@ -186,7 +190,8 @@
       sel.innerHTML = "";
       depts.forEach(function (d) {
         var opt = document.createElement("option");
-        opt.value = d; opt.textContent = d === "Operations" ? "Operations (sees everything)" : d;
+        var fullAccess = ["HR", "Operations", "IT"].indexOf(d) !== -1;
+        opt.value = d; opt.textContent = fullAccess ? d + " (sees everything)" : d;
         sel.appendChild(opt);
       });
     });
@@ -203,6 +208,7 @@
         var tr = document.createElement("tr");
         tr.innerHTML =
           "<td>" + escapeHtml(u.username) + "</td>" +
+          "<td>" + escapeHtml(u.email || "") + "</td>" +
           "<td><span class=\"dept-tag\">" + escapeHtml(u.department) + "</span></td>" +
           "<td class=\"row-actions\"><button class=\"secondary\" data-del=\"" + escapeHtml(u.username) + "\">Remove</button></td>";
         body.appendChild(tr);
@@ -235,6 +241,7 @@
     var body = {
       username: document.getElementById("u-name").value.trim(),
       password: document.getElementById("u-pass").value,
+      email: document.getElementById("u-email").value.trim(),
       department: document.getElementById("u-dept").value
     };
     api("/api/admin/users", { method: "POST", body: JSON.stringify(body) })
