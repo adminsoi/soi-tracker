@@ -148,6 +148,16 @@
           </div>
         </div>
 
+        <div class="field">
+          <div class="check-grid">
+            <div class="check-row full-access-row">
+              <input type="checkbox" id="u-manager" />
+              <label for="u-manager" style="margin:0;font-weight:600;color:var(--text);">Manager — can assign tasks to other people, and is the only kind of login that can change a task's status or tick off RFQs</label>
+            </div>
+          </div>
+        </div>
+        <div class="hint" style="margin-top:-10px;">Full-access logins are managers automatically. Everyone else sees only their own tasks, and tasks a manager gives them are read-only.</div>
+
         <div class="field" id="deptField">
           <label>Departments (only needed without full access)</label>
           <div class="check-grid" id="deptChecks"></div>
@@ -156,6 +166,16 @@
 
         <button type="submit" id="submitBtn">Save login</button>
         <div class="msg" id="userMsg"></div>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Claude projects</h2>
+      <div class="hint" style="margin-bottom:12px;">Paste each department's Claude project link (it starts with https://claude.ai/project/). It shows up as a "Claude project" button on that department's tab and opens in a new tab — claude.ai can't be embedded inside the tracker. Leave blank for none.</div>
+      <form id="claudeForm">
+        <div id="claudeFields"></div>
+        <button type="submit">Save Claude links</button>
+        <div class="msg" id="claudeMsg"></div>
       </form>
     </div>
 
@@ -303,9 +323,10 @@
       users.forEach(function (u) {
         var tr = document.createElement("tr");
         var companyTags = (u.companies || []).map(function (c) { return '<span class="tag">' + escapeHtml(c) + '</span>'; }).join("");
-        var accessCell = u.fullAccess
+        var accessCell = (u.fullAccess
           ? '<span class="tag full">Full access</span>'
-          : (u.departments || []).map(function (d) { return '<span class="tag">' + escapeHtml(d) + '</span>'; }).join("") || "—";
+          : (u.departments || []).map(function (d) { return '<span class="tag">' + escapeHtml(d) + '</span>'; }).join("") || "—") +
+          (u.manager || u.fullAccess ? ' <span class="tag full">Manager</span>' : "");
         tr.innerHTML =
           "<td>" + escapeHtml(u.username) + "</td>" +
           "<td>" + escapeHtml(u.email || "") + "</td>" +
@@ -364,6 +385,7 @@
 
     setCheckedValues('#companyChecks input[type="checkbox"]', user.companies || []);
 
+    document.getElementById("u-manager").checked = !!user.manager;
     var fullAccessBox = document.getElementById("u-fullaccess");
     fullAccessBox.checked = !!user.fullAccess;
     setCheckedValues('#deptChecks input[type="checkbox"]', user.departments || []);
@@ -419,6 +441,7 @@
       pentagonCode: document.getElementById("u-pentagon").value.trim(),
       companies: companies,
       fullAccess: fullAccess,
+      manager: document.getElementById("u-manager").checked,
       departments: departments
     };
     api("/api/admin/users", { method: "POST", body: JSON.stringify(body) })
@@ -431,9 +454,48 @@
       .catch(function (err) { msg.textContent = err.message; });
   });
 
+  // ---------- Claude project links ----------
+  function loadClaudeProjects() {
+    return api("/api/admin/claude-projects").then(function (projects) {
+      var wrap = document.getElementById("claudeFields");
+      wrap.innerHTML = "";
+      DEPARTMENTS.forEach(function (d, i) {
+        var field = document.createElement("div");
+        field.className = "field";
+        var id = "claude-" + i;
+        field.innerHTML = '<label for="' + id + '">' + escapeHtml(d) + "</label>" +
+          '<input id="' + id + '" type="url" data-dept="' + escapeHtml(d) + '" placeholder="https://claude.ai/project/..." />';
+        field.querySelector("input").value = projects[d] || "";
+        wrap.appendChild(field);
+      });
+    }).catch(function (err) {
+      document.getElementById("claudeMsg").textContent = err.message;
+    });
+  }
+
+  document.getElementById("claudeForm").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var msg = document.getElementById("claudeMsg");
+    msg.textContent = "";
+    msg.className = "msg";
+    var body = {};
+    document.querySelectorAll("#claudeFields input").forEach(function (el) {
+      body[el.getAttribute("data-dept")] = el.value.trim();
+    });
+    api("/api/admin/claude-projects", { method: "PUT", body: JSON.stringify(body) })
+      .then(function () {
+        msg.textContent = "Saved.";
+        msg.className = "msg ok";
+      })
+      .catch(function (err) { msg.textContent = err.message; });
+  });
+
   function start() {
     showPanel();
-    Promise.all([loadCompanies(), loadDepartments()]).then(loadUsers);
+    Promise.all([loadCompanies(), loadDepartments()]).then(function () {
+      loadClaudeProjects();
+      return loadUsers();
+    });
   }
 
   if (token()) { start(); } else { showLogin(); }

@@ -72,11 +72,26 @@ function getTasks() {
     return tasks;
   });
 }
+function getPentagonPresets() {
+  return readJson("pentagon_presets", []);
+}
+// Manager ticks (✓ / ✗) and notes on Pentagon RFQs, keyed by RFQ number.
+// Pentagon itself is read-only from here, so these live in the tracker.
+function getRfqMarks() {
+  return readJson("rfq_marks", {});
+}
+// Small app-wide settings edited from the admin page (Claude project links).
+function getSettings() {
+  return readJson("settings", {});
+}
 
 // In-process queues so concurrent requests to this same container don't
 // clobber each other's read-modify-write cycle.
 let usersQueue = Promise.resolve();
 let tasksQueue = Promise.resolve();
+let presetsQueue = Promise.resolve();
+let rfqMarksQueue = Promise.resolve();
+let settingsQueue = Promise.resolve();
 
 function withUsers(mutator) {
   usersQueue = usersQueue.then(async () => {
@@ -102,4 +117,45 @@ function withTasks(mutator) {
   return tasksQueue;
 }
 
-module.exports = { getUsers, getTasks, withUsers, withTasks };
+function withPentagonPresets(mutator) {
+  presetsQueue = presetsQueue.then(async () => {
+    const presets = await getPentagonPresets();
+    const result = await mutator(presets);
+    await writeJson("pentagon_presets", presets);
+    return result;
+  });
+  return presetsQueue;
+}
+
+function withRfqMarks(mutator) {
+  rfqMarksQueue = rfqMarksQueue.then(async () => {
+    const marks = await getRfqMarks();
+    const result = await mutator(marks);
+    await writeJson("rfq_marks", marks);
+    return result;
+  });
+  return rfqMarksQueue;
+}
+
+function withSettings(mutator) {
+  settingsQueue = settingsQueue.then(async () => {
+    const settings = await getSettings();
+    const result = await mutator(settings);
+    await writeJson("settings", settings);
+    return result;
+  });
+  return settingsQueue;
+}
+
+module.exports = {
+  getUsers,
+  getTasks,
+  withUsers,
+  withTasks,
+  getPentagonPresets,
+  withPentagonPresets,
+  getRfqMarks,
+  withRfqMarks,
+  getSettings,
+  withSettings,
+};

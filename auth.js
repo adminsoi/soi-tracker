@@ -17,6 +17,8 @@ const DEPARTMENTS = [
   "Operations",
   "US Government",
   "Warehouse",
+  "Administrative",
+  "Accounting & Finance",
 ];
 
 // Tasks created before companies existed have no "company" field. Treat
@@ -39,6 +41,7 @@ function signUserToken(user) {
       companies: user.companies,
       departments: user.departments || [],
       fullAccess: !!user.fullAccess,
+      manager: !!user.manager,
       pentagonCode: user.pentagonCode || "",
       kind: "user",
     },
@@ -69,12 +72,19 @@ function authMiddleware(req, res, next) {
       companies: payload.companies || [],
       departments: payload.departments || [],
       fullAccess: !!payload.fullAccess,
+      manager: !!payload.manager,
       pentagonCode: payload.pentagonCode || "",
     };
     next();
   } catch (e) {
     return res.status(401).json({ error: "Invalid or expired session" });
   }
+}
+
+// Managers assign tasks to other people and are the only ones who can change
+// a task's status or tick off an RFQ. Full-access accounts are managers too.
+function isManager(user) {
+  return !!(user && (user.fullAccess || user.manager));
 }
 
 function adminMiddleware(req, res, next) {
@@ -101,4 +111,5 @@ module.exports = {
   signAdminToken,
   authMiddleware,
   adminMiddleware,
+  isManager,
 };

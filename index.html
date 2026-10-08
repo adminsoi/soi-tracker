@@ -199,6 +199,29 @@
   .resource-link:hover { border-color: var(--navy-light); background: var(--surface-2); }
   @media (prefers-color-scheme: dark) { .resource-link { color: #cfd9ef; } }
 
+  a.top-btn { text-decoration: none; display: inline-flex; align-items: center; }
+
+  .rfq-table td { text-align: left; vertical-align: top; }
+  .rfq-table th { text-align: left; }
+  .rfq-table td.rfq-status { text-align: center; }
+  .rfq-mark { font-size: 15px; font-weight: 700; line-height: 1; }
+  .rfq-mark.done { color: #2f7a4f; }
+  .rfq-mark.open { color: var(--red); }
+  .rfq-mark-btn {
+    appearance: none; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 7px; padding: 3px 8px; cursor: pointer;
+  }
+  .rfq-mark-btn:hover { border-color: var(--navy-light); }
+  .rfq-notes { display: flex; gap: 6px; min-width: 180px; }
+  .rfq-notes input {
+    flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid var(--border); border-radius: 7px;
+    background: var(--bg); color: var(--text); font-size: 12.5px; font-family: inherit;
+  }
+  .rfq-sub { font-size: 11px; color: var(--text-faint); margin-top: 2px; }
+  .rfq-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; font-size: 12.5px; color: var(--text-dim); }
+  .card.readonly { cursor: pointer; opacity: 0.92; }
+  .card .lock { font-size: 11px; color: var(--text-faint); margin-top: 4px; }
+
   .sub-tabs { display: flex; gap: 6px; }
   .sub-tabs button {
     appearance: none; border: 1px solid var(--border); background: var(--surface);
@@ -279,6 +302,7 @@
     </div>
     <div class="top-spacer"></div>
     <select id="companySelect" class="top-btn" style="display:none;"></select>
+    <a class="top-btn" href="https://claude.ai/new" target="_blank" rel="noopener noreferrer" title="Opens claude.ai in a new tab">Claude ↗</a>
     <div class="who"><b id="whoName"></b>&nbsp;· <span id="whoDept"></span></div>
     <button class="top-btn" id="logoutBtn">Sign out</button>
     <div class="sync-pill" id="syncPill"><span class="dot off" id="syncDot"></span><span id="syncText">Connecting…</span></div>
@@ -290,7 +314,7 @@
     <div id="companyPanel">
       <div class="banner">
         <span>ⓘ</span>
-        <span><b>Manual entry for now.</b> This board will auto-populate once tied into Pentagon. Everyone with a login can add and move tasks in their own department.</span>
+        <span id="bannerText"><b>Manual entry for now.</b> This board will auto-populate once tied into Pentagon.</span>
       </div>
 
       <div class="panel-head">
@@ -317,7 +341,7 @@
         </div>
 
         <div class="board-head">
-          <span class="sub" style="font-size:12.5px;color:var(--text-faint);">Drag cards between columns to update status</span>
+          <span class="sub" id="boardHint" style="font-size:12.5px;color:var(--text-faint);">Drag cards between columns to update status</span>
           <button class="add-btn" id="addBtn">+ Add task</button>
         </div>
 
@@ -490,13 +514,13 @@
   var DEPT_COLORS = {
     "Procurement": "#1d2c47", "Purchasing": "#3a5280", "IT": "#a6192e",
     "HR": "#8a5c14", "Operations": "#276240", "US Government": "#5b3fa0",
-    "Warehouse": "#0f6a72", "Administrative": "#7a4a8f", "Accounting": "#1e6b6b"
+    "Warehouse": "#0f6a72", "Administrative": "#7a4a8f", "Accounting & Finance": "#1e6b6b"
   };
 
   // Fallback in case /api/departments has a transient hiccup — this list
   // rarely changes, so we can start the app with it immediately rather
   // than leaving the person stuck on an empty board.
-  var DEPARTMENTS_FALLBACK = ["Procurement", "Purchasing", "IT", "HR", "Operations", "US Government", "Warehouse", "Administrative", "Accounting"];
+  var DEPARTMENTS_FALLBACK = ["Procurement", "Purchasing", "IT", "HR", "Operations", "US Government", "Warehouse", "Administrative", "Accounting & Finance"];
   var DEPARTMENTS = []; // loaded from /api/departments
   var OVERVIEW_KEY = "__overview__"; // virtual tab: aggregate of all departments within the active company
   var GLOBAL_KEY = "__global__"; // virtual tab: every company at once, only for multi-company accounts
@@ -593,7 +617,7 @@
       });
     }).then(function (data) {
       setToken(data.token);
-      me = { username: data.username, companies: data.companies, departments: data.departments || [], fullAccess: data.fullAccess, pentagonCode: data.pentagonCode || "" };
+      me = { username: data.username, companies: data.companies, departments: data.departments || [], fullAccess: data.fullAccess, manager: !!data.manager, pentagonCode: data.pentagonCode || "" };
       onSignedIn();
     }).catch(function (err) {
       msg.textContent = err.message;
@@ -619,10 +643,30 @@
     activeTab = defaultTab();
     document.getElementById("whoName").textContent = me.username;
     document.getElementById("whoDept").textContent =
-      (me.fullAccess ? "Full access" : me.departments.join(", ")) +
+      (me.fullAccess ? "Full access" : me.departments.join(", ") + (me.manager ? " · Manager" : "")) +
       (me.companies.length === 1 ? " · " + me.companies[0] : "");
+    document.getElementById("bannerText").innerHTML = isManager()
+      ? "<b>Manual entry for now.</b> This board will auto-populate once tied into Pentagon. As a manager you can assign tasks to anyone and move cards between columns."
+      : "<b>Manual entry for now.</b> This board will auto-populate once tied into Pentagon. You can add your own tasks; only a manager can change a task's status, and tasks a manager gave you are read-only.";
+    document.getElementById("boardHint").textContent = isManager()
+      ? "Drag cards between columns to update status"
+      : "Only managers can move cards between columns";
     showApp();
     loadDepartmentsThenStart();
+    loadClaudeProjects();
+  }
+
+  // Managers assign tasks to others and are the only ones who change status.
+  // Full-access accounts count as managers. The server enforces all of this;
+  // the checks here only decide what to show.
+  function isManager() {
+    return !!(me && (me.fullAccess || me.manager));
+  }
+  function sameUser(a, b) {
+    return String(a || "").toLowerCase() === String(b || "").toLowerCase();
+  }
+  function canEditTask(t) {
+    return isManager() || sameUser(t.createdBy, me.username);
   }
 
   function setupCompanySelect() {
@@ -746,14 +790,14 @@
   // sub-tab, filter bar, and table all build themselves from this config.
   var PENTAGON_VIEWS = {
     "Procurement": [
-      { id: "rfqs", label: "RFQs", queryName: "dashboards.rfq" },
+      { id: "rfqs", label: "RFQs", queryName: "dashboards.rfq", layout: "rfq" },
       { id: "quotes", label: "Quotes", queryName: "dashboards.quotes" }
     ],
     "Purchasing": [
       { id: "sales_orders", label: "Sales Orders", queryName: "dashboards.so" },
       { id: "purchase_orders", label: "Purchase Orders", queryName: "dashboards.po" }
     ],
-    "Accounting": [
+    "Accounting & Finance": [
       { id: "invoices", label: "Invoices", queryName: "dashboards.invoice_search" }
     ]
   };
@@ -770,9 +814,30 @@
     ]
   };
 
+  // Claude project link per department, set on the admin page.
+  var claudeProjects = {};
+  function loadClaudeProjects() {
+    api("/api/claude-projects").then(function (projects) {
+      claudeProjects = projects || {};
+      renderResourceLinks();
+    }).catch(function () { /* links are optional — the board works without them */ });
+  }
+
+  function safeLink(url) {
+    try {
+      var u = new URL(url);
+      return u.protocol === "https:" || u.protocol === "http:" ? u.toString() : null;
+    } catch (e) { return null; }
+  }
+
   function renderResourceLinks() {
     var wrap = document.getElementById("resourceLinks");
-    var links = DEPARTMENT_RESOURCES[activeTab];
+    var links = (DEPARTMENT_RESOURCES[activeTab] || []).slice();
+    if (claudeProjects[activeTab]) {
+      // The department's own Claude project replaces the generic Claude link.
+      links = links.filter(function (l) { return l.label !== "Claude"; });
+      links.push({ label: "Claude project", url: claudeProjects[activeTab] });
+    }
     if (!links || !links.length) {
       wrap.style.display = "none";
       wrap.innerHTML = "";
@@ -780,7 +845,9 @@
     }
     wrap.style.display = "flex";
     wrap.innerHTML = links.map(function (l) {
-      return '<a class="resource-link" href="' + l.url + '" target="_blank" rel="noopener">' + escapeHtml(l.label) + " ↗</a>";
+      var href = safeLink(l.url);
+      if (!href) return "";
+      return '<a class="resource-link" href="' + escapeHtml(href) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(l.label) + " ↗</a>";
     }).join("");
   }
 
@@ -1020,6 +1087,14 @@
 
       try { renderPentagonCharts("plv", rows); } catch (e) { console.error("Pentagon chart render failed:", e); }
 
+      if (view.layout === "rfq" && rows && rows.length) {
+        lastRfqRows = rows;
+        renderRfqTable();
+        return;
+      }
+      var staleToolbar = document.getElementById("rfq-toolbar");
+      if (staleToolbar) staleToolbar.remove();
+
       var html = buildAutoTableHtml(rows);
       if (!html) {
         table.style.display = "none";
@@ -1027,6 +1102,7 @@
         empty.textContent = (rows && rows.length === 0) ? "No results for those filters." : "No table-shaped data came back.";
         return;
       }
+      table.classList.remove("rfq-table");
       table.innerHTML = html;
       table.style.display = "table";
       empty.style.display = "none";
@@ -1037,6 +1113,130 @@
       empty.textContent = err.message || "Search failed.";
       document.getElementById("plv-chart-row").style.display = "none";
     });
+  }
+
+  // ---------- RFQ layout ----------
+  // RFQs show six columns in a fixed order: Part number, Customer, Person,
+  // Due date, Status (✓ / ✗), Notes. Pentagon's column names vary a little
+  // between queries, so each column is located by likely names (findField).
+  // The ✓ / ✗ and the notes are the tracker's own — Pentagon is read-only
+  // from here — and only managers can change them.
+  var lastRfqRows = null;
+  var rfqMarks = {};
+  var rfqShowAll = false;
+
+  var RFQ_FIELDS = {
+    key: [["RFQ_NUMBER", "RFQ_NO", "RFQ_ID", "DOC_NUMBER", "DOC_NO", "DOC_ID"], ["RFQ_N", "DOC_N", "_ID", "NUMBER"]],
+    part: [["PN", "PART_NUMBER", "PART_NO", "PARTNO", "PART"], ["PART", "PN"]],
+    customer: [["CUSTOMER", "CUSTOMER_NAME", "COMPANY_NAME", "ACCOUNT_NAME", "CUST_NAME"], ["CUSTOMER", "CUST", "COMPANY", "ACCOUNT_NAME"]],
+    person: [["OURCONTACT", "SALESPERSON", "SALES_PERSON", "ENTERED_BY", "USER_NAME", "BUYER"], ["OURCONTACT", "SALES", "ENTERED_BY", "USER", "BUYER", "EMPLOYEE"]],
+    due: [["DUE_DATE", "DATE_DUE", "REQUIRED_DATE", "DATE_REQUIRED", "NEED_DATE", "RESPONSE_DATE"], ["DUE", "REQUIRED", "NEED"]],
+    notes: [["NOTES", "REMARKS", "COMMENTS", "MEMO"], ["NOTE", "REMARK", "COMMENT", "MEMO"]]
+  };
+
+  function rfqField(row, name) {
+    return findField(row, RFQ_FIELDS[name][0], RFQ_FIELDS[name][1]);
+  }
+  function cellText(v) {
+    return v === null || v === undefined ? "" : String(v);
+  }
+
+  function renderRfqTable() {
+    var table = document.getElementById("plv-table");
+    var empty = document.getElementById("plv-empty");
+    var rows = lastRfqRows || [];
+    // Marks are optional extras — show the table even if they fail to load.
+    api("/api/rfq-marks").then(function (marks) { rfqMarks = marks || {}; })
+      .catch(function () { rfqMarks = {}; })
+      .then(function () { drawRfqTable(table, empty, rows); });
+  }
+
+  function drawRfqTable(table, empty, rows) {
+    var sample = rows[0];
+    var f = {};
+    Object.keys(RFQ_FIELDS).forEach(function (k) { f[k] = rfqField(sample, k); });
+    var manager = isManager();
+
+    var toolbar = document.getElementById("rfq-toolbar");
+    if (!toolbar) {
+      toolbar = document.createElement("div");
+      toolbar.id = "rfq-toolbar";
+      toolbar.className = "rfq-toolbar";
+      table.parentElement.insertBefore(toolbar, table);
+    }
+    toolbar.innerHTML =
+      '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="rfq-show-all"' + (rfqShowAll ? " checked" : "") + " /> Show all Pentagon columns</label>" +
+      "<span>" + (manager ? "Tick ✓ / ✗ and edit notes — managers only." : "Only managers can tick RFQs off.") + "</span>" +
+      (f.key ? "" : '<span style="color:var(--red);">No RFQ number column found, so ticks and notes can\'t be saved.</span>');
+    document.getElementById("rfq-show-all").addEventListener("change", function () {
+      rfqShowAll = this.checked;
+      drawRfqTable(table, empty, rows);
+    });
+
+    if (rfqShowAll) {
+      table.classList.remove("rfq-table");
+      table.innerHTML = buildAutoTableHtml(rows);
+    } else {
+      var head = "<thead><tr><th>Part number</th><th>Customer</th><th>Person</th><th>Due date</th><th>Status</th><th>Notes</th></tr></thead>";
+      var body = rows.map(function (r) {
+        var key = f.key ? cellText(r[f.key]) : "";
+        var mark = key ? rfqMarks[key] : null;
+        var done = !!(mark && mark.done);
+        var symbol = '<span class="rfq-mark ' + (done ? "done" : "open") + '" title="' + (done ? "Done" : "Open") + '">' + (done ? "✓" : "✗") + "</span>";
+        var status = manager && key
+          ? '<button class="rfq-mark-btn" data-rfq-toggle="' + escapeHtml(key) + '" title="' + (done ? "Mark as open" : "Mark as done") + '">' + symbol + "</button>"
+          : symbol;
+        var pentagonNote = f.notes ? cellText(r[f.notes]) : "";
+        var ourNote = mark && mark.notes ? mark.notes : "";
+        var notes = manager && key
+          ? '<div class="rfq-notes"><input type="text" maxlength="500" value="' + escapeHtml(ourNote) + '" data-rfq-note="' + escapeHtml(key) + '" placeholder="Add a note" />' +
+            '<button class="btn-secondary" data-rfq-save="' + escapeHtml(key) + '">Save</button></div>'
+          : escapeHtml(ourNote);
+        if (pentagonNote) notes += '<div class="rfq-sub">Pentagon: ' + escapeHtml(pentagonNote) + "</div>";
+        var refLine = key ? '<div class="rfq-sub">RFQ ' + escapeHtml(key) + "</div>" : "";
+        return "<tr>" +
+          "<td>" + escapeHtml(f.part ? cellText(r[f.part]) : "") + refLine + "</td>" +
+          "<td>" + escapeHtml(f.customer ? cellText(r[f.customer]) : "") + "</td>" +
+          "<td>" + escapeHtml(f.person ? cellText(r[f.person]) : "") + "</td>" +
+          "<td>" + escapeHtml(f.due ? cellText(r[f.due]).slice(0, 10) : "") + "</td>" +
+          '<td class="rfq-status">' + status + "</td>" +
+          "<td>" + notes + "</td>" +
+          "</tr>";
+      }).join("");
+      table.classList.add("rfq-table");
+      table.innerHTML = head + "<tbody>" + body + "</tbody>";
+    }
+    table.style.display = "table";
+    empty.style.display = "none";
+
+    table.querySelectorAll("[data-rfq-toggle]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var key = btn.getAttribute("data-rfq-toggle");
+        var done = !(rfqMarks[key] && rfqMarks[key].done);
+        saveRfqMark(key, { done: done });
+      });
+    });
+    table.querySelectorAll("[data-rfq-save]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var key = btn.getAttribute("data-rfq-save");
+        var input = btn.parentElement.querySelector("input");
+        saveRfqMark(key, { notes: input.value });
+      });
+    });
+  }
+
+  function saveRfqMark(key, change) {
+    setSync("busy", "Saving…");
+    api("/api/rfq-marks/" + encodeURIComponent(key), { method: "PUT", body: JSON.stringify(change) })
+      .then(function (mark) {
+        setSync("on", "Live");
+        rfqMarks[key] = mark;
+        drawRfqTable(document.getElementById("plv-table"), document.getElementById("plv-empty"), lastRfqRows || []);
+      })
+      .catch(function (err) {
+        setSync("on", "Live");
+        if (err.message !== "Session expired") toast("Couldn't save: " + err.message, true);
+      });
   }
 
   function hideAllPanels() {
@@ -1309,7 +1509,7 @@
       col.addEventListener("drop", function (e) {
         e.preventDefault();
         col.classList.remove("dragover");
-        if (!draggingId) return;
+        if (!draggingId || !isManager()) return;
         updateTaskStatus(draggingId, col.dataset.status);
       });
 
@@ -1319,8 +1519,9 @@
 
   function renderCard(t) {
     var card = document.createElement("div");
-    card.className = "card";
-    card.draggable = true;
+    var editable = canEditTask(t);
+    card.className = "card" + (editable ? "" : " readonly");
+    card.draggable = isManager();
 
     var overdue = isOverdue(t);
     var deptBadge = activeTab === OVERVIEW_KEY
@@ -1332,12 +1533,13 @@
 
     card.innerHTML =
       '<div class="row1"><div class="title">' + escapeHtml(t.title) + '</div>' +
-      '<button class="del" title="Delete" data-id="' + t.id + '">×</button></div>' +
+      (editable ? '<button class="del" title="Delete" data-id="' + escapeHtml(t.id) + '">×</button>' : "") + "</div>" +
       '<div class="meta">' + companyBadge + deptBadge +
       '<span class="badge pri-' + t.priority + '">' + t.priority.charAt(0).toUpperCase() + t.priority.slice(1) + " priority</span></div>" +
       (t.owner ? '<div class="owner">' + escapeHtml(t.owner) + "</div>" : "") +
       (t.dueDate ? '<div class="due' + (overdue ? " overdue" : "") + '">' + (overdue ? "Overdue — was due " : "Due ") + fmtDate(t.dueDate) + "</div>" : "") +
-      (t.notes ? '<div class="notes">' + escapeHtml(t.notes) + "</div>" : "");
+      (t.notes ? '<div class="notes">' + escapeHtml(t.notes) + "</div>" : "") +
+      (editable ? "" : '<div class="lock">Assigned by ' + escapeHtml(t.createdBy || "a manager") + " — read-only</div>");
 
     card.addEventListener("dragstart", function (e) {
       draggingId = t.id;
@@ -1350,10 +1552,13 @@
       openEditModal(t);
     });
 
-    card.querySelector(".del").addEventListener("click", function (e) {
-      e.stopPropagation();
-      if (confirm('Delete "' + t.title + '"?')) deleteTask(t.id);
-    });
+    var delBtn = card.querySelector(".del");
+    if (delBtn) {
+      delBtn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        if (confirm('Delete "' + t.title + '"?')) deleteTask(t.id);
+      });
+    }
 
     return card;
   }
@@ -1580,6 +1785,16 @@
   function loadOwnerOptions(department, company) {
     var sel = document.getElementById("f-owner");
     var currentValue = sel.value;
+    if (!isManager()) {
+      // Regular users can't assign work to anyone else.
+      sel.innerHTML = "";
+      var self = document.createElement("option");
+      self.value = me.username; self.textContent = me.username + " (you)";
+      sel.appendChild(self);
+      sel.disabled = true;
+      return Promise.resolve();
+    }
+    sel.disabled = false;
     return api("/api/users?company=" + encodeURIComponent(company) + "&department=" + encodeURIComponent(department)).then(function (users) {
       sel.innerHTML = '<option value="">Unassigned</option>';
       users.forEach(function (u) {
@@ -1601,8 +1816,18 @@
     return companySelect.value || me.companies[0];
   }
 
+  // Read-only mode for tasks a manager assigned to a regular user.
+  function setFormReadOnly(readOnly) {
+    ["f-title", "f-priority", "f-due", "f-notes", "f-dept"].forEach(function (id) {
+      document.getElementById(id).disabled = readOnly;
+    });
+    document.getElementById("submitTaskBtn").style.display = readOnly ? "none" : "inline-block";
+    document.getElementById("cancelBtn").textContent = readOnly ? "Close" : "Cancel";
+  }
+
   function openAddModal() {
     editingTaskId = null;
+    setFormReadOnly(false);
     document.getElementById("modalTitle").textContent = "Add task";
     document.getElementById("submitTaskBtn").textContent = "Add task";
     document.getElementById("deleteTaskBtn").style.display = "none";
@@ -1648,11 +1873,15 @@
 
   function openEditModal(t) {
     editingTaskId = t.id;
-    document.getElementById("modalTitle").textContent = "Edit task";
+    var editable = canEditTask(t);
+    setFormReadOnly(!editable);
+    document.getElementById("modalTitle").textContent = editable ? "Edit task" : "Task (read-only)";
     document.getElementById("submitTaskBtn").textContent = "Save changes";
-    document.getElementById("deleteTaskBtn").style.display = "inline-block";
-    document.getElementById("statusField").style.display = "block";
-    document.getElementById("formMsg").textContent = "";
+    document.getElementById("deleteTaskBtn").style.display = editable ? "inline-block" : "none";
+    // Status is a manager's call; everyone else just sees the column it's in.
+    document.getElementById("statusField").style.display = isManager() ? "block" : "none";
+    document.getElementById("formMsg").textContent = editable ? "" :
+      "Assigned by " + (t.createdBy || "a manager") + ". Only they or another manager can change it.";
 
     document.getElementById("f-title").value = t.title;
     document.getElementById("f-status").value = t.status;
@@ -1679,7 +1908,13 @@
     deptField.style.display = showDeptPicker ? "block" : "none";
     deptSelect.value = t.department;
     loadOwnerOptions(t.department, taskCompanyValue).then(function () {
-      document.getElementById("f-owner").value = t.owner || "";
+      var sel = document.getElementById("f-owner");
+      if (!isManager()) {
+        // Show who it's for, read-only.
+        sel.innerHTML = '<option value="' + escapeHtml(t.owner || "") + '">' + escapeHtml(t.owner || "Unassigned") + "</option>";
+        sel.disabled = true;
+      }
+      sel.value = t.owner || "";
     });
 
     modalBackdrop.classList.add("open");
@@ -1709,16 +1944,16 @@
     var body = {
       title: title,
       priority: document.getElementById("f-priority").value,
-      owner: document.getElementById("f-owner").value,
       dueDate: document.getElementById("f-due").value,
       notes: document.getElementById("f-notes").value.trim()
     };
+    if (isManager()) body.owner = document.getElementById("f-owner").value;
     var msg = document.getElementById("formMsg");
     msg.textContent = "";
     setSync("busy", "Saving…");
 
     if (editingTaskId) {
-      body.status = document.getElementById("f-status").value;
+      if (isManager()) body.status = document.getElementById("f-status").value;
       api("/api/tasks/" + editingTaskId, { method: "PATCH", body: JSON.stringify(body) })
         .then(function () {
           setSync("on", "Live");
