@@ -389,6 +389,34 @@ function canUsePentagon(user, activeCompany) {
   return user.fullAccess || user.departments.includes("Procurement");
 }
 
+// Each department tab's Pentagon list views, by view id and by query name.
+// Someone in that department (or with full access) may run that view's
+// query even without access to the general Pentagon tester.
+const VIEW_DEPARTMENTS = {
+  rfqs: "Procurement",
+  quotes: "Procurement",
+  sales_orders: "Purchasing",
+  purchase_orders: "Purchasing",
+  invoices: "Accounting & Finance",
+};
+const QUERY_DEPARTMENTS = {
+  "dashboards.rfq": "Procurement",
+  "dashboards.quotes": "Procurement",
+  "dashboards.so": "Purchasing",
+  "dashboards.po": "Purchasing",
+  "dashboards.invoice_search": "Accounting & Finance",
+};
+
+function inDepartment(user, dept) {
+  return !!dept && (user.fullAccess || user.departments.includes(dept));
+}
+
+// Can see the ticks / notes / assignments on Pentagon rows at all.
+function canSeeRowMarks(user) {
+  return user.companies.includes("SOI Aviation") &&
+    Object.values(VIEW_DEPARTMENTS).some((d) => inDepartment(user, d));
+}
+
 app.post(
   "/api/pentagon/:queryName",
   authMiddleware,
@@ -396,7 +424,10 @@ app.post(
     const { queryName } = req.params;
     // "Mentions you" is personal data, not departmental — any SOI Aviation
     // account can run it. Every other Pentagon query stays restricted.
-    const allowed = queryName === "dashboards.mine" || canUsePentagon(req.user, "SOI Aviation");
+    const allowed =
+      queryName === "dashboards.mine" ||
+      canUsePentagon(req.user, "SOI Aviation") ||
+      (req.user.companies.includes("SOI Aviation") && inDepartment(req.user, QUERY_DEPARTMENTS[queryName]));
     if (!allowed) {
       return res.status(403).json({ error: "Not available for your account" });
     }
@@ -476,46 +507,116 @@ app.delete(
   })
 );
 
-// ---------- RFQ ticks (✓ / ✗) and notes ----------
-// Pentagon RFQs are read-only from here, so the tick and the note live in
-// the tracker, keyed by RFQ number. Anyone who can see the RFQ list can read
-// them; only managers can set them.
+// ---------- Ticks (✓ / ✗), notes and assignments on Pentagon rows ----------
+// Pentagon is read-only from here, so these live in the tracker
+// (rfq_marks.json). RFQs are keyed by RFQ number; other views by
+// "<view>:<doc number>". Anyone who can see those lists can read them; only
+// managers can set them. Each mark keeps a small snapshot (doc number,
+// customer/vendor, due date) so "Mentions You" can list what's assigned to
+// someone without re-running Pentagon queries.
 
 app.get(
   "/api/rfq-marks",
   authMiddleware,
   asyncHandler(async (req, res) => {
-    if (!canUsePentagon(req.user, "SOI Aviation")) {
+    if (!canSeeRowMarks(req.user)) {
       return res.status(403).json({ error: "Not available for your account" });
     }
     res.json(await getRfqMarks());
   })
 );
 
+// Rows a manager assigned to the signed-in person, for "Mentions You".
+app.get(
+  "/api/rfq-marks/mine",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const marks = await getRfqMarks();
+    const mine = Object.entries(marks)
+      .filter(([, m]) => m.assignee && sameUser(m.assignee, req.user.username))
+      .map(([key, m]) => ({ key, ...m }));
+    res.json(mine);
+  })
+);
+
+async function notifyRowAssignee(mark, previousAssignee) {
+  if (!mark.assignee || sameUser(mark.assignee, previousAssignee)) return;
+  const users = await getUsers();
+  const user = users.find((u) => sameUser(u.username, mark.assignee));
+  if (!user || !user.email) return;
+  const what = `${mark.label || "Item"} ${mark.docNo || ""}`.trim();
+  try {
+    await sendMail({
+      to: user.email,
+      subject: `Assigned to you: ${what}`,
+      html:
+        `<p>You've been assigned ${escapeHtml(what)} in the SOI Aviation tracker.</p>` +
+        (mark.party ? `<p>${escapeHtml(mark.party)}</p>` : "") +
+        (mark.dueDate ? `<p>Due: ${escapeHtml(mark.dueDate)}</p>` : "") +
+        `<p>It's listed under "Mentions You".</p>`,
+    });
+  } catch (err) {
+    console.error("Failed to send assignment email:", err);
+  }
+}
+
 app.put(
   "/api/rfq-marks/:key",
   authMiddleware,
   asyncHandler(async (req, res) => {
-    if (!canUsePentagon(req.user, "SOI Aviation")) {
+    const body = req.body || {};
+    const view = String(body.view || "rfqs");
+    const dept = VIEW_DEPARTMENTS[view];
+    if (!dept || !req.user.companies.includes("SOI Aviation") || !inDepartment(req.user, dept)) {
       return res.status(403).json({ error: "Not available for your account" });
     }
     if (!isManager(req.user)) {
-      return res.status(403).json({ error: "Only a manager can tick off RFQs or edit their notes" });
+      return res.status(403).json({ error: "Only a manager can tick, assign or add notes here" });
     }
     const key = String(req.params.key || "").trim().slice(0, 80);
-    if (!key) return res.status(400).json({ error: "Missing RFQ number" });
-    const body = req.body || {};
+    if (!key) return res.status(400).json({ error: "Missing document number" });
+
+    // Assign only to a real login (or "" to unassign), stored as its username.
+    let assignee;
+    if ("assignee" in body) {
+      const wanted = String(body.assignee || "").trim();
+      if (wanted) {
+        const users = await getUsers();
+        const match = users.find((u) => sameUser(u.username, wanted));
+        if (!match) return res.status(400).json({ error: "No login with that username" });
+        assignee = match.username;
+      } else {
+        assignee = "";
+      }
+    }
+
+    const snap = (v, n) => String(v || "").trim().slice(0, n);
     let saved = null;
+    let previousAssignee = null;
     await withRfqMarks((marks) => {
       const mark = marks[key] || { done: false, notes: "" };
+      previousAssignee = mark.assignee || "";
       if ("done" in body) mark.done = !!body.done;
       if ("notes" in body) mark.notes = String(body.notes || "").trim().slice(0, 500);
+      if (assignee !== undefined) {
+        mark.assignee = assignee;
+        mark.assignedBy = req.user.username;
+      }
+      mark.view = view;
+      if (body.snapshot && typeof body.snapshot === "object") {
+        mark.label = snap(body.snapshot.label, 20);
+        mark.docNo = snap(body.snapshot.docNo, 40);
+        mark.party = snap(body.snapshot.party, 120);
+        mark.dueDate = snap(body.snapshot.dueDate, 10);
+        mark.pentagonUser = snap(body.snapshot.pentagonUser, 40);
+      }
       mark.updatedBy = req.user.username;
       mark.updatedAt = Date.now();
       marks[key] = mark;
       saved = mark;
     });
     res.json(saved);
+    notifyRowAssignee(saved, previousAssignee);
   })
 );
 

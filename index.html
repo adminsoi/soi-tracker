@@ -217,6 +217,10 @@
     flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid var(--border); border-radius: 7px;
     background: var(--bg); color: var(--text); font-size: 12.5px; font-family: inherit;
   }
+  .rfq-assign {
+    padding: 5px 8px; border: 1px solid var(--border); border-radius: 7px; max-width: 160px;
+    background: var(--bg); color: var(--text); font-size: 12.5px; font-family: inherit;
+  }
   .rfq-sub { font-size: 11px; color: var(--text-faint); margin-top: 2px; }
   .rfq-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; font-size: 12.5px; color: var(--text-dim); }
   .card.readonly { cursor: pointer; opacity: 0.92; }
@@ -416,6 +420,13 @@
       <div class="panel-head">
         <h1>Mentions You</h1>
         <span class="sub" id="mn-status-msg"></span>
+      </div>
+      <div class="chart-card" style="margin-bottom:16px;">
+        <h3 style="margin:0 0 10px;">Assigned to you</h3>
+        <div style="overflow:auto;max-height:40vh;">
+          <table class="global-table rfq-table" id="mn-assigned-table" style="display:none;"></table>
+          <div id="mn-assigned-empty" style="font-size:12.5px;color:var(--text-faint);">Loading…</div>
+        </div>
       </div>
       <div id="mn-no-code" style="display:none;" class="chart-card">
         <p style="margin:0;font-size:13px;color:var(--text-dim);">No Pentagon code is set on your account yet — ask an admin to add one at <code>/admin.html</code> so this can find RFQs, Quotes, Sales Orders, Purchase Orders, and Invoices tied to you.</p>
@@ -790,12 +801,15 @@
   // sub-tab, filter bar, and table all build themselves from this config.
   var PENTAGON_VIEWS = {
     "Procurement": [
-      { id: "rfqs", label: "RFQs", queryName: "dashboards.rfq", layout: "rfq" },
+      { id: "rfqs", label: "RFQs", queryName: "dashboards.rfq", layout: "doc",
+        fields: { docLabel: "RFQ", key: "RFQ_NO", part: "PN", party: "ACCOUNT_NAME", partyLabel: "Customer", person: "OURCONTACT", due: "DUE_DATE", notes: "NOTES" } },
       { id: "quotes", label: "Quotes", queryName: "dashboards.quotes" }
     ],
     "Purchasing": [
-      { id: "sales_orders", label: "Sales Orders", queryName: "dashboards.so" },
-      { id: "purchase_orders", label: "Purchase Orders", queryName: "dashboards.po" }
+      { id: "sales_orders", label: "Sales Orders", queryName: "dashboards.so", layout: "doc",
+        fields: { docLabel: "SO", key: "SO_NO", part: "PN", party: "ACCOUNT_NAME", partyLabel: "Customer", person: "OURCONTACT", due: "DUE_DATE", notes: "NOTES" } },
+      { id: "purchase_orders", label: "Purchase Orders", queryName: "dashboards.po", layout: "doc",
+        fields: { docLabel: "PO", key: "PO_NO", part: "PN", party: "ACCOUNT_NAME", partyLabel: "Vendor", person: "OURCONTACT", due: "DUE_DATE", notes: "NOTES" } }
     ],
     "Accounting & Finance": [
       { id: "invoices", label: "Invoices", queryName: "dashboards.invoice_search" }
@@ -1087,9 +1101,8 @@
 
       try { renderPentagonCharts("plv", rows); } catch (e) { console.error("Pentagon chart render failed:", e); }
 
-      if (view.layout === "rfq" && rows && rows.length) {
-        lastRfqRows = rows;
-        renderRfqTable();
+      if (view.layout === "doc" && rows && rows.length) {
+        renderDocTable(view, rows);
         return;
       }
       var staleToolbar = document.getElementById("rfq-toolbar");
@@ -1115,47 +1128,65 @@
     });
   }
 
-  // ---------- RFQ layout ----------
-  // RFQs show six columns in a fixed order: Part number, Customer, Person,
-  // Due date, Status (✓ / ✗), Notes. Pentagon's column names vary a little
-  // between queries, so each column is located by likely names (findField).
-  // The ✓ / ✗ and the notes are the tracker's own — Pentagon is read-only
-  // from here — and only managers can change them.
-  var lastRfqRows = null;
-  var rfqMarks = {};
-  var rfqShowAll = false;
+  // ---------- Document layout (RFQs, Sales Orders, Purchase Orders) ----------
+  // These views show a fixed set of columns instead of every Pentagon field:
+  // Part number, Customer/Vendor, Pentagon user, Due date, Assigned to,
+  // Status (✓ / ✗), Notes. Each view names its exact Pentagon fields in
+  // PENTAGON_VIEWS[...].fields; anything not named falls back to a best guess
+  // by name (findField). Ticks, notes and assignments are the tracker's own —
+  // Pentagon is read-only from here — and only managers can change them.
+  var docRows = null;
+  var docView = null;
+  var rowMarks = {};
+  var docShowAll = false;
+  var assignableUsers = null; // loaded once, managers only
 
-  var RFQ_FIELDS = {
-    key: [["RFQ_NUMBER", "RFQ_NO", "RFQ_ID", "DOC_NUMBER", "DOC_NO", "DOC_ID"], ["RFQ_N", "DOC_N", "_ID", "NUMBER"]],
-    part: [["PN", "PART_NUMBER", "PART_NO", "PARTNO", "PART"], ["PART", "PN"]],
-    customer: [["CUSTOMER", "CUSTOMER_NAME", "COMPANY_NAME", "ACCOUNT_NAME", "CUST_NAME"], ["CUSTOMER", "CUST", "COMPANY", "ACCOUNT_NAME"]],
-    person: [["OURCONTACT", "SALESPERSON", "SALES_PERSON", "ENTERED_BY", "USER_NAME", "BUYER"], ["OURCONTACT", "SALES", "ENTERED_BY", "USER", "BUYER", "EMPLOYEE"]],
-    due: [["DUE_DATE", "DATE_DUE", "REQUIRED_DATE", "DATE_REQUIRED", "NEED_DATE", "RESPONSE_DATE"], ["DUE", "REQUIRED", "NEED"]],
-    notes: [["NOTES", "REMARKS", "COMMENTS", "MEMO"], ["NOTE", "REMARK", "COMMENT", "MEMO"]]
+  var FIELD_GUESSES = {
+    key: [["RFQ_NO", "PO_NO", "SO_NO", "DOC_NO", "RFQ_NUMBER", "DOC_NUMBER"], ["_NO", "NUMBER"]],
+    part: [["PN", "PART_NUMBER", "PART_NO", "PARTNO"], ["PART"]],
+    party: [["ACCOUNT_NAME", "CUSTOMER", "CUSTOMER_NAME", "VENDOR", "VENDOR_NAME", "COMPANY_NAME"], ["ACCOUNT_NAME", "CUSTOMER", "VENDOR", "COMPANY"]],
+    person: [["OURCONTACT", "BUYER", "SALESPERSON", "ENTERED_BY"], ["OURCONTACT", "BUYER", "SALES", "ENTERED_BY"]],
+    due: [["DUE_DATE", "DATE_DUE", "REQUIRED_DATE"], ["DUE"]],
+    notes: [["NOTES", "REMARKS", "COMMENTS"], ["NOTE", "REMARK", "COMMENT"]]
   };
 
-  function rfqField(row, name) {
-    return findField(row, RFQ_FIELDS[name][0], RFQ_FIELDS[name][1]);
+  function docField(view, row, name) {
+    var named = view.fields && view.fields[name];
+    if (named && Object.prototype.hasOwnProperty.call(row, named)) return named;
+    return findField(row, FIELD_GUESSES[name][0], FIELD_GUESSES[name][1]);
   }
   function cellText(v) {
     return v === null || v === undefined ? "" : String(v);
   }
-
-  function renderRfqTable() {
-    var table = document.getElementById("plv-table");
-    var empty = document.getElementById("plv-empty");
-    var rows = lastRfqRows || [];
-    // Marks are optional extras — show the table even if they fail to load.
-    api("/api/rfq-marks").then(function (marks) { rfqMarks = marks || {}; })
-      .catch(function () { rfqMarks = {}; })
-      .then(function () { drawRfqTable(table, empty, rows); });
+  // RFQ marks keep their original plain key; other views are prefixed.
+  function markKey(view, docNo) {
+    return view.id === "rfqs" ? docNo : view.id + ":" + docNo;
   }
 
-  function drawRfqTable(table, empty, rows) {
+  function renderDocTable(view, rows) {
+    docView = view;
+    docRows = rows;
+    var table = document.getElementById("plv-table");
+    var empty = document.getElementById("plv-empty");
+    var loads = [
+      api("/api/rfq-marks").then(function (m) { rowMarks = m || {}; }).catch(function () { rowMarks = {}; })
+    ];
+    if (isManager() && !assignableUsers) {
+      loads.push(api("/api/users?company=" + encodeURIComponent("SOI Aviation"))
+        .then(function (users) { assignableUsers = users.map(function (u) { return u.username; }).sort(); })
+        .catch(function () { assignableUsers = []; }));
+    }
+    // Marks and the people list are extras — the table still shows if they fail.
+    Promise.all(loads).then(function () { drawDocTable(table, empty); });
+  }
+
+  function drawDocTable(table, empty) {
+    var view = docView, rows = docRows || [];
     var sample = rows[0];
     var f = {};
-    Object.keys(RFQ_FIELDS).forEach(function (k) { f[k] = rfqField(sample, k); });
+    Object.keys(FIELD_GUESSES).forEach(function (k) { f[k] = docField(view, sample, k); });
     var manager = isManager();
+    var partyLabel = (view.fields && view.fields.partyLabel) || "Customer";
 
     var toolbar = document.getElementById("rfq-toolbar");
     if (!toolbar) {
@@ -1164,41 +1195,64 @@
       toolbar.className = "rfq-toolbar";
       table.parentElement.insertBefore(toolbar, table);
     }
+    var missing = [];
+    if (!f.part) missing.push("part number");
+    if (!f.person) missing.push("Pentagon user");
     toolbar.innerHTML =
-      '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="rfq-show-all"' + (rfqShowAll ? " checked" : "") + " /> Show all Pentagon columns</label>" +
-      "<span>" + (manager ? "Tick ✓ / ✗ and edit notes — managers only." : "Only managers can tick RFQs off.") + "</span>" +
-      (f.key ? "" : '<span style="color:var(--red);">No RFQ number column found, so ticks and notes can\'t be saved.</span>');
+      '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="rfq-show-all"' + (docShowAll ? " checked" : "") + " /> Show all Pentagon columns</label>" +
+      "<span>" + (manager ? "Assign, tick ✓ / ✗ and add notes — managers only." : "Only managers can assign, tick or add notes.") + "</span>" +
+      (missing.length ? '<span>This Pentagon query doesn\'t return ' + missing.join(" or ") + " yet.</span>" : "") +
+      (f.key ? "" : '<span style="color:var(--red);">No document number column found, so changes can\'t be saved.</span>');
     document.getElementById("rfq-show-all").addEventListener("change", function () {
-      rfqShowAll = this.checked;
-      drawRfqTable(table, empty, rows);
+      docShowAll = this.checked;
+      drawDocTable(table, empty);
     });
 
-    if (rfqShowAll) {
+    if (docShowAll) {
       table.classList.remove("rfq-table");
       table.innerHTML = buildAutoTableHtml(rows);
     } else {
-      var head = "<thead><tr><th>Part number</th><th>Customer</th><th>Person</th><th>Due date</th><th>Status</th><th>Notes</th></tr></thead>";
-      var body = rows.map(function (r) {
-        var key = f.key ? cellText(r[f.key]) : "";
-        var mark = key ? rfqMarks[key] : null;
+      var head = "<thead><tr><th>Part number</th><th>" + escapeHtml(partyLabel) + "</th><th>Pentagon user</th><th>Due date</th><th>Assigned to</th><th>Status</th><th>Notes</th></tr></thead>";
+      var body = rows.map(function (r, i) {
+        var docNo = f.key ? cellText(r[f.key]) : "";
+        var key = docNo ? markKey(view, docNo) : "";
+        var mark = key ? rowMarks[key] : null;
         var done = !!(mark && mark.done);
         var symbol = '<span class="rfq-mark ' + (done ? "done" : "open") + '" title="' + (done ? "Done" : "Open") + '">' + (done ? "✓" : "✗") + "</span>";
         var status = manager && key
-          ? '<button class="rfq-mark-btn" data-rfq-toggle="' + escapeHtml(key) + '" title="' + (done ? "Mark as open" : "Mark as done") + '">' + symbol + "</button>"
+          ? '<button class="rfq-mark-btn" data-row="' + i + '" data-act="toggle" title="' + (done ? "Mark as open" : "Mark as done") + '">' + symbol + "</button>"
           : symbol;
+
+        var assignee = mark && mark.assignee ? mark.assignee : "";
+        var assign;
+        if (manager && key) {
+          var opts = ['<option value="">Unassigned</option>'].concat((assignableUsers || []).map(function (u) {
+            return '<option value="' + escapeHtml(u) + '"' + (sameUser(u, assignee) ? " selected" : "") + ">" + escapeHtml(u) + "</option>";
+          }));
+          if (assignee && !(assignableUsers || []).some(function (u) { return sameUser(u, assignee); })) {
+            opts.push('<option value="' + escapeHtml(assignee) + '" selected>' + escapeHtml(assignee) + "</option>");
+          }
+          assign = '<select class="rfq-assign" data-row="' + i + '" data-act="assign">' + opts.join("") + "</select>";
+        } else {
+          assign = assignee ? escapeHtml(assignee) : '<span class="rfq-sub">—</span>';
+        }
+
         var pentagonNote = f.notes ? cellText(r[f.notes]) : "";
         var ourNote = mark && mark.notes ? mark.notes : "";
         var notes = manager && key
-          ? '<div class="rfq-notes"><input type="text" maxlength="500" value="' + escapeHtml(ourNote) + '" data-rfq-note="' + escapeHtml(key) + '" placeholder="Add a note" />' +
-            '<button class="btn-secondary" data-rfq-save="' + escapeHtml(key) + '">Save</button></div>'
+          ? '<div class="rfq-notes"><input type="text" maxlength="500" value="' + escapeHtml(ourNote) + '" placeholder="Add a note" />' +
+            '<button class="btn-secondary" data-row="' + i + '" data-act="notes">Save</button></div>'
           : escapeHtml(ourNote);
         if (pentagonNote) notes += '<div class="rfq-sub">Pentagon: ' + escapeHtml(pentagonNote) + "</div>";
-        var refLine = key ? '<div class="rfq-sub">RFQ ' + escapeHtml(key) + "</div>" : "";
+
+        var part = f.part ? cellText(r[f.part]) : "";
+        var refLine = docNo ? '<div class="rfq-sub">' + escapeHtml(view.fields.docLabel || "Doc") + " " + escapeHtml(docNo) + "</div>" : "";
         return "<tr>" +
-          "<td>" + escapeHtml(f.part ? cellText(r[f.part]) : "") + refLine + "</td>" +
-          "<td>" + escapeHtml(f.customer ? cellText(r[f.customer]) : "") + "</td>" +
+          "<td>" + (part ? escapeHtml(part) : '<span class="rfq-sub">—</span>') + refLine + "</td>" +
+          "<td>" + escapeHtml(f.party ? cellText(r[f.party]) : "") + "</td>" +
           "<td>" + escapeHtml(f.person ? cellText(r[f.person]) : "") + "</td>" +
           "<td>" + escapeHtml(f.due ? cellText(r[f.due]).slice(0, 10) : "") + "</td>" +
+          "<td>" + assign + "</td>" +
           '<td class="rfq-status">' + status + "</td>" +
           "<td>" + notes + "</td>" +
           "</tr>";
@@ -1209,29 +1263,48 @@
     table.style.display = "table";
     empty.style.display = "none";
 
-    table.querySelectorAll("[data-rfq-toggle]").forEach(function (btn) {
+    function rowInfo(i) {
+      var r = rows[i];
+      var docNo = cellText(r[f.key]);
+      return {
+        key: markKey(view, docNo),
+        snapshot: {
+          label: view.fields.docLabel || "Doc",
+          docNo: docNo,
+          party: f.party ? cellText(r[f.party]) : "",
+          dueDate: f.due ? cellText(r[f.due]).slice(0, 10) : "",
+          pentagonUser: f.person ? cellText(r[f.person]) : ""
+        }
+      };
+    }
+    table.querySelectorAll('[data-act="toggle"]').forEach(function (btn) {
       btn.addEventListener("click", function () {
-        var key = btn.getAttribute("data-rfq-toggle");
-        var done = !(rfqMarks[key] && rfqMarks[key].done);
-        saveRfqMark(key, { done: done });
+        var info = rowInfo(+btn.getAttribute("data-row"));
+        saveRowMark(info, { done: !(rowMarks[info.key] && rowMarks[info.key].done) });
       });
     });
-    table.querySelectorAll("[data-rfq-save]").forEach(function (btn) {
+    table.querySelectorAll('[data-act="notes"]').forEach(function (btn) {
       btn.addEventListener("click", function () {
-        var key = btn.getAttribute("data-rfq-save");
-        var input = btn.parentElement.querySelector("input");
-        saveRfqMark(key, { notes: input.value });
+        var info = rowInfo(+btn.getAttribute("data-row"));
+        saveRowMark(info, { notes: btn.parentElement.querySelector("input").value });
+      });
+    });
+    table.querySelectorAll('[data-act="assign"]').forEach(function (sel) {
+      sel.addEventListener("change", function () {
+        saveRowMark(rowInfo(+sel.getAttribute("data-row")), { assignee: sel.value });
       });
     });
   }
 
-  function saveRfqMark(key, change) {
+  function saveRowMark(info, change) {
     setSync("busy", "Saving…");
-    api("/api/rfq-marks/" + encodeURIComponent(key), { method: "PUT", body: JSON.stringify(change) })
+    var body = Object.assign({ view: docView.id, snapshot: info.snapshot }, change);
+    api("/api/rfq-marks/" + encodeURIComponent(info.key), { method: "PUT", body: JSON.stringify(body) })
       .then(function (mark) {
         setSync("on", "Live");
-        rfqMarks[key] = mark;
-        drawRfqTable(document.getElementById("plv-table"), document.getElementById("plv-empty"), lastRfqRows || []);
+        rowMarks[info.key] = mark;
+        if (change.assignee !== undefined) toast(change.assignee ? "Assigned to " + change.assignee + "." : "Unassigned.");
+        drawDocTable(document.getElementById("plv-table"), document.getElementById("plv-empty"));
       })
       .catch(function (err) {
         setSync("on", "Live");
@@ -1279,7 +1352,43 @@
     runMentionsSearch();
   }
 
+  // RFQs / SOs / POs a manager assigned to you from a department tab.
+  function loadAssignedToMe() {
+    var table = document.getElementById("mn-assigned-table");
+    var empty = document.getElementById("mn-assigned-empty");
+    api("/api/rfq-marks/mine").then(function (items) {
+      if (!items.length) {
+        table.style.display = "none";
+        empty.style.display = "block";
+        empty.textContent = "Nothing has been assigned to you.";
+        return;
+      }
+      items.sort(function (a, b) { return Number(!!a.done) - Number(!!b.done) || String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999")); });
+      table.innerHTML =
+        "<thead><tr><th>Document</th><th>Customer / Vendor</th><th>Pentagon user</th><th>Due date</th><th>Status</th><th>Notes</th><th>Assigned by</th></tr></thead><tbody>" +
+        items.map(function (m) {
+          var done = !!m.done;
+          return "<tr>" +
+            "<td>" + escapeHtml((m.label || "") + " " + (m.docNo || m.key)) + "</td>" +
+            "<td>" + escapeHtml(m.party || "") + "</td>" +
+            "<td>" + escapeHtml(m.pentagonUser || "") + "</td>" +
+            "<td>" + escapeHtml(m.dueDate || "") + "</td>" +
+            '<td class="rfq-status"><span class="rfq-mark ' + (done ? "done" : "open") + '">' + (done ? "✓" : "✗") + "</span></td>" +
+            "<td>" + escapeHtml(m.notes || "") + "</td>" +
+            "<td>" + escapeHtml(m.assignedBy || "") + "</td>" +
+            "</tr>";
+        }).join("") + "</tbody>";
+      table.style.display = "table";
+      empty.style.display = "none";
+    }).catch(function (err) {
+      table.style.display = "none";
+      empty.style.display = "block";
+      empty.textContent = err.message || "Couldn't load your assignments.";
+    });
+  }
+
   function runMentionsSearch() {
+    loadAssignedToMe();
     var statusMsg = document.getElementById("mn-status-msg");
     var noCode = document.getElementById("mn-no-code");
     var content = document.getElementById("mn-content");
