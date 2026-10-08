@@ -224,6 +224,17 @@
   .rfq-sub { font-size: 11px; color: var(--text-faint); margin-top: 2px; }
   .rfq-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; font-size: 12.5px; color: var(--text-dim); }
   .card.readonly { cursor: pointer; opacity: 0.92; }
+  .badge.src { background: var(--surface-2); color: var(--text-dim); border: 1px solid var(--border); }
+  .board-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+  .board-filters .sub-tabs button { padding: 5px 12px; font-size: 12px; }
+  .board-filters select {
+    padding: 5px 10px; border: 1px solid var(--border); border-radius: 100px;
+    background: var(--surface); color: var(--text); font-size: 12px; font-family: inherit;
+  }
+  .board-filters .note { font-size: 12px; color: var(--text-faint); }
+  .breakdown-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; margin-bottom: 18px; }
+  .breakdown-grid .global-table td { text-align: center; }
+  @media (max-width: 600px) { .breakdown-grid { grid-template-columns: 1fr; } }
   .card .lock { font-size: 11px; color: var(--text-faint); margin-top: 4px; }
 
   .sub-tabs { display: flex; gap: 6px; }
@@ -331,6 +342,7 @@
       <div id="deptSubTabs" style="display:none;margin-bottom:16px;"></div>
 
       <div id="taskBoardView">
+        <div class="board-filters" id="boardFilters"></div>
         <div class="stat-row" id="statRow"></div>
 
         <div class="chart-row">
@@ -343,6 +355,8 @@
             <div class="chart-wrap"><canvas id="chartPriority"></canvas></div>
           </div>
         </div>
+
+        <div id="teamBreakdown" style="display:none;"></div>
 
         <div class="board-head">
           <span class="sub" id="boardHint" style="font-size:12.5px;color:var(--text-faint);">Drag cards between columns to update status</span>
@@ -657,8 +671,8 @@
       (me.fullAccess ? "Full access" : me.departments.join(", ") + (me.manager ? " · Manager" : "")) +
       (me.companies.length === 1 ? " · " + me.companies[0] : "");
     document.getElementById("bannerText").innerHTML = isManager()
-      ? "<b>Manual entry for now.</b> This board will auto-populate once tied into Pentagon. As a manager you can assign tasks to anyone and move cards between columns."
-      : "<b>Manual entry for now.</b> This board will auto-populate once tied into Pentagon. You can add your own tasks; only a manager can change a task's status, and tasks a manager gave you are read-only.";
+      ? "<b>Pentagon RFQs, Quotes, Sales Orders and Purchase Orders appear on the board automatically</b>, next to tasks added here. As a manager you can assign anything to anyone and move cards between columns."
+      : "<b>Pentagon RFQs, Quotes, Sales Orders and Purchase Orders that are yours appear on the board automatically.</b> You can add your own tasks; only a manager can change a task's status, and anything a manager gave you is read-only.";
     document.getElementById("boardHint").textContent = isManager()
       ? "Drag cards between columns to update status"
       : "Only managers can move cards between columns";
@@ -677,6 +691,8 @@
     return String(a || "").toLowerCase() === String(b || "").toLowerCase();
   }
   function canEditTask(t) {
+    // Pentagon rows are a manager's to change; the rest follow who made them.
+    if (t.source === "pentagon") return isManager();
     return isManager() || sameUser(t.createdBy, me.username);
   }
 
@@ -731,10 +747,24 @@
 
   var tasksLoadedOnce = false;
 
+  function docLabelOf(view) {
+    return view.docLabel || (view.fields && view.fields.docLabel) || "Doc";
+  }
+
+  function loadPentagonViews() {
+    return api("/api/pentagon-views").then(function (cfg) {
+      if (cfg && cfg.views) PENTAGON_VIEWS = cfg.views;
+      if (cfg && cfg.guesses) FIELD_GUESSES = cfg.guesses;
+      if (activeSubView === "tasks") updateDeptSubTabs();
+      renderBoardFilters();
+    }).catch(function () { /* keep the built-in fallback */ });
+  }
+
   function startApp() {
     buildTabs();
     populateDeptSelect();
     updateDeptSubTabs();
+    loadPentagonViews();
     fetchTasks(true);
     if (!pollTimer) {
       pollTimer = setInterval(fetchTasks, 15000);
@@ -797,13 +827,15 @@
   }
 
   // ---------- Department data views (Pentagon-backed lists) ----------
-  // Add an entry here once a department's query exists in Pentagon — the
-  // sub-tab, filter bar, and table all build themselves from this config.
+  // The real list comes from the server (pentagonViews.js, via
+  // /api/pentagon-views) so the board cards and these tables share one
+  // config. This copy is only a fallback if that request fails.
   var PENTAGON_VIEWS = {
     "Procurement": [
       { id: "rfqs", label: "RFQs", queryName: "dashboards.rfq", layout: "doc",
         fields: { docLabel: "RFQ", key: "RFQ_NO", part: "PN", party: "ACCOUNT_NAME", partyLabel: "Customer", person: "OURCONTACT", due: "DUE_DATE", notes: "NOTES" } },
-      { id: "quotes", label: "Quotes", queryName: "dashboards.quotes" }
+      { id: "quotes", label: "Quotes", queryName: "dashboards.quotes", layout: "doc",
+        fields: { docLabel: "Quote", key: "QUOTE_NO", part: "PN", party: "ACCOUNT_NAME", partyLabel: "Customer", person: "OURCONTACT", due: "DUE_DATE", notes: "NOTES" } }
     ],
     "Purchasing": [
       { id: "sales_orders", label: "Sales Orders", queryName: "dashboards.so", layout: "doc",
@@ -1246,7 +1278,7 @@
         if (pentagonNote) notes += '<div class="rfq-sub">Pentagon: ' + escapeHtml(pentagonNote) + "</div>";
 
         var part = f.part ? cellText(r[f.part]) : "";
-        var refLine = docNo ? '<div class="rfq-sub">' + escapeHtml(view.fields.docLabel || "Doc") + " " + escapeHtml(docNo) + "</div>" : "";
+        var refLine = docNo ? '<div class="rfq-sub">' + escapeHtml(docLabelOf(view)) + " " + escapeHtml(docNo) + "</div>" : "";
         return "<tr>" +
           "<td>" + (part ? escapeHtml(part) : '<span class="rfq-sub">—</span>') + refLine + "</td>" +
           "<td>" + escapeHtml(f.party ? cellText(r[f.party]) : "") + "</td>" +
@@ -1269,7 +1301,7 @@
       return {
         key: markKey(view, docNo),
         snapshot: {
-          label: view.fields.docLabel || "Doc",
+          label: docLabelOf(view),
           docNo: docNo,
           party: f.party ? cellText(r[f.party]) : "",
           dueDate: f.due ? cellText(r[f.due]).slice(0, 10) : "",
@@ -1449,8 +1481,14 @@
   function fetchTasks(isInitial) {
     setSync("busy", "Syncing…");
     var url = activeCompany === AOG ? "/api/tasks" : "/api/tasks?company=" + encodeURIComponent(activeCompany);
-    return api(url).then(function (tasks) {
-      allTasks = tasks;
+    var wantPentagon = activeCompany === "SOI Aviation" || (activeCompany === AOG && me.companies.indexOf("SOI Aviation") !== -1);
+    // Pentagon cards are an extra: if they fail, the manual board still loads.
+    var pentagon = wantPentagon
+      ? api("/api/pentagon-tasks").catch(function () { return { cards: [], errors: ["Couldn't load Pentagon rows."] }; })
+      : Promise.resolve({ cards: [], errors: [] });
+    return Promise.all([api(url), pentagon]).then(function (results) {
+      pentagonErrors = results[1].errors || [];
+      allTasks = results[0].concat(results[1].cards || []);
       tasksLoadedOnce = true;
       setSync("on", "Live");
       render();
@@ -1466,9 +1504,149 @@
     });
   }
 
-  function tasksForActiveTab() {
+  // ---------- Board filters ----------
+  // Source: "all", "tasks" (made in the tracker), or a Pentagon view id
+  // ("rfqs", "quotes", "sales_orders", "purchase_orders"); on Overview,
+  // "pentagon" means any Pentagon row. Person: managers only.
+  var pentagonErrors = [];
+  var boardSource = "all";
+  var boardPerson = "";
+
+  function isPentagonCard(t) { return t.source === "pentagon"; }
+
+  function tasksInTab() {
     if (activeTab === OVERVIEW_KEY) return allTasks;
     return allTasks.filter(function (t) { return t.department === activeTab; });
+  }
+
+  function tasksForActiveTab() {
+    return tasksInTab().filter(function (t) {
+      if (boardSource === "tasks" && isPentagonCard(t)) return false;
+      if (boardSource === "pentagon" && !isPentagonCard(t)) return false;
+      if (boardSource !== "all" && boardSource !== "tasks" && boardSource !== "pentagon" && t.view !== boardSource) return false;
+      if (boardPerson && !sameUser(t.owner, boardPerson) && !sameUser(t.createdBy, boardPerson)) return false;
+      return true;
+    });
+  }
+
+  function renderBoardFilters() {
+    var wrap = document.getElementById("boardFilters");
+    if (!wrap || !me) return;
+    var sources = [{ id: "all", label: "All" }, { id: "tasks", label: "Tasks" }];
+    if (activeTab === OVERVIEW_KEY) {
+      if (allTasks.some(isPentagonCard)) sources.push({ id: "pentagon", label: "Pentagon" });
+    } else {
+      (PENTAGON_VIEWS[activeTab] || []).forEach(function (v) {
+        if (v.tasks || v.layout === "doc") sources.push({ id: v.id, label: v.label });
+      });
+    }
+    if (!sources.some(function (s) { return s.id === boardSource; })) boardSource = "all";
+
+    var html = '<span class="note">Show:</span><div class="sub-tabs">' + sources.map(function (s) {
+      return '<button data-src="' + escapeHtml(s.id) + '"' + (s.id === boardSource ? ' class="active"' : "") + ">" + escapeHtml(s.label) + "</button>";
+    }).join("") + "</div>";
+
+    if (isManager()) {
+      var people = {};
+      tasksInTab().forEach(function (t) {
+        if (t.owner) people[t.owner] = true;
+        if (t.createdBy && !isPentagonCard(t)) people[t.createdBy] = true;
+      });
+      var names = Object.keys(people).sort(function (a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); });
+      if (boardPerson && names.indexOf(boardPerson) === -1) names.unshift(boardPerson);
+      html += '<select id="boardPerson" title="Show one person\'s work"><option value="">Everyone</option>' +
+        names.map(function (n) {
+          return '<option value="' + escapeHtml(n) + '"' + (n === boardPerson ? " selected" : "") + ">" + escapeHtml(n) + "</option>";
+        }).join("") + "</select>";
+    }
+    if (pentagonErrors.length) {
+      html += '<span class="note" title="' + escapeHtml(pentagonErrors.join("; ")) + '">Some Pentagon rows couldn\'t load.</span>';
+    }
+    wrap.innerHTML = html;
+    wrap.querySelectorAll("[data-src]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        boardSource = btn.getAttribute("data-src");
+        render();
+      });
+    });
+    var personSel = document.getElementById("boardPerson");
+    if (personSel) {
+      personSel.addEventListener("change", function () {
+        boardPerson = this.value;
+        render();
+      });
+    }
+  }
+
+  // ---------- Team breakdown (Overview, managers only) ----------
+  var breakdownCharts = [];
+  var breakdownLoadedAt = 0;
+
+  function renderTeamBreakdown() {
+    var wrap = document.getElementById("teamBreakdown");
+    var show = activeTab === OVERVIEW_KEY && isManager() &&
+      (activeCompany === "SOI Aviation" || activeCompany === AOG);
+    if (!show) { wrap.style.display = "none"; return; }
+    wrap.style.display = "block";
+    // The board refreshes every 15s; the breakdown only needs a minute.
+    if (Date.now() - breakdownLoadedAt < 60000 && wrap.innerHTML) return;
+    breakdownLoadedAt = Date.now();
+    api("/api/team-breakdown").then(drawTeamBreakdown).catch(function (err) {
+      if (err.message === "Session expired") return;
+      wrap.innerHTML = '<div class="chart-card"><h3>Team breakdown</h3><div class="empty-col">' + escapeHtml(err.message) + "</div></div>";
+    });
+  }
+
+  function drawTeamBreakdown(data) {
+    var wrap = document.getElementById("teamBreakdown");
+    breakdownCharts.forEach(function (c) { c.destroy(); });
+    breakdownCharts = [];
+    var depts = Object.keys(data.departments || {});
+    var anyPeople = depts.some(function (d) { return data.departments[d].people.length; });
+    if (!depts.length || !anyPeople) {
+      wrap.innerHTML = '<div class="chart-card" style="margin-bottom:18px;"><h3>Team breakdown</h3><div class="empty-col" style="padding:8px 0;">' +
+        'Tick "Show in team breakdown" on each person\'s login in /admin.html (and set their Pentagon code) to see their numbers here.</div></div>';
+      return;
+    }
+    wrap.innerHTML = '<div class="breakdown-grid">' + depts.map(function (d, i) {
+      var dept = data.departments[d];
+      var head = "<thead><tr><th>Person</th>" + dept.columns.map(function (c) { return "<th>" + escapeHtml(c.label) + "</th>"; }).join("") + "</tr></thead>";
+      var body = "<tbody>" + dept.people.map(function (p) {
+        return "<tr><td>" + escapeHtml(p.username) + (p.pentagonCode ? ' <span class="rfq-sub" style="display:inline;">(' + escapeHtml(p.pentagonCode) + ")</span>" : "") + "</td>" +
+          dept.columns.map(function (c) { return "<td>" + (p.counts[c.id] || 0) + "</td>"; }).join("") + "</tr>";
+      }).join("") + "</tbody>";
+      return '<div class="chart-card"><h3>' + escapeHtml(d) + " — by person</h3>" +
+        '<div class="chart-wrap"><canvas id="breakdownChart' + i + '"></canvas></div>' +
+        '<table class="global-table" style="margin-top:10px;">' + head + body + "</table></div>";
+    }).join("") + "</div>" +
+      '<div class="rfq-sub" style="margin:-8px 0 16px;">' + escapeHtml(data.windowNote || "") + "</div>";
+
+    if (typeof Chart === "undefined") return;
+    var isDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    var tickColor = isDark ? "#a4aab8" : "#5b6270";
+    var gridColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
+    var palette = ["#4a6fa5", "#a6192e", "#b5791e", "#2f7a4f"];
+    depts.forEach(function (d, i) {
+      var dept = data.departments[d];
+      var ctx = document.getElementById("breakdownChart" + i).getContext("2d");
+      breakdownCharts.push(new Chart(ctx, {
+        type: "bar",
+        data: {
+          labels: dept.people.map(function (p) { return p.username; }),
+          datasets: dept.columns.map(function (c, j) {
+            return { label: c.label, data: dept.people.map(function (p) { return p.counts[c.id] || 0; }), backgroundColor: palette[j % palette.length] };
+          })
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { position: "bottom", labels: { color: tickColor, boxWidth: 10, font: { size: 10.5 } } } },
+          scales: {
+            x: { ticks: { color: tickColor, font: { size: 10.5 } }, grid: { display: false } },
+            y: { beginAtZero: true, ticks: { color: tickColor, precision: 0 }, grid: { color: gridColor } }
+          }
+        }
+      }));
+    });
   }
 
   function isOverdue(t) {
@@ -1642,13 +1820,18 @@
 
     card.innerHTML =
       '<div class="row1"><div class="title">' + escapeHtml(t.title) + '</div>' +
-      (editable ? '<button class="del" title="Delete" data-id="' + escapeHtml(t.id) + '">×</button>' : "") + "</div>" +
+      (editable && !isPentagonCard(t) ? '<button class="del" title="Delete" data-id="' + escapeHtml(t.id) + '">×</button>' : "") + "</div>" +
       '<div class="meta">' + companyBadge + deptBadge +
+      (isPentagonCard(t) ? '<span class="badge src" title="From Pentagon">' + escapeHtml(t.docLabel || "Pentagon") + "</span>" : "") +
       '<span class="badge pri-' + t.priority + '">' + t.priority.charAt(0).toUpperCase() + t.priority.slice(1) + " priority</span></div>" +
-      (t.owner ? '<div class="owner">' + escapeHtml(t.owner) + "</div>" : "") +
+      (t.owner ? '<div class="owner">' + escapeHtml(t.owner) +
+        (isPentagonCard(t) && t.assignee && t.pentagonUser && !sameUser(t.assignee, t.createdBy) ? ' <span class="rfq-sub" style="display:inline;">(by ' + escapeHtml(t.pentagonUser) + " in Pentagon)</span>" : "") +
+        "</div>" : "") +
       (t.dueDate ? '<div class="due' + (overdue ? " overdue" : "") + '">' + (overdue ? "Overdue — was due " : "Due ") + fmtDate(t.dueDate) + "</div>" : "") +
       (t.notes ? '<div class="notes">' + escapeHtml(t.notes) + "</div>" : "") +
-      (editable ? "" : '<div class="lock">Assigned by ' + escapeHtml(t.createdBy || "a manager") + " — read-only</div>");
+      (editable ? "" : isPentagonCard(t)
+        ? '<div class="lock">From Pentagon — only a manager can change it</div>'
+        : '<div class="lock">Assigned by ' + escapeHtml(t.createdBy || "a manager") + " — read-only</div>");
 
     card.addEventListener("dragstart", function (e) {
       draggingId = t.id;
@@ -1679,7 +1862,9 @@
     // Each piece renders independently — if one throws (e.g. the charting
     // library failed to load over a restricted network), the others still
     // show up instead of the whole page going blank.
+    try { renderBoardFilters(); } catch (e) { console.error("renderBoardFilters failed:", e); }
     try { renderStats(list); } catch (e) { console.error("renderStats failed:", e); }
+    try { renderTeamBreakdown(); } catch (e) { console.error("renderTeamBreakdown failed:", e); }
     try { renderCharts(list); } catch (e) { console.error("renderCharts failed:", e); }
     try { renderBoard(list); } catch (e) { console.error("renderBoard failed:", e); }
   }
@@ -1866,9 +2051,27 @@
   });
 
   // ---------- Writes ----------
+  function findTask(id) {
+    return allTasks.filter(function (t) { return t.id === id; })[0] || null;
+  }
+
+  // Pentagon cards save to the row's mark, the same record the RFQ/SO/PO
+  // tables use, so the card and the ✓ / ✗ always agree.
+  function saveCardMark(t, change) {
+    var body = Object.assign({
+      view: t.view,
+      snapshot: { label: t.docLabel, docNo: t.docNo, party: t.party, dueDate: t.dueDate, pentagonUser: t.pentagonUser }
+    }, change);
+    return api("/api/rfq-marks/" + encodeURIComponent(t.markKey), { method: "PUT", body: JSON.stringify(body) });
+  }
+
   function updateTaskStatus(id, status) {
     setSync("busy", "Saving…");
-    api("/api/tasks/" + id, { method: "PATCH", body: JSON.stringify({ status: status }) })
+    var t = findTask(id);
+    var save = t && isPentagonCard(t)
+      ? saveCardMark(t, { status: status })
+      : api("/api/tasks/" + id, { method: "PATCH", body: JSON.stringify({ status: status }) });
+    save
       .then(function () { setSync("on", "Live"); fetchTasks(); })
       .catch(function (err) {
         setSync("on", "Live");
@@ -1983,14 +2186,26 @@
   function openEditModal(t) {
     editingTaskId = t.id;
     var editable = canEditTask(t);
+    var fromPentagon = isPentagonCard(t);
     setFormReadOnly(!editable);
-    document.getElementById("modalTitle").textContent = editable ? "Edit task" : "Task (read-only)";
+    // A Pentagon row's title, department and due date come from Pentagon.
+    if (fromPentagon) {
+      document.getElementById("f-title").disabled = true;
+      document.getElementById("f-due").disabled = true;
+      document.getElementById("f-dept").disabled = true;
+    }
+    document.getElementById("modalTitle").textContent = fromPentagon
+      ? (editable ? "Pentagon " + (t.docLabel || "row") : "Pentagon " + (t.docLabel || "row") + " (read-only)")
+      : (editable ? "Edit task" : "Task (read-only)");
     document.getElementById("submitTaskBtn").textContent = "Save changes";
     document.getElementById("deleteTaskBtn").style.display = editable ? "inline-block" : "none";
     // Status is a manager's call; everyone else just sees the column it's in.
     document.getElementById("statusField").style.display = isManager() ? "block" : "none";
-    document.getElementById("formMsg").textContent = editable ? "" :
-      "Assigned by " + (t.createdBy || "a manager") + ". Only they or another manager can change it.";
+    document.getElementById("formMsg").textContent = fromPentagon
+      ? (t.pentagonUser ? "Entered in Pentagon by " + t.pentagonUser + ". " : "") +
+        (editable ? "Owner = who it's assigned to (Unassigned leaves it with the Pentagon user)." : "Only a manager can change it.")
+      : editable ? "" : "Assigned by " + (t.createdBy || "a manager") + ". Only they or another manager can change it.";
+    if (fromPentagon) document.getElementById("deleteTaskBtn").style.display = "none";
 
     document.getElementById("f-title").value = t.title;
     document.getElementById("f-status").value = t.status;
@@ -2023,7 +2238,7 @@
         sel.innerHTML = '<option value="' + escapeHtml(t.owner || "") + '">' + escapeHtml(t.owner || "Unassigned") + "</option>";
         sel.disabled = true;
       }
-      sel.value = t.owner || "";
+      sel.value = fromPentagon ? (t.assignee || "") : (t.owner || "");
     });
 
     modalBackdrop.classList.add("open");
@@ -2060,6 +2275,24 @@
     var msg = document.getElementById("formMsg");
     msg.textContent = "";
     setSync("busy", "Saving…");
+
+    var editingCard = editingTaskId ? findTask(editingTaskId) : null;
+    if (editingCard && isPentagonCard(editingCard)) {
+      saveCardMark(editingCard, {
+        status: document.getElementById("f-status").value,
+        priority: body.priority,
+        notes: body.notes,
+        assignee: document.getElementById("f-owner").value
+      }).then(function () {
+        setSync("on", "Live");
+        modalBackdrop.classList.remove("open");
+        fetchTasks();
+      }).catch(function (err) {
+        setSync("on", "Live");
+        msg.textContent = err.message || "Couldn't save.";
+      });
+      return;
+    }
 
     if (editingTaskId) {
       if (isManager()) body.status = document.getElementById("f-status").value;

@@ -158,6 +158,16 @@
         </div>
         <div class="hint" style="margin-top:-10px;">Full-access logins are managers automatically. Everyone else sees only their own tasks, and tasks a manager gives them are read-only.</div>
 
+        <div class="field">
+          <div class="check-grid">
+            <div class="check-row full-access-row">
+              <input type="checkbox" id="u-breakdown" />
+              <label for="u-breakdown" style="margin:0;font-weight:600;color:var(--text);">Show in team breakdown — list this person's RFQs, Quotes, Sales Orders, Purchase Orders and tasks on the managers' Overview</label>
+            </div>
+          </div>
+        </div>
+        <div class="hint" style="margin-top:-10px;">Their Pentagon work is matched using the Pentagon code above, so set that too.</div>
+
         <div class="field" id="deptField">
           <label>Departments (only needed without full access)</label>
           <div class="check-grid" id="deptChecks"></div>
@@ -326,7 +336,8 @@
         var accessCell = (u.fullAccess
           ? '<span class="tag full">Full access</span>'
           : (u.departments || []).map(function (d) { return '<span class="tag">' + escapeHtml(d) + '</span>'; }).join("") || "—") +
-          (u.manager || u.fullAccess ? ' <span class="tag full">Manager</span>' : "");
+          (u.manager || u.fullAccess ? ' <span class="tag full">Manager</span>' : "") +
+          (u.breakdown ? ' <span class="tag">In breakdown</span>' : "");
         tr.innerHTML =
           "<td>" + escapeHtml(u.username) + "</td>" +
           "<td>" + escapeHtml(u.email || "") + "</td>" +
@@ -386,6 +397,7 @@
     setCheckedValues('#companyChecks input[type="checkbox"]', user.companies || []);
 
     document.getElementById("u-manager").checked = !!user.manager;
+    document.getElementById("u-breakdown").checked = !!user.breakdown;
     var fullAccessBox = document.getElementById("u-fullaccess");
     fullAccessBox.checked = !!user.fullAccess;
     setCheckedValues('#deptChecks input[type="checkbox"]', user.departments || []);
@@ -442,6 +454,7 @@
       companies: companies,
       fullAccess: fullAccess,
       manager: document.getElementById("u-manager").checked,
+      breakdown: document.getElementById("u-breakdown").checked,
       departments: departments
     };
     api("/api/admin/users", { method: "POST", body: JSON.stringify(body) })

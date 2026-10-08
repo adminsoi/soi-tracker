@@ -32,6 +32,14 @@ const {
 } = require("./s3store");
 const { sendMail } = require("./mailer");
 const { pentagonQuery } = require("./pentagon");
+const {
+  PENTAGON_VIEWS,
+  FIELD_GUESSES,
+  allViews,
+  resolveField,
+  markKey,
+  resultRows,
+} = require("./pentagonViews");
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 if (!ADMIN_PASSWORD) {
   console.error("Missing required env var: ADMIN_PASSWORD");
@@ -59,6 +67,7 @@ function normalizeUser(u) {
     departments,
     fullAccess: !!u.fullAccess,
     manager: !!u.manager,
+    breakdown: !!u.breakdown,
     pentagonCode: u.pentagonCode || "",
   };
 }
@@ -389,23 +398,11 @@ function canUsePentagon(user, activeCompany) {
   return user.fullAccess || user.departments.includes("Procurement");
 }
 
-// Each department tab's Pentagon list views, by view id and by query name.
-// Someone in that department (or with full access) may run that view's
-// query even without access to the general Pentagon tester.
-const VIEW_DEPARTMENTS = {
-  rfqs: "Procurement",
-  quotes: "Procurement",
-  sales_orders: "Purchasing",
-  purchase_orders: "Purchasing",
-  invoices: "Accounting & Finance",
-};
-const QUERY_DEPARTMENTS = {
-  "dashboards.rfq": "Procurement",
-  "dashboards.quotes": "Procurement",
-  "dashboards.so": "Purchasing",
-  "dashboards.po": "Purchasing",
-  "dashboards.invoice_search": "Accounting & Finance",
-};
+// Someone in a view's department (or with full access) may run that view's
+// query even without access to the general Pentagon tester. The views
+// themselves are defined in pentagonViews.js.
+const VIEW_DEPARTMENTS = Object.fromEntries(allViews().map((v) => [v.id, v.department]));
+const QUERY_DEPARTMENTS = Object.fromEntries(allViews().map((v) => [v.queryName, v.department]));
 
 function inDepartment(user, dept) {
   return !!dept && (user.fullAccess || user.departments.includes(dept));
@@ -575,6 +572,12 @@ app.put(
     }
     const key = String(req.params.key || "").trim().slice(0, 80);
     if (!key) return res.status(400).json({ error: "Missing document number" });
+    if ("status" in body && !TASK_STATUSES.includes(body.status)) {
+      return res.status(400).json({ error: "Invalid status" });
+    }
+    if ("priority" in body && !TASK_PRIORITIES.includes(body.priority)) {
+      return res.status(400).json({ error: "Invalid priority" });
+    }
 
     // Assign only to a real login (or "" to unassign), stored as its username.
     let assignee;
@@ -596,7 +599,16 @@ app.put(
     await withRfqMarks((marks) => {
       const mark = marks[key] || { done: false, notes: "" };
       previousAssignee = mark.assignee || "";
-      if ("done" in body) mark.done = !!body.done;
+      // ✓ / ✗ on the table and the card's board column are the same thing:
+      // Done ⇔ ✓. Moving a card sets both; ticking a row sets both.
+      if ("status" in body) {
+        mark.status = body.status;
+        mark.done = body.status === "done";
+      } else if ("done" in body) {
+        mark.done = !!body.done;
+        mark.status = mark.done ? "done" : mark.status && mark.status !== "done" ? mark.status : "todo";
+      }
+      if ("priority" in body) mark.priority = body.priority;
       if ("notes" in body) mark.notes = String(body.notes || "").trim().slice(0, 500);
       if (assignee !== undefined) {
         mark.assignee = assignee;
@@ -617,6 +629,159 @@ app.put(
     });
     res.json(saved);
     notifyRowAssignee(saved, previousAssignee);
+  })
+);
+
+// ---------- Pentagon rows as board cards ----------
+// Every row of a view marked `tasks: true` shows up on that department's
+// board. Nothing is copied into tasks.json: each card is built on the fly
+// from the Pentagon row plus its mark (status, assignee, priority, notes),
+// so the RFQ/SO/PO tables and the board always agree. Rows are cached
+// briefly so the board's 15-second refresh doesn't hammer Pentagon.
+
+const PENTAGON_CACHE_MS = 60_000;
+const pentagonRowCache = new Map(); // queryName -> { at, rows, error }
+
+async function cachedRows(view) {
+  const hit = pentagonRowCache.get(view.queryName);
+  if (hit && Date.now() - hit.at < PENTAGON_CACHE_MS) return hit;
+  let entry;
+  try {
+    const data = await pentagonQuery(view.queryName, { params: {}, limit: 200 });
+    entry = { at: Date.now(), rows: resultRows(data), error: null };
+  } catch (err) {
+    console.error(`Pentagon rows for ${view.id} failed: ${err.message}`);
+    entry = { at: Date.now(), rows: [], error: err.message };
+  }
+  pentagonRowCache.set(view.queryName, entry);
+  return entry;
+}
+
+function cell(v) {
+  return v === null || v === undefined ? "" : String(v);
+}
+
+/** Turn one Pentagon row into a task-shaped card. */
+function rowToCard(view, row, mark, codeToUser) {
+  const f = (name) => resolveField(view, row, name);
+  const docNo = cell(row[f("key")]);
+  const party = f("party") ? cell(row[f("party")]) : "";
+  const pentagonUser = f("person") ? cell(row[f("person")]).trim() : "";
+  const byCode = pentagonUser ? codeToUser.get(pentagonUser.toLowerCase()) : null;
+  const key = markKey(view.id, docNo);
+  const m = mark || {};
+  return {
+    id: `pg:${key}`,
+    source: "pentagon",
+    view: view.id,
+    markKey: key,
+    docLabel: view.docLabel,
+    docNo,
+    title: `${view.docLabel} ${docNo}${party ? ` — ${party}` : ""}`,
+    company: "SOI Aviation",
+    department: view.department,
+    status: m.status || (m.done ? "done" : "todo"),
+    priority: m.priority || "medium",
+    // Who it's on: whoever a manager assigned, else whoever did it in Pentagon.
+    owner: m.assignee || (byCode ? byCode.username : pentagonUser),
+    assignee: m.assignee || "",
+    pentagonUser,
+    // "Created by" for a Pentagon row is the person who entered it there.
+    createdBy: byCode ? byCode.username : pentagonUser,
+    dueDate: f("due") ? cell(row[f("due")]).slice(0, 10) : "",
+    notes: m.notes || "",
+    party,
+    part: f("part") ? cell(row[f("part")]) : "",
+    createdAt: f("entered") ? Date.parse(cell(row[f("entered")])) || 0 : 0,
+  };
+}
+
+async function pentagonCards(views) {
+  const [users, marks] = await Promise.all([getUsers(), getRfqMarks()]);
+  const codeToUser = new Map();
+  users.map(normalizeUser).forEach((u) => {
+    if (u.pentagonCode) codeToUser.set(u.pentagonCode.trim().toLowerCase(), u);
+  });
+  const cards = [];
+  const errors = [];
+  for (const view of views) {
+    const { rows, error } = await cachedRows(view);
+    if (error) errors.push(`${view.label}: ${error}`);
+    for (const row of rows) {
+      if (!resolveField(view, row, "key")) continue;
+      const key = markKey(view.id, cell(row[resolveField(view, row, "key")]));
+      cards.push(rowToCard(view, row, marks[key], codeToUser));
+    }
+  }
+  return { cards, errors, codeToUser };
+}
+
+function taskViewsFor(user) {
+  if (!user.companies.includes("SOI Aviation")) return [];
+  return allViews().filter((v) => v.tasks && inDepartment(user, v.department));
+}
+
+// Regular users only see cards that are on them: assigned to them, or done
+// by them in Pentagon (matched through their Pentagon code).
+function canSeeCard(user, card) {
+  if (isManager(user)) return true;
+  if (sameUser(card.owner, user.username) || sameUser(card.assignee, user.username)) return true;
+  return !!user.pentagonCode && sameUser(card.pentagonUser, user.pentagonCode);
+}
+
+app.get(
+  "/api/pentagon-views",
+  authMiddleware,
+  (req, res) => {
+    res.json({ views: PENTAGON_VIEWS, guesses: FIELD_GUESSES });
+  }
+);
+
+app.get(
+  "/api/pentagon-tasks",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const views = taskViewsFor(req.user);
+    if (!views.length) return res.json({ cards: [], errors: [] });
+    const { cards, errors } = await pentagonCards(views);
+    res.json({ cards: cards.filter((c) => canSeeCard(req.user, c)), errors });
+  })
+);
+
+// Per-person counts for the Overview page, managers only. People appear here
+// when "Show in team breakdown" is ticked on their login in /admin.html.
+app.get(
+  "/api/team-breakdown",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!isManager(req.user)) {
+      return res.status(403).json({ error: "Managers only" });
+    }
+    const users = (await getUsers()).map(normalizeUser).filter((u) => u.breakdown);
+    const views = taskViewsFor(req.user);
+    const [{ cards, errors }, tasks] = await Promise.all([
+      views.length ? pentagonCards(views) : { cards: [], errors: [] },
+      getTasks(),
+    ]);
+    const soiTasks = tasks.filter((t) => taskCompany(t) === "SOI Aviation");
+    const departments = {};
+    for (const [department, deptViews] of Object.entries(PENTAGON_VIEWS)) {
+      const taskViews = deptViews.filter((v) => v.tasks && views.some((x) => x.id === v.id));
+      if (!taskViews.length) continue;
+      departments[department] = {
+        columns: taskViews.map((v) => ({ id: v.id, label: v.label })).concat([{ id: "tasks", label: "Tasks created" }]),
+        people: users.map((u) => {
+          const counts = {};
+          for (const v of taskViews) {
+            // Counted by who did it in Pentagon (their Pentagon code).
+            counts[v.id] = cards.filter((c) => c.view === v.id && sameUser(c.createdBy, u.username)).length;
+          }
+          counts.tasks = soiTasks.filter((t) => t.department === department && sameUser(t.createdBy, u.username)).length;
+          return { username: u.username, pentagonCode: u.pentagonCode, counts };
+        }),
+      };
+    }
+    res.json({ departments, errors, windowNote: "Pentagon counts cover what each query returns (by default the last 14 days)." });
   })
 );
 
@@ -678,6 +843,7 @@ app.get(
         departments: u.departments,
         fullAccess: u.fullAccess,
         manager: u.manager,
+        breakdown: u.breakdown,
         pentagonCode: u.pentagonCode || "",
       }))
     );
@@ -714,7 +880,7 @@ app.post(
   "/api/admin/users",
   adminMiddleware,
   asyncHandler(async (req, res) => {
-    const { username, password, email, companies, departments, fullAccess, manager, pentagonCode } = req.body || {};
+    const { username, password, email, companies, departments, fullAccess, manager, breakdown, pentagonCode } = req.body || {};
     if (!username || !email) {
       return res.status(400).json({ error: "Username and email are required" });
     }
@@ -754,6 +920,7 @@ app.post(
       companies,
       fullAccess: !!fullAccess,
       manager: !!manager,
+      breakdown: !!breakdown,
       departments: deptList,
       pentagonCode: String(pentagonCode || "").trim(),
     };
