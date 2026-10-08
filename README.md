@@ -107,6 +107,38 @@ the office network — this server isn't reachable from outside either).
   it isn't just a UI filter like the earlier version.
 - Sessions are JSON Web Tokens, valid for 12 hours, then you sign in again.
 
+### Managers vs. everyone else
+
+Tick **Manager** on a login in `/admin.html` (full-access logins are managers
+automatically).
+
+| | Manager | Everyone else |
+|---|---|---|
+| Sees | every task in their departments | only tasks assigned to them or that they created |
+| Creates tasks | for anyone | for themselves only |
+| Changes status (moves cards) | yes | **never** |
+| Edits / deletes | any task in their departments | only tasks they created |
+| Tasks a manager gave them | — | read-only |
+| Ticks RFQs ✓ / ✗, edits RFQ notes | yes | read-only |
+
+The server enforces all of this; the page just hides what you can't do.
+Existing sessions pick up the Manager flag at their next sign-in.
+
+### RFQs
+
+Procurement → **RFQs** shows Part number, Customer, Person, Due date,
+Status (✓ / ✗) and Notes, in that order ("Show all Pentagon columns" brings
+back everything). Pentagon is read-only from here, so the ✓ / ✗ and notes
+are stored by the tracker (`rfq_marks.json` in the bucket), keyed by RFQ
+number.
+
+### Claude
+
+claude.ai can't be embedded inside another site, so the tracker links to it:
+a **Claude** button in the top bar, and a **Claude project** button on each
+department's tab once its link is saved under **Claude projects** in
+`/admin.html` (only `https://claude.ai` links are accepted).
+
 ## Known limitations (fine for a small internal tool, worth knowing)
 
 - **Single-container writes only.** The app serializes writes within one

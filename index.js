@@ -16,6 +16,7 @@ const {
   signAdminToken,
   authMiddleware,
   adminMiddleware,
+  isManager,
 } = require("./auth");
 const {
   getUsers,
@@ -24,6 +25,10 @@ const {
   withTasks,
   getPentagonPresets,
   withPentagonPresets,
+  getRfqMarks,
+  withRfqMarks,
+  getSettings,
+  withSettings,
 } = require("./s3store");
 const { sendMail } = require("./mailer");
 const { pentagonQuery } = require("./pentagon");
@@ -53,9 +58,17 @@ function normalizeUser(u) {
     companies: u.companies && u.companies.length ? u.companies : [DEFAULT_COMPANY],
     departments,
     fullAccess: !!u.fullAccess,
+    manager: !!u.manager,
     pentagonCode: u.pentagonCode || "",
   };
 }
+
+function sameUser(a, b) {
+  return String(a || "").toLowerCase() === String(b || "").toLowerCase();
+}
+
+const TASK_STATUSES = ["todo", "in_progress", "blocked", "done"];
+const TASK_PRIORITIES = ["low", "medium", "high"];
 
 function taskCompany(t) {
   return t.company || DEFAULT_COMPANY;
@@ -138,6 +151,7 @@ app.post(
       companies: user.companies,
       departments: user.departments,
       fullAccess: user.fullAccess,
+      manager: isManager(user),
       pentagonCode: user.pentagonCode,
     });
   })
@@ -149,6 +163,7 @@ app.get("/api/me", authMiddleware, (req, res) => {
     companies: req.user.companies,
     departments: req.user.departments,
     fullAccess: req.user.fullAccess,
+    manager: isManager(req.user),
     pentagonCode: req.user.pentagonCode,
   });
 });
@@ -195,7 +210,7 @@ app.get(
         return res.status(400).json({ error: "Missing company" });
       }
       const scoped = tasks.filter((t) => req.user.companies.includes(taskCompany(t)));
-      return res.json(scoped);
+      return res.json(scoped.filter((t) => canSee(req.user, t)));
     }
 
     if (!req.user.companies.includes(company)) {
@@ -205,7 +220,7 @@ app.get(
     const scoped = req.user.fullAccess
       ? inCompany
       : inCompany.filter((t) => req.user.departments.includes(t.department));
-    res.json(scoped);
+    res.json(scoped.filter((t) => canSee(req.user, t)));
   })
 );
 
@@ -229,9 +244,15 @@ app.post(
     }
     const department = body.department;
 
-    const priority = ["low", "medium", "high"].includes(body.priority)
+    const priority = TASK_PRIORITIES.includes(body.priority)
       ? body.priority
       : "medium";
+
+    // Only managers assign work to someone else. Everyone else's tasks are
+    // always their own, whatever the form sent.
+    const owner = isManager(req.user)
+      ? String(body.owner || "").trim().slice(0, 60)
+      : req.user.username;
 
     const task = {
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
@@ -240,7 +261,7 @@ app.post(
       department,
       status: "todo",
       priority,
-      owner: String(body.owner || "").trim().slice(0, 60),
+      owner,
       dueDate: /^\d{4}-\d{2}-\d{2}$/.test(body.dueDate || "") ? body.dueDate : "",
       notes: String(body.notes || "").trim().slice(0, 500),
       createdAt: Date.now(),
@@ -261,31 +282,71 @@ function canTouch(user, task) {
   return user.fullAccess || user.departments.includes(task.department);
 }
 
+// Managers see every task in their departments. Everyone else sees only the
+// tasks assigned to them or that they created themselves.
+function canSee(user, task) {
+  if (isManager(user)) return true;
+  return sameUser(task.owner, user.username) || sameUser(task.createdBy, user.username);
+}
+
+// Non-managers may change only tasks they created themselves. Anything a
+// manager assigned them is read-only.
+function canEdit(user, task) {
+  if (!canTouch(user, task) || !canSee(user, task)) return false;
+  return isManager(user) || sameUser(task.createdBy, user.username);
+}
+
 app.patch(
   "/api/tasks/:id",
   authMiddleware,
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const allowedFields = ["status", "title", "priority", "owner", "dueDate", "notes"];
+    const body = req.body || {};
+    const manager = isManager(req.user);
     let updated = null;
-    let forbidden = false;
+    let forbidden = null;
     let previousOwner = null;
+
+    if ("status" in body && !TASK_STATUSES.includes(body.status)) {
+      return res.status(400).json({ error: "Invalid status" });
+    }
+    if ("priority" in body && !TASK_PRIORITIES.includes(body.priority)) {
+      return res.status(400).json({ error: "Invalid priority" });
+    }
+    if ("title" in body && !String(body.title || "").trim()) {
+      return res.status(400).json({ error: "Title is required" });
+    }
 
     await withTasks((tasks) => {
       const t = tasks.find((x) => x.id === id);
-      if (!t) return;
-      if (!canTouch(req.user, t)) {
-        forbidden = true;
+      if (!t || !canSee(req.user, t)) return;
+      if (!canEdit(req.user, t)) {
+        forbidden = canTouch(req.user, t)
+          ? "This task was assigned by a manager — it's read-only for you"
+          : "That task isn't accessible to you";
+        return;
+      }
+      // Status and owner are a manager's call. Sending back the same value
+      // (the edit form always does) is fine; changing it is not.
+      if (!manager && "status" in body && body.status !== t.status) {
+        forbidden = "Only a manager can change a task's status";
+        return;
+      }
+      if (!manager && "owner" in body && !sameUser(body.owner, t.owner)) {
+        forbidden = "Only a manager can assign a task to someone else";
         return;
       }
       previousOwner = t.owner;
-      allowedFields.forEach((k) => {
-        if (k in req.body) t[k] = req.body[k];
-      });
+      if ("title" in body) t.title = String(body.title).trim().slice(0, 140);
+      if ("status" in body) t.status = body.status;
+      if ("priority" in body) t.priority = body.priority;
+      if (manager && "owner" in body) t.owner = String(body.owner || "").trim().slice(0, 60);
+      if ("dueDate" in body) t.dueDate = /^\d{4}-\d{2}-\d{2}$/.test(body.dueDate || "") ? body.dueDate : "";
+      if ("notes" in body) t.notes = String(body.notes || "").trim().slice(0, 500);
       updated = t;
     });
 
-    if (forbidden) return res.status(403).json({ error: "That task isn't accessible to you" });
+    if (forbidden) return res.status(403).json({ error: forbidden });
     if (!updated) return res.status(404).json({ error: "Task not found" });
     res.json(updated);
     notifyOwner(updated, previousOwner);
@@ -302,8 +363,8 @@ app.delete(
 
     await withTasks((tasks) => {
       const idx = tasks.findIndex((x) => x.id === id);
-      if (idx === -1) return;
-      if (!canTouch(req.user, tasks[idx])) {
+      if (idx === -1 || !canSee(req.user, tasks[idx])) return;
+      if (!canEdit(req.user, tasks[idx])) {
         forbidden = true;
         return;
       }
@@ -311,7 +372,7 @@ app.delete(
       removed = true;
     });
 
-    if (forbidden) return res.status(403).json({ error: "That task isn't accessible to you" });
+    if (forbidden) return res.status(403).json({ error: "You can only delete tasks you created" });
     if (!removed) return res.status(404).json({ error: "Task not found" });
     res.status(204).end();
   })
@@ -415,6 +476,81 @@ app.delete(
   })
 );
 
+// ---------- RFQ ticks (✓ / ✗) and notes ----------
+// Pentagon RFQs are read-only from here, so the tick and the note live in
+// the tracker, keyed by RFQ number. Anyone who can see the RFQ list can read
+// them; only managers can set them.
+
+app.get(
+  "/api/rfq-marks",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!canUsePentagon(req.user, "SOI Aviation")) {
+      return res.status(403).json({ error: "Not available for your account" });
+    }
+    res.json(await getRfqMarks());
+  })
+);
+
+app.put(
+  "/api/rfq-marks/:key",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!canUsePentagon(req.user, "SOI Aviation")) {
+      return res.status(403).json({ error: "Not available for your account" });
+    }
+    if (!isManager(req.user)) {
+      return res.status(403).json({ error: "Only a manager can tick off RFQs or edit their notes" });
+    }
+    const key = String(req.params.key || "").trim().slice(0, 80);
+    if (!key) return res.status(400).json({ error: "Missing RFQ number" });
+    const body = req.body || {};
+    let saved = null;
+    await withRfqMarks((marks) => {
+      const mark = marks[key] || { done: false, notes: "" };
+      if ("done" in body) mark.done = !!body.done;
+      if ("notes" in body) mark.notes = String(body.notes || "").trim().slice(0, 500);
+      mark.updatedBy = req.user.username;
+      mark.updatedAt = Date.now();
+      marks[key] = mark;
+      saved = mark;
+    });
+    res.json(saved);
+  })
+);
+
+// ---------- Claude project links per department ----------
+// claude.ai can't be embedded in another site, so each department tab links
+// out to its Claude project. Links are set on the admin page.
+
+function cleanClaudeProjects(raw) {
+  const out = {};
+  for (const dept of DEPARTMENTS) {
+    const value = String((raw && raw[dept]) || "").trim();
+    if (!value) continue;
+    let url;
+    try {
+      url = new URL(value);
+    } catch (e) {
+      throw new Error(`${dept}: not a valid link`);
+    }
+    if (url.protocol !== "https:" || url.hostname !== "claude.ai") {
+      throw new Error(`${dept}: must be a https://claude.ai link`);
+    }
+    out[dept] = url.toString();
+  }
+  return out;
+}
+
+app.get(
+  "/api/claude-projects",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const settings = await getSettings();
+    res.json(settings.claudeProjects || {});
+  })
+);
+
 // ---------- Admin: create/manage logins ----------
 // A separate password (ADMIN_PASSWORD, set once in your Portainer stack's
 // env vars) gates the admin page — it's not tied to any one person's login.
@@ -440,9 +576,36 @@ app.get(
         companies: u.companies,
         departments: u.departments,
         fullAccess: u.fullAccess,
+        manager: u.manager,
         pentagonCode: u.pentagonCode || "",
       }))
     );
+  })
+);
+
+app.get(
+  "/api/admin/claude-projects",
+  adminMiddleware,
+  asyncHandler(async (req, res) => {
+    const settings = await getSettings();
+    res.json(settings.claudeProjects || {});
+  })
+);
+
+app.put(
+  "/api/admin/claude-projects",
+  adminMiddleware,
+  asyncHandler(async (req, res) => {
+    let projects;
+    try {
+      projects = cleanClaudeProjects(req.body || {});
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    await withSettings((settings) => {
+      settings.claudeProjects = projects;
+    });
+    res.json(projects);
   })
 );
 
@@ -450,7 +613,7 @@ app.post(
   "/api/admin/users",
   adminMiddleware,
   asyncHandler(async (req, res) => {
-    const { username, password, email, companies, departments, fullAccess, pentagonCode } = req.body || {};
+    const { username, password, email, companies, departments, fullAccess, manager, pentagonCode } = req.body || {};
     if (!username || !email) {
       return res.status(400).json({ error: "Username and email are required" });
     }
@@ -489,6 +652,7 @@ app.post(
       email,
       companies,
       fullAccess: !!fullAccess,
+      manager: !!manager,
       departments: deptList,
       pentagonCode: String(pentagonCode || "").trim(),
     };
@@ -504,7 +668,7 @@ app.post(
       }
     });
 
-    res.status(201).json({ username, email, companies, departments: record.departments, fullAccess: record.fullAccess });
+    res.status(201).json({ username, email, companies, departments: record.departments, fullAccess: record.fullAccess, manager: record.manager });
   })
 );
 
