@@ -124,13 +124,24 @@ automatically).
 The server enforces all of this; the page just hides what you can't do.
 Existing sessions pick up the Manager flag at their next sign-in.
 
-### RFQs
+### RFQs, Sales Orders, Purchase Orders
 
-Procurement → **RFQs** shows Part number, Customer, Person, Due date,
-Status (✓ / ✗) and Notes, in that order ("Show all Pentagon columns" brings
-back everything). Pentagon is read-only from here, so the ✓ / ✗ and notes
-are stored by the tracker (`rfq_marks.json` in the bucket), keyed by RFQ
-number.
+Procurement → **RFQs** and Purchasing → **Sales Orders** / **Purchase
+Orders** show Part number, Customer (Vendor on POs), Pentagon user, Due
+date, Assigned to, Status (✓ / ✗) and Notes ("Show all Pentagon columns"
+brings back everything). Each view's exact Pentagon field names are listed
+in `PENTAGON_VIEWS` in `index.html`.
+
+Pentagon is read-only from here, so Assigned to, ✓ / ✗ and notes are stored
+by the tracker (`rfq_marks.json` in the bucket) and only managers can set
+them. Whatever a manager assigns to someone shows up in that person's
+**Mentions You** tab under "Assigned to you", and they get an email if
+email is configured. Rows whose Pentagon user matches someone's Pentagon
+code show up in their Mentions You as before.
+
+Anyone in Procurement or Purchasing can open their own department's lists;
+the general Pentagon query tester stays limited to Procurement and full
+access.
 
 ### Claude
 
