@@ -139,6 +139,29 @@ them. Whatever a manager assigns to someone shows up in that person's
 email is configured. Rows whose Pentagon user matches someone's Pentagon
 code show up in their Mentions You as before.
 
+### Pentagon rows on the board
+
+Every row of the RFQ, Quote, Sales Order and Purchase Order queries also
+appears as a card on its department's board (configured in
+`pentagonViews.js`, `tasks: true`). Cards aren't copied into `tasks.json`;
+the server builds them from the Pentagon rows (cached for a minute) plus
+their marks, so a card's column and the table's ✓ / ✗ are the same thing.
+A card's owner is whoever a manager assigned it to, or otherwise the login
+whose Pentagon code matches the row's Pentagon user. Regular users only see
+cards that are theirs.
+
+Above the board, **Show:** filters by source (All · Tasks · RFQs · Quotes on
+Procurement; Sales Orders · Purchase Orders on Purchasing), and managers can
+pick one person.
+
+### Team breakdown (Overview, managers only)
+
+Tick **Show in team breakdown** on a login in `/admin.html` (and set their
+Pentagon code). Managers then see, per person, their RFQs, Quotes and tasks
+created (Procurement) and Sales Orders, Purchase Orders and tasks created
+(Purchasing) on Overview. Pentagon counts cover what each query returns (by
+default the last 14 days).
+
 Anyone in Procurement or Purchasing can open their own department's lists;
 the general Pentagon query tester stays limited to Procurement and full
 access.
