@@ -29,6 +29,8 @@ const {
   withRfqMarks,
   getSettings,
   withSettings,
+  getFinance,
+  withFinance,
 } = require("./s3store");
 const { sendMail } = require("./mailer");
 const { pentagonQuery } = require("./pentagon");
@@ -83,6 +85,23 @@ function taskCompany(t) {
   return t.company || DEFAULT_COMPANY;
 }
 
+function taskLabel(task) {
+  return task.title || task.part || "Untitled task";
+}
+
+// Extra fields from the table layout. Procurement / Purchasing / Warehouse
+// rows use part, platform, customer and obsolete; any task may have them.
+function cleanTaskFields(body, target) {
+  const text = (v, n) => String(v || "").trim().slice(0, n);
+  if ("title" in body) target.title = text(body.title, 140);
+  if ("part" in body) target.part = text(body.part, 60);
+  if ("platform" in body) target.platform = text(body.platform, 80);
+  if ("customer" in body) target.customer = text(body.customer, 120);
+  if ("obsolete" in body) target.obsolete = body.obsolete === "Yes" ? "Yes" : "No";
+  if ("dueDate" in body) target.dueDate = /^\d{4}-\d{2}-\d{2}$/.test(body.dueDate || "") ? body.dueDate : "";
+  if ("notes" in body) target.notes = text(body.notes, 500);
+}
+
 async function notifyOwner(task, previousOwner) {
   if (!task.owner || task.owner === previousOwner) return;
   const users = await getUsers();
@@ -91,10 +110,10 @@ async function notifyOwner(task, previousOwner) {
   try {
     await sendMail({
       to: ownerUser.email,
-      subject: `New task assigned: ${task.title}`,
+      subject: `New task assigned: ${taskLabel(task)}`,
       html:
         `<p>You've been assigned a task in the SOI Aviation tracker — ${escapeHtml(taskCompany(task))} / ${escapeHtml(task.department)}:</p>` +
-        `<p><strong>${escapeHtml(task.title)}</strong></p>` +
+        `<p><strong>${escapeHtml(taskLabel(task))}</strong></p>` +
         (task.notes ? `<p>${escapeHtml(task.notes)}</p>` : "") +
         (task.dueDate ? `<p>Due: ${escapeHtml(task.dueDate)}</p>` : "") +
         `<p>Priority: ${escapeHtml(task.priority)}</p>`,
@@ -219,7 +238,7 @@ app.get(
         return res.status(400).json({ error: "Missing company" });
       }
       const scoped = tasks.filter((t) => req.user.companies.includes(taskCompany(t)));
-      return res.json(scoped.filter((t) => canSee(req.user, t)));
+      return res.json(withParents(scoped, req.user));
     }
 
     if (!req.user.companies.includes(company)) {
@@ -229,7 +248,7 @@ app.get(
     const scoped = req.user.fullAccess
       ? inCompany
       : inCompany.filter((t) => req.user.departments.includes(t.department));
-    res.json(scoped.filter((t) => canSee(req.user, t)));
+    res.json(withParents(scoped, req.user));
   })
 );
 
@@ -239,7 +258,8 @@ app.post(
   asyncHandler(async (req, res) => {
     const body = req.body || {};
     const title = String(body.title || "").trim().slice(0, 140);
-    if (!title) return res.status(400).json({ error: "Title is required" });
+    const part = String(body.part || "").trim();
+    if (!title && !part) return res.status(400).json({ error: "Give it a name or a part number" });
 
     if (!body.company || !req.user.companies.includes(body.company)) {
       return res.status(400).json({ error: "Choose a valid company" });
@@ -271,15 +291,32 @@ app.post(
       status: "todo",
       priority,
       owner,
-      dueDate: /^\d{4}-\d{2}-\d{2}$/.test(body.dueDate || "") ? body.dueDate : "",
-      notes: String(body.notes || "").trim().slice(0, 500),
+      dueDate: "",
+      notes: "",
       createdAt: Date.now(),
       createdBy: req.user.username,
     };
+    cleanTaskFields(body, task);
+    if (body.parentId) task.parentId = String(body.parentId);
 
+    let parentProblem = null;
     await withTasks((tasks) => {
+      // A sub-task lives under a project in the same company and department,
+      // and only someone who can edit that project may add to it.
+      if (task.parentId) {
+        const parent = tasks.find((x) => x.id === task.parentId);
+        if (!parent || parent.parentId || taskCompany(parent) !== task.company || parent.department !== task.department) {
+          parentProblem = "That project doesn't exist here";
+          return;
+        }
+        if (!canEdit(req.user, parent)) {
+          parentProblem = "Only a manager or the project's creator can add sub-tasks to it";
+          return;
+        }
+      }
       tasks.unshift(task);
     });
+    if (parentProblem) return res.status(403).json({ error: parentProblem });
 
     res.status(201).json(task);
     notifyOwner(task, null);
@@ -296,6 +333,24 @@ function canTouch(user, task) {
 function canSee(user, task) {
   if (isManager(user)) return true;
   return sameUser(task.owner, user.username) || sameUser(task.createdBy, user.username);
+}
+
+// A non-manager who is on a sub-task also gets its parent project, so the
+// sub-task has somewhere to sit in the table. canEdit still makes it
+// read-only for them.
+function withParents(scoped, user) {
+  const visible = scoped.filter((t) => canSee(user, t));
+  const ids = new Set(visible.map((t) => t.id));
+  for (const t of visible) {
+    if (t.parentId && !ids.has(t.parentId)) {
+      const parent = scoped.find((x) => x.id === t.parentId);
+      if (parent) {
+        visible.push(parent);
+        ids.add(parent.id);
+      }
+    }
+  }
+  return visible;
 }
 
 // Non-managers may change only tasks they created themselves. Anything a
@@ -322,9 +377,6 @@ app.patch(
     if ("priority" in body && !TASK_PRIORITIES.includes(body.priority)) {
       return res.status(400).json({ error: "Invalid priority" });
     }
-    if ("title" in body && !String(body.title || "").trim()) {
-      return res.status(400).json({ error: "Title is required" });
-    }
 
     await withTasks((tasks) => {
       const t = tasks.find((x) => x.id === id);
@@ -345,13 +397,17 @@ app.patch(
         forbidden = "Only a manager can assign a task to someone else";
         return;
       }
+      const nextTitle = "title" in body ? String(body.title || "").trim() : t.title;
+      const nextPart = "part" in body ? String(body.part || "").trim() : t.part;
+      if (!nextTitle && !nextPart) {
+        forbidden = "Give it a name or a part number";
+        return;
+      }
       previousOwner = t.owner;
-      if ("title" in body) t.title = String(body.title).trim().slice(0, 140);
+      cleanTaskFields(body, t);
       if ("status" in body) t.status = body.status;
       if ("priority" in body) t.priority = body.priority;
       if (manager && "owner" in body) t.owner = String(body.owner || "").trim().slice(0, 60);
-      if ("dueDate" in body) t.dueDate = /^\d{4}-\d{2}-\d{2}$/.test(body.dueDate || "") ? body.dueDate : "";
-      if ("notes" in body) t.notes = String(body.notes || "").trim().slice(0, 500);
       updated = t;
     });
 
@@ -377,13 +433,129 @@ app.delete(
         forbidden = true;
         return;
       }
-      tasks.splice(idx, 1);
+      // Deleting a project takes its sub-tasks with it.
+      const doomed = new Set([id]);
+      for (const t of tasks) if (t.parentId === id) doomed.add(t.id);
+      for (let i = tasks.length - 1; i >= 0; i--) if (doomed.has(tasks[i].id)) tasks.splice(i, 1);
       removed = true;
     });
 
     if (forbidden) return res.status(403).json({ error: "You can only delete tasks you created" });
     if (!removed) return res.status(404).json({ error: "Task not found" });
     res.status(204).end();
+  })
+);
+
+// ---------- Finance (per company) ----------
+// Bank balances, payments waiting for approval, approved payments and
+// expected receipts — typed in by people, not connected to any bank.
+// Visible to Accounting & Finance and full-access logins for their
+// companies. Ticking things off (approve, paid, received) is a manager's
+// call, like everywhere else.
+
+const FINANCE_LISTS = {
+  accounts: { name: 120, balance: "money", asOf: "date", notes: 500 },
+  dailyPayments: { vendor: 120, amount: "money", due: "date", notes: 500 },
+  approvedToPay: { vendor: 120, amount: "money", due: "date", notes: 500, paid: "bool" },
+  expectedReceipts: { party: 120, amount: "money", expected: "date", received: "bool", notes: 500 },
+};
+const FINANCE_TICKS = ["paid", "received"];
+
+function canSeeFinance(user, company) {
+  return user.companies.includes(company) && inDepartment(user, "Accounting & Finance");
+}
+
+function emptyFinance() {
+  return { accounts: [], dailyPayments: [], approvedToPay: [], expectedReceipts: [] };
+}
+
+function cleanFinanceFields(list, body, target) {
+  const spec = FINANCE_LISTS[list];
+  for (const [field, kind] of Object.entries(spec)) {
+    if (!(field in body)) continue;
+    const v = body[field];
+    if (kind === "money") target[field] = Number.isFinite(Number(v)) ? Math.round(Number(v) * 100) / 100 : 0;
+    else if (kind === "date") target[field] = /^\d{4}-\d{2}-\d{2}$/.test(v || "") ? v : "";
+    else if (kind === "bool") target[field] = !!v;
+    else target[field] = String(v || "").trim().slice(0, kind);
+  }
+}
+
+app.get(
+  "/api/finance",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const company = String(req.query.company || "");
+    if (!canSeeFinance(req.user, company)) {
+      return res.status(403).json({ error: "Finance isn't available for your account" });
+    }
+    const all = await getFinance();
+    res.json({ ...emptyFinance(), ...(all[company] || {}) });
+  })
+);
+
+// One endpoint for every change: add / update / delete a row, or move a
+// payment between "Daily payments" and "Approved to pay".
+app.post(
+  "/api/finance",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const body = req.body || {};
+    const company = String(body.company || "");
+    const list = String(body.list || "");
+    const op = String(body.op || "");
+    if (!canSeeFinance(req.user, company)) {
+      return res.status(403).json({ error: "Finance isn't available for your account" });
+    }
+    if (!FINANCE_LISTS[list]) return res.status(400).json({ error: "Unknown finance table" });
+    const fields = body.fields && typeof body.fields === "object" ? body.fields : {};
+    const manager = isManager(req.user);
+    if ((op === "approve" || op === "unapprove") && !manager) {
+      return res.status(403).json({ error: "Only a manager can approve payments" });
+    }
+    if (FINANCE_TICKS.some((k) => k in fields) && !manager) {
+      return res.status(403).json({ error: "Only a manager can tick that off" });
+    }
+
+    let problem = null;
+    let result = null;
+    await withFinance((all) => {
+      const fin = (all[company] = { ...emptyFinance(), ...(all[company] || {}) });
+      const rows = fin[list];
+      const idx = rows.findIndex((r) => r.id === body.id);
+      if (op === "add") {
+        const row = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8) };
+        cleanFinanceFields(list, fields, row);
+        row.createdBy = req.user.username;
+        rows.push(row);
+        result = row;
+      } else if (idx === -1) {
+        problem = "That row no longer exists";
+      } else if (op === "update") {
+        cleanFinanceFields(list, fields, rows[idx]);
+        rows[idx].updatedBy = req.user.username;
+        result = rows[idx];
+      } else if (op === "delete") {
+        rows.splice(idx, 1);
+        result = { ok: true };
+      } else if (op === "approve" && list === "dailyPayments") {
+        const [row] = rows.splice(idx, 1);
+        const approved = { ...row, approvedAt: new Date().toISOString(), approvedBy: req.user.username, paid: false };
+        fin.approvedToPay.push(approved);
+        result = approved;
+      } else if (op === "unapprove" && list === "approvedToPay") {
+        const [row] = rows.splice(idx, 1);
+        delete row.approvedAt;
+        delete row.approvedBy;
+        delete row.paid;
+        fin.dailyPayments.push(row);
+        result = row;
+      } else {
+        problem = "Unknown change";
+      }
+    });
+    if (problem) return res.status(400).json({ error: problem });
+    res.json(result);
   })
 );
 
