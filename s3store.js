@@ -80,6 +80,10 @@ function getPentagonPresets() {
 function getRfqMarks() {
   return readJson("rfq_marks", {});
 }
+// Finance tables per company: bank balances, payments, expected receipts.
+function getFinance() {
+  return readJson("finance", {});
+}
 // Small app-wide settings edited from the admin page (Claude project links).
 function getSettings() {
   return readJson("settings", {});
@@ -92,6 +96,7 @@ let tasksQueue = Promise.resolve();
 let presetsQueue = Promise.resolve();
 let rfqMarksQueue = Promise.resolve();
 let settingsQueue = Promise.resolve();
+let financeQueue = Promise.resolve();
 
 function withUsers(mutator) {
   usersQueue = usersQueue.then(async () => {
@@ -137,6 +142,16 @@ function withRfqMarks(mutator) {
   return rfqMarksQueue;
 }
 
+function withFinance(mutator) {
+  financeQueue = financeQueue.then(async () => {
+    const finance = await getFinance();
+    const result = await mutator(finance);
+    await writeJson("finance", finance);
+    return result;
+  });
+  return financeQueue;
+}
+
 function withSettings(mutator) {
   settingsQueue = settingsQueue.then(async () => {
     const settings = await getSettings();
@@ -158,4 +173,6 @@ module.exports = {
   withRfqMarks,
   getSettings,
   withSettings,
+  getFinance,
+  withFinance,
 };

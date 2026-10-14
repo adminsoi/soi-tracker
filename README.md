@@ -97,6 +97,26 @@ department for each person. Each person then signs in at
 `https://<your-private-ip>/` with that username and password (over VPN or
 the office network — this server isn't reachable from outside either).
 
+## Layout (the "Daily Edit" look)
+
+A left sidebar (Departments, Overview, Mentions you, Calendar, Global,
+Pentagon), a company switcher (SOI · CAS · RedSun · Nano, plus All for
+full-access accounts) and one tab per department. Every department is an
+editable table; changes save to the server when you leave a field.
+
+- **Procurement, Purchasing, Warehouse:** Task, Part number, Platform,
+  Customer, Obsolete, Due date, Responsible, Done ✓ / ✗, Notes. Pentagon
+  RFQs / Quotes / SOs / POs appear as rows too, and each Pentagon list is
+  still there as its own view with date filters.
+- **IT, Admin, HR, Operations, US Government:** projects with sub-tasks
+  (a sub-task is a task with `parentId`; deleting a project deletes its
+  sub-tasks).
+- **Accounting & Finance → Finance:** bank balances, daily payments
+  (Approve moves a row to Approved to pay), expected receipts — stored per
+  company in `finance.json` in the bucket. Only Accounting & Finance and
+  full-access logins see it; only managers approve or tick paid / received.
+  Nothing is connected to a bank.
+
 ## How access control works
 
 - Every login belongs to exactly one department (or `Operations`, which
