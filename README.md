@@ -117,6 +117,40 @@ editable table; changes save to the server when you leave a field.
   full-access logins see it; only managers approve or tick paid / received.
   Nothing is connected to a bank.
 
+## Calendar
+
+The **Calendar** page (sidebar → Tools) has two parts:
+
+- **Your calendar** — the signed-in person's own Outlook events for the next
+  1–4 weeks, read live from Microsoft 365. Read-only: the tracker never
+  writes to anyone's calendar. It looks the mailbox up by the **email on
+  that person's login** in `/admin.html` (never from the browser), so
+  people only see their own calendar — make sure each login's email is
+  their Microsoft 365 address.
+- **Shared calendar** — one Outlook calendar embedded for everyone, set
+  under **Shared calendar** in `/admin.html`. Use the **HTML** link from
+  Outlook on the web → Settings → Calendar → Shared calendars → Publish a
+  calendar. Anyone with that link can view it, so only publish a calendar
+  that's fine to share.
+
+### One-time Microsoft 365 setup for "Your calendar"
+
+It uses the same app registration as assignment emails (`MS_TENANT_ID`,
+`MS_CLIENT_ID`, `MS_CLIENT_SECRET`). A Microsoft 365 admin needs to:
+
+1. Azure portal → **Microsoft Entra ID → App registrations** → open the app
+   whose Application (client) ID is `MS_CLIENT_ID`.
+2. **API permissions → Add a permission → Microsoft Graph → Application
+   permissions → `Calendars.Read`** → Add.
+3. Click **Grant admin consent** for the tenant.
+4. Recommended: limit the app to SOI staff mailboxes instead of the whole
+   tenant, using Exchange Online's RBAC for Applications (or the older
+   Application Access Policy). If you do, include the `MS_FROM_EMAIL`
+   mailbox so assignment emails keep working.
+
+No redeploy is needed after consent; it can take a few minutes to apply.
+Until then the page says the permission hasn't been granted yet.
+
 ## How access control works
 
 - Every login belongs to exactly one department (or `Operations`, which

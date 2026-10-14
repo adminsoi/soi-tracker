@@ -10,44 +10,15 @@
 // of failing — email notifications are a nice-to-have, not something that
 // should ever block someone from creating or updating a task.
 
-const TENANT_ID = process.env.MS_TENANT_ID;
-const CLIENT_ID = process.env.MS_CLIENT_ID;
-const CLIENT_SECRET = process.env.MS_CLIENT_SECRET;
+const { graphConfigured, getAccessToken } = require("./graph");
+
 const FROM_EMAIL = process.env.MS_FROM_EMAIL;
 
-const configured = Boolean(TENANT_ID && CLIENT_ID && CLIENT_SECRET && FROM_EMAIL);
+const configured = Boolean(graphConfigured && FROM_EMAIL);
 if (!configured) {
   console.warn(
     "Email notifications are not configured (missing one or more of MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, MS_FROM_EMAIL) — task-assignment emails will be skipped."
   );
-}
-
-let cachedToken = null;
-let tokenExpiresAt = 0;
-
-async function getAccessToken() {
-  if (cachedToken && Date.now() < tokenExpiresAt - 60000) return cachedToken;
-
-  const url = `https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/token`;
-  const body = new URLSearchParams({
-    client_id: CLIENT_ID,
-    client_secret: CLIENT_SECRET,
-    scope: "https://graph.microsoft.com/.default",
-    grant_type: "client_credentials",
-  });
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
-  });
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(`Failed to get Graph token: ${data.error_description || JSON.stringify(data)}`);
-  }
-  cachedToken = data.access_token;
-  tokenExpiresAt = Date.now() + data.expires_in * 1000;
-  return cachedToken;
 }
 
 async function sendMail({ to, subject, html }) {
