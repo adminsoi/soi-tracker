@@ -42,6 +42,7 @@ function signUserToken(user) {
       departments: user.departments || [],
       fullAccess: !!user.fullAccess,
       manager: !!user.manager,
+      leadership: !!user.leadership,
       pentagonCode: user.pentagonCode || "",
       kind: "user",
     },
@@ -73,6 +74,7 @@ function authMiddleware(req, res, next) {
       departments: payload.departments || [],
       fullAccess: !!payload.fullAccess,
       manager: !!payload.manager,
+      leadership: !!payload.leadership,
       pentagonCode: payload.pentagonCode || "",
     };
     next();

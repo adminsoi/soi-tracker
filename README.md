@@ -119,16 +119,17 @@ editable table; changes save to the server when you leave a field.
 
 ## Calendar
 
-The **Calendar** page (sidebar → Tools) has two parts:
+The **Calendar** page (sidebar → Tools) has two tabs:
 
-- **Your calendar** — the signed-in person's own Outlook events for the next
+- **Personal calendar** (everyone) — the signed-in person's own Outlook events for the next
   1–4 weeks, read live from Microsoft 365. Read-only: the tracker never
   writes to anyone's calendar. It looks the mailbox up by the **email on
   that person's login** in `/admin.html` (never from the browser), so
   people only see their own calendar — make sure each login's email is
   their Microsoft 365 address.
-- **Shared calendar** — one Outlook calendar embedded for everyone, set
-  under **Shared calendar** in `/admin.html`. Use the **HTML** link from
+- **HR global calendar** — one Outlook calendar, for **Leadership** logins
+  only (tick **Leadership** on a login in `/admin.html`; the server checks
+  it on every request). Set it under **HR global calendar** in `/admin.html`. Use the **HTML** link from
   Outlook on the web → Settings → Calendar → Shared calendars → Publish a
   calendar. Anyone with that link can view it, so only publish a calendar
   that's fine to share.

@@ -71,6 +71,7 @@ function normalizeUser(u) {
     fullAccess: !!u.fullAccess,
     manager: !!u.manager,
     breakdown: !!u.breakdown,
+    leadership: !!u.leadership,
     pentagonCode: u.pentagonCode || "",
   };
 }
@@ -181,6 +182,7 @@ app.post(
       departments: user.departments,
       fullAccess: user.fullAccess,
       manager: isManager(user),
+      leadership: user.leadership,
       pentagonCode: user.pentagonCode,
     });
   })
@@ -193,6 +195,7 @@ app.get("/api/me", authMiddleware, (req, res) => {
     departments: req.user.departments,
     fullAccess: req.user.fullAccess,
     manager: isManager(req.user),
+    leadership: req.user.leadership,
     pentagonCode: req.user.pentagonCode,
   });
 });
@@ -1017,6 +1020,13 @@ app.get(
   "/api/calendar/shared",
   authMiddleware,
   asyncHandler(async (req, res) => {
+    // Leadership only. Checked against the saved login, not the session, so
+    // unticking "Leadership" in /admin.html takes effect straight away.
+    const users = await getUsers();
+    const u = users.find((x) => sameUser(x.username, req.user.username));
+    if (!u || !u.leadership) {
+      return res.status(403).json({ error: "The HR calendar is for leadership logins only" });
+    }
     const settings = await getSettings();
     res.json(settings.sharedCalendar || { name: "", url: "" });
   })
@@ -1041,7 +1051,7 @@ app.put(
     } catch (err) {
       return res.status(400).json({ error: err.message });
     }
-    const name = String((req.body || {}).name || "").trim().slice(0, 60) || "Shared calendar";
+    const name = String((req.body || {}).name || "").trim().slice(0, 60) || "HR global calendar";
     const shared = { name, url };
     await withSettings((settings) => {
       settings.sharedCalendar = shared;
@@ -1109,6 +1119,7 @@ app.get(
         fullAccess: u.fullAccess,
         manager: u.manager,
         breakdown: u.breakdown,
+        leadership: u.leadership,
         pentagonCode: u.pentagonCode || "",
       }))
     );
@@ -1145,7 +1156,7 @@ app.post(
   "/api/admin/users",
   adminMiddleware,
   asyncHandler(async (req, res) => {
-    const { username, password, email, companies, departments, fullAccess, manager, breakdown, pentagonCode } = req.body || {};
+    const { username, password, email, companies, departments, fullAccess, manager, breakdown, leadership, pentagonCode } = req.body || {};
     if (!username || !email) {
       return res.status(400).json({ error: "Username and email are required" });
     }
@@ -1186,6 +1197,7 @@ app.post(
       fullAccess: !!fullAccess,
       manager: !!manager,
       breakdown: !!breakdown,
+      leadership: !!leadership,
       departments: deptList,
       pentagonCode: String(pentagonCode || "").trim(),
     };
