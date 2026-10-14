@@ -252,6 +252,20 @@ app.get(
   })
 );
 
+// Everything assigned to the signed-in person, across all their companies
+// and departments, for "Mentions you". A manager can assign someone a task
+// outside their own departments; this is where they'll still see it.
+app.get(
+  "/api/tasks/mine",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const tasks = await getTasks();
+    res.json(
+      tasks.filter((t) => req.user.companies.includes(taskCompany(t)) && sameUser(t.owner, req.user.username))
+    );
+  })
+);
+
 app.post(
   "/api/tasks",
   authMiddleware,
