@@ -33,6 +33,7 @@ const {
   withFinance,
 } = require("./s3store");
 const { sendMail } = require("./mailer");
+const { upcomingEvents, CalendarError } = require("./calendar");
 const { pentagonQuery } = require("./pentagon");
 const {
   PENTAGON_VIEWS,
@@ -968,6 +969,84 @@ app.get(
       };
     }
     res.json({ departments, errors, windowNote: "Pentagon counts cover what each query returns (by default the last 14 days)." });
+  })
+);
+
+// ---------- Calendars ----------
+// "Your calendar": the signed-in person's own Outlook events, read-only,
+// looked up by the email on their login (never one from the browser).
+// "Shared calendar": one Outlook "Publish to web" link set in /admin.html.
+
+app.get(
+  "/api/calendar/me",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const days = Math.min(Math.max(parseInt(req.query.days, 10) || 14, 1), 42);
+    const users = await getUsers();
+    const u = users.find((x) => sameUser(x.username, req.user.username));
+    try {
+      res.json(await upcomingEvents(u && u.email, days));
+    } catch (err) {
+      if (err instanceof CalendarError) return res.status(409).json({ error: err.message, code: err.code });
+      throw err;
+    }
+  })
+);
+
+// Outlook "Publish to web" HTML links only, so the embed can't point anywhere else.
+function cleanSharedCalendarUrl(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+  let url;
+  try {
+    url = new URL(value);
+  } catch (e) {
+    throw new Error("That isn't a valid link");
+  }
+  const okHost = ["outlook.office365.com", "outlook.office.com", "outlook.live.com"].includes(url.hostname);
+  if (url.protocol !== "https:" || !okHost) {
+    throw new Error("Use the Outlook \"Publish to web\" HTML link (it starts with https://outlook.office365.com/)");
+  }
+  if (/\.ics(\?|$)/i.test(url.pathname)) {
+    throw new Error("That's the ICS link — use the HTML link from \"Publish to web\" instead");
+  }
+  return url.toString();
+}
+
+app.get(
+  "/api/calendar/shared",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const settings = await getSettings();
+    res.json(settings.sharedCalendar || { name: "", url: "" });
+  })
+);
+
+app.get(
+  "/api/admin/calendar",
+  adminMiddleware,
+  asyncHandler(async (req, res) => {
+    const settings = await getSettings();
+    res.json(settings.sharedCalendar || { name: "", url: "" });
+  })
+);
+
+app.put(
+  "/api/admin/calendar",
+  adminMiddleware,
+  asyncHandler(async (req, res) => {
+    let url;
+    try {
+      url = cleanSharedCalendarUrl((req.body || {}).url);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    const name = String((req.body || {}).name || "").trim().slice(0, 60) || "Shared calendar";
+    const shared = { name, url };
+    await withSettings((settings) => {
+      settings.sharedCalendar = shared;
+    });
+    res.json(shared);
   })
 );
 
