@@ -45,6 +45,7 @@
   nav a:hover { background: var(--soft); }
   nav a.active { background: var(--pink); color: var(--rose-ink); }
   nav a .ic { width: 19px; font-size: 15px; text-align: center; }
+  nav a .badge { margin-left: auto; }
   .sidebar-foot { margin-top: auto; padding: 18px 7px 0; font-size: 11px; color: var(--sage); border-top: 1px solid var(--line); }
   .sidebar-foot strong { display: block; color: var(--ink); font-size: 13px; margin: 6px 0 2px; }
   .sidebar-foot small { display: block; color: var(--muted); font-size: 10px; line-height: 1.6; }
@@ -482,6 +483,7 @@
       ? api("/api/pentagon-tasks").catch(function () { return { cards: [], errors: ["Couldn't load Pentagon rows."] }; })
       : Promise.resolve({ cards: [], errors: [] });
     var fin = page === "departments" && activeDept === "Accounting & Finance" && canSeeFinance() ? loadFinance() : Promise.resolve();
+    loadMineCount().catch(function () {});
     return Promise.all([api(url), pentagon, fin]).then(function (r) {
       tasks = r[0];
       cards = r[1].cards || [];
@@ -532,7 +534,7 @@
   function navItems() {
     var items = [{ group: "WORK", id: "departments", ic: "▣", label: "Departments" }];
     if (me.fullAccess || me.departments.length > 1) items.push({ id: "overview", ic: "◷", label: "Overview" });
-    if (hasSOI()) items.push({ group: "YOU", id: "mentions", ic: "✉", label: "Mentions you" });
+    items.push({ group: "YOU", id: "mentions", ic: "✉", label: "Mentions you", badge: mineOpen });
     var tools = [];
     if (me.companies.length > 1) tools.push({ id: "calendar", ic: "▦", label: "Calendar" });
     if (canUseAll()) tools.push({ id: "global", ic: "◎", label: "Global" });
@@ -558,7 +560,8 @@
     $("#nav").innerHTML = navItems().map(function (n) {
       var href = n.id === "departments" ? "dept/" + encodeURIComponent(activeDept || "") : n.id;
       return (n.group ? '<div class="nav-group">' + n.group + "</div>" : "") +
-        '<a href="#' + href + '" class="' + (n.id === page ? "active" : "") + '"><span class="ic">' + n.ic + "</span>" + E(n.label) + "</a>";
+        '<a href="#' + href + '" class="' + (n.id === page ? "active" : "") + '"><span class="ic">' + n.ic + "</span>" + E(n.label) +
+        (n.badge ? '<span class="badge">' + n.badge + "</span>" : "") + "</a>";
     }).join("");
     $("#quickAdd").style.display = "none";
     var html;
@@ -1212,11 +1215,27 @@
   }
 
   // ---------- Mentions you ----------
+  // Everything assigned to you: tracker tasks (any company or department you
+  // have) and Pentagon rows a manager assigned you. Then, for SOI logins,
+  // Pentagon documents tied to your Pentagon code.
+  var mineOpen = 0; // open items assigned to you, for the sidebar badge
+  function loadMineCount() {
+    var pentagon = hasSOI() ? api("/api/rfq-marks/mine").catch(function () { return []; }) : Promise.resolve([]);
+    return Promise.all([api("/api/tasks/mine"), pentagon]).then(function (r) {
+      var n = r[0].filter(function (t) { return !isDone(t); }).length + r[1].filter(function (m) { return !m.done; }).length;
+      if (n !== mineOpen) { mineOpen = n; requestRender(); }
+      return r;
+    });
+  }
   function renderMentionsShell() {
     setBreadcrumb(["You", "Mentions you"]);
     setTimeout(loadMentions, 0);
-    return '<div class="intro"><div><div class="eyebrow">You</div><h1>Mentions you</h1><p>What a manager assigned to you, and Pentagon documents tied to your Pentagon code.</p></div></div>' +
-      '<div class="section-title"><h2>Assigned to you</h2></div><div class="table-wrap"><table class="plain" id="mn-assigned" style="display:none;"></table><div class="empty" id="mn-assigned-empty">Loading…</div></div>' +
+    var html = '<div class="intro"><div><div class="eyebrow">You</div><h1>Mentions you</h1><p>Everything assigned to you' +
+      (hasSOI() ? ", and Pentagon documents tied to your Pentagon code" : "") + ".</p></div></div>" +
+      '<div class="section-title"><div><h2>Assigned to you</h2><span class="small-note">Tasks and Pentagon rows, across all your companies and departments.</span></div></div>' +
+      '<div class="table-wrap"><table class="plain wide" id="mn-assigned" style="display:none;"></table><div class="empty" id="mn-assigned-empty">Loading…</div></div>';
+    if (!hasSOI()) return html;
+    return html +
       '<div class="section-title"><div><h2>Your Pentagon documents</h2><span class="small-note" id="mn-msg"></span></div></div>' +
       (me.pentagonCode ? "" : '<div class="banner">No Pentagon code is set on your login yet — ask an admin to add one at <b>/admin.html</b> so this can find RFQs, Quotes, Sales Orders, Purchase Orders and Invoices tied to you.</div>') +
       '<div class="grid-2" id="mn-charts" style="display:none;margin-bottom:18px;"><div class="card"><div class="card-label" id="mn-line-title">Total value over time</div><div class="chart-wrap"><canvas id="mn-line"></canvas></div></div>' +
@@ -1224,19 +1243,40 @@
       (me.pentagonCode ? '<div class="table-wrap"><table class="wide" id="mn-table" style="display:none;"></table><div class="empty" id="mn-empty">Loading…</div></div>' : "");
   }
   function loadMentions() {
-    api("/api/rfq-marks/mine").then(function (items) {
+    loadMineCount().then(function (r) {
       var t = $("#mn-assigned"), e = $("#mn-assigned-empty");
       if (!t) return;
-      if (!items.length) { e.textContent = "Nothing has been assigned to you."; return; }
-      items.sort(function (a, b) { return Number(!!a.done) - Number(!!b.done) || String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999")); });
-      t.innerHTML = "<thead><tr><th>Document</th><th>Customer / vendor</th><th>Pentagon user</th><th>Due date</th><th>Done</th><th>Notes</th><th>Assigned by</th></tr></thead><tbody>" +
-        items.map(function (m) {
-          return '<tr class="' + (m.done ? "done" : "") + '"><td><strong>' + E((m.label || "") + " " + (m.docNo || m.key)) + "</strong></td><td>" + E(m.party || "") + "</td><td>" + E(m.pentagonUser || "") +
-            "</td><td>" + E(fmtDate(m.dueDate)) + '</td><td><span class="pill ' + (m.done ? "" : "rose") + '">' + (m.done ? "✓ Done" : "✗ Open") + "</span></td><td>" + E(m.notes || "") + "</td><td>" + E(m.assignedBy || "") + "</td></tr>";
+      var rows = r[0].map(function (task) {
+        return {
+          done: isDone(task), due: task.dueDate || "",
+          what: task.title || task.part || "Untitled task",
+          sub: [task.part && task.title ? "Part " + task.part : "", task.customer].filter(Boolean).join(" · "),
+          where: shortCo(task.company || "SOI Aviation") + " · " + task.department,
+          link: "dept/" + encodeURIComponent(task.department), company: task.company || "SOI Aviation",
+          notes: task.notes || "", by: task.createdBy || ""
+        };
+      }).concat(r[1].map(function (m) {
+        var dept = { rfqs: "Procurement", quotes: "Procurement", sales_orders: "Purchasing", purchase_orders: "Purchasing" }[m.view] || "Procurement";
+        return {
+          done: !!m.done, due: m.dueDate || "",
+          what: (m.label || "") + " " + (m.docNo || m.key), sub: [m.party, m.pentagonUser ? "Pentagon user " + m.pentagonUser : ""].filter(Boolean).join(" · "),
+          where: "SOI · " + dept, link: "dept/" + encodeURIComponent(dept), company: "SOI Aviation",
+          notes: m.notes || "", by: m.assignedBy || "", pentagon: true
+        };
+      }));
+      if (!rows.length) { e.textContent = "Nothing is assigned to you right now."; t.style.display = "none"; e.style.display = "block"; return; }
+      rows.sort(function (a, b) { return Number(a.done) - Number(b.done) || String(a.due || "9999").localeCompare(String(b.due || "9999")); });
+      t.innerHTML = "<thead><tr><th>What</th><th>Where</th><th>Due date</th><th>Done</th><th>Notes</th><th>Assigned by</th></tr></thead><tbody>" +
+        rows.map(function (x) {
+          var late = x.due && !x.done && x.due < today;
+          return '<tr class="' + (x.done ? "done" : "") + '"><td><a href="#' + x.link + '" data-mine-co="' + E(x.company) + '"><strong>' + E(x.what) + "</strong></a>" +
+            (x.pentagon ? '<span class="src">PENTAGON</span>' : "") + (x.sub ? '<span class="co-note" style="padding:0">' + E(x.sub) + "</span>" : "") + "</td>" +
+            "<td>" + E(x.where) + '</td><td style="' + (late ? "color:var(--danger);font-weight:600" : "") + '">' + E(fmtDate(x.due) || "—") + "</td>" +
+            '<td><span class="pill ' + (x.done ? "" : "rose") + '">' + (x.done ? "✓ Done" : "✗ Open") + "</span></td><td>" + E(x.notes) + "</td><td>" + E(x.by) + "</td></tr>";
         }).join("") + "</tbody>";
       t.style.display = "table"; e.style.display = "none";
     }).catch(function (err) { var e = $("#mn-assigned-empty"); if (e) e.textContent = err.message; });
-    if (!me.pentagonCode) return;
+    if (!hasSOI() || !me.pentagonCode) return;
     $("#mn-msg").textContent = "Loading…";
     api("/api/pentagon/dashboards.mine", { method: "POST", body: JSON.stringify({ params: { code: me.pentagonCode }, limit: 200 }) }).then(function (data) {
       var t = $("#mn-table"), e = $("#mn-empty");
@@ -1436,6 +1476,12 @@
 
   document.addEventListener("click", function (e) {
     if (!me) return;
+    var mineLink = e.target.closest("[data-mine-co]");
+    if (mineLink && mineLink.dataset.mineCo !== activeCompany && me.companies.indexOf(mineLink.dataset.mineCo) !== -1) {
+      activeCompany = mineLink.dataset.mineCo;
+      try { localStorage.setItem(COMPANY_KEY, activeCompany); } catch (x) {}
+      tasks = []; cards = []; drafts = []; finance = null;
+    }
     var t = e.target.closest("[data-co],[data-dept],[data-sub],[data-source],[data-add],[data-add-sub],[data-del],[data-cancel],[data-toggle],[data-fin-del]");
     if (!t || !$("#view").contains(t)) return;
     var d = t.dataset;
