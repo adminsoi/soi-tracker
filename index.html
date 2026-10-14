@@ -1290,22 +1290,36 @@
   }
 
   // ---------- Calendar ----------
-  // Your own Outlook calendar (read live from Microsoft 365, read-only) and
-  // the shared calendar set in /admin.html.
+  // Two tabs: "Personal calendar" (your own Outlook, read live from Microsoft
+  // 365, read-only) for everyone, and "HR global calendar" (the Outlook link
+  // set in /admin.html) for Leadership logins only — the server checks too.
   var calDays = 14;
+  var calTab = "personal";
+  var hrCal = null; // { name, url } once loaded
   function renderCalendar() {
-    setBreadcrumb(["Tools", "Calendar"]);
-    setTimeout(loadCalendar, 0);
-    return '<div class="intro"><div><div class="eyebrow">Tools</div><h1>Calendar</h1><p>Your Outlook calendar, straight from Microsoft 365. Read-only — nothing here changes your calendar.</p></div>' +
-      '<div class="co-wrap"><div class="eyebrow">Show</div><div class="cos">' + [7, 14, 28].map(function (d) {
+    if (!me.leadership) calTab = "personal";
+    setBreadcrumb(["Tools", "Calendar", calTab === "hr" ? "HR global" : "Personal"]);
+    var hrName = (hrCal && hrCal.name) || "HR global calendar";
+    var tabs = me.leadership
+      ? '<div class="tabs" role="tablist">' +
+        '<button type="button" role="tab" class="tab ' + (calTab === "personal" ? "active" : "") + '" aria-selected="' + (calTab === "personal") + '" data-cal-tab="personal">Personal calendar</button>' +
+        '<button type="button" role="tab" class="tab ' + (calTab === "hr" ? "active" : "") + '" aria-selected="' + (calTab === "hr") + '" data-cal-tab="hr">' + E(hrName) + "</button></div>"
+      : "";
+    setTimeout(calTab === "hr" ? loadHrCalendar : loadCalendar, 0);
+    var intro = '<div class="intro"><div><div class="eyebrow">Tools</div><h1>Calendar</h1><p>' +
+      (calTab === "hr" ? "The HR calendar, published from Outlook. View only." : "Your Outlook calendar, straight from Microsoft 365. Read-only — nothing here changes your calendar.") + "</p></div>" +
+      (calTab === "personal" ? '<div class="co-wrap"><div class="eyebrow">Show</div><div class="cos">' + [7, 14, 28].map(function (d) {
         return '<button type="button" class="co ' + (d === calDays ? "active" : "") + '" data-cal-days="' + d + '">' + (d === 7 ? "1 week" : d / 7 + " weeks") + "</button>";
-      }).join("") + "</div></div></div>" +
-      '<div class="section-title"><div><h2>Your calendar</h2><span class="small-note" id="cal-note">Loading…</span></div></div><div id="cal-mine"></div>' +
-      '<div id="cal-shared"></div>';
+      }).join("") + "</div></div>" : "") + "</div>";
+    var body = calTab === "hr"
+      ? '<div id="cal-hr" style="margin-top:18px;"><div class="empty">Loading…</div></div>'
+      : '<div class="section-title"><div><h2>Your calendar</h2><span class="small-note" id="cal-note">Loading…</span></div></div><div id="cal-mine"></div>';
+    return intro + tabs + body;
   }
   function dayKey(e) { return e.allDay ? e.start : new Date(e.start).toLocaleDateString("en-CA"); }
   function timeOf(iso) { return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }); }
   function loadCalendar() {
+    if (me.leadership && !hrCal) loadHrName();
     api("/api/calendar/me?days=" + calDays).then(function (data) {
       var box = $("#cal-mine");
       if (!box) return;
@@ -1334,15 +1348,28 @@
       $("#cal-note").textContent = "";
       box.innerHTML = '<div class="banner">' + E(err.message) + "</div>";
     });
-    api("/api/calendar/shared").then(function (cal) {
-      var box = $("#cal-shared");
+  }
+  // Just the name, so the tab can be labelled before it's opened.
+  function loadHrName() {
+    return api("/api/calendar/shared").then(function (cal) {
+      var changed = !hrCal || hrCal.name !== cal.name;
+      hrCal = cal;
+      if (changed && page === "calendar") requestRender();
+      return cal;
+    });
+  }
+  function loadHrCalendar() {
+    (hrCal ? Promise.resolve(hrCal) : loadHrName()).then(function (cal) {
+      var box = $("#cal-hr");
       if (!box) return;
       var url = safeLink(cal.url);
-      box.innerHTML = '<div class="section-title"><div><h2>' + E(cal.name || "Shared calendar") + '</h2><span class="small-note">' +
-        (url ? "Published from Outlook — view only." : "") + "</span></div></div>" +
-        (url ? '<iframe src="' + E(url) + '" title="' + E(cal.name || "Shared calendar") + '" style="width:100%;height:76vh;border:1px solid var(--line);border-radius:12px;background:#fff;"></iframe>'
-          : '<div class="banner">No shared calendar is set yet. An admin can add an Outlook "Publish to web" link under <b>Shared calendar</b> in /admin.html.</div>');
-    }).catch(function () {});
+      box.innerHTML = url
+        ? '<iframe src="' + E(url) + '" title="' + E(cal.name || "HR global calendar") + '" style="width:100%;height:76vh;border:1px solid var(--line);border-radius:12px;background:#fff;"></iframe>'
+        : '<div class="banner">No HR calendar link is set yet. An admin can add the Outlook "Publish to web" HTML link under <b>HR global calendar</b> in /admin.html.</div>';
+    }).catch(function (err) {
+      var box = $("#cal-hr");
+      if (box) box.innerHTML = '<div class="banner">' + E(err.message) + "</div>";
+    });
   }
 
   // ---------- Global ----------
@@ -1530,6 +1557,8 @@
     }
     var cd = e.target.closest("[data-cal-days]");
     if (cd && $("#view").contains(cd)) { calDays = +cd.dataset.calDays; render(); return; }
+    var ct = e.target.closest("[data-cal-tab]");
+    if (ct && $("#view").contains(ct)) { calTab = ct.dataset.calTab; render(); return; }
     var t = e.target.closest("[data-co],[data-dept],[data-sub],[data-source],[data-add],[data-add-sub],[data-del],[data-cancel],[data-toggle],[data-fin-del]");
     if (!t || !$("#view").contains(t)) return;
     var d = t.dataset;
