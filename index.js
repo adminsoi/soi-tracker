@@ -40,6 +40,7 @@ const {
   FINANCE_QUERIES,
   FIELD_GUESSES,
   allViews,
+  viewById,
   resolveField,
   markKey,
   resultRows,
@@ -297,11 +298,13 @@ app.post(
       ? body.priority
       : "medium";
 
-    // Only managers assign work to someone else. Everyone else's tasks are
-    // always their own, whatever the form sent.
-    const owner = isManager(req.user)
-      ? String(body.owner || "").trim().slice(0, 60)
-      : req.user.username;
+    // Who it's on: a manager can pick anyone. Otherwise — or when a manager
+    // leaves it unassigned — it goes to the department's default person
+    // (set in /admin.html, e.g. IT -> Shreya), so requests land with the
+    // right owner. Without a default, a regular user's task is their own.
+    const defaults = (await getSettings()).departmentDefaults || {};
+    const chosen = isManager(req.user) ? String(body.owner || "").trim().slice(0, 60) : "";
+    const owner = chosen || defaults[department] || (isManager(req.user) ? "" : req.user.username);
 
     const task = {
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
@@ -1216,6 +1219,156 @@ app.put(
   })
 );
 
+// ---------- Default person per department ----------
+// A new task with nobody picked goes to its department's default person.
+
+app.get(
+  "/api/department-defaults",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    res.json((await getSettings()).departmentDefaults || {});
+  })
+);
+
+app.get(
+  "/api/admin/department-defaults",
+  adminMiddleware,
+  asyncHandler(async (req, res) => {
+    res.json((await getSettings()).departmentDefaults || {});
+  })
+);
+
+app.put(
+  "/api/admin/department-defaults",
+  adminMiddleware,
+  asyncHandler(async (req, res) => {
+    const body = req.body || {};
+    const users = await getUsers();
+    const out = {};
+    for (const dept of DEPARTMENTS) {
+      const wanted = String(body[dept] || "").trim();
+      if (!wanted) continue;
+      const u = users.find((x) => sameUser(x.username, wanted));
+      if (!u) return res.status(400).json({ error: `${dept}: no login called "${wanted}"` });
+      out[dept] = u.username;
+    }
+    await withSettings((settings) => {
+      settings.departmentDefaults = out;
+    });
+    res.json(out);
+  })
+);
+
+// ---------- Business Development analytics (Pentagon) ----------
+// Volume and value of RFQs, Quotes, Sales Orders and Purchase Orders over
+// the last 30 or 90 days, by week, by customer and by Pentagon contact —
+// built from the same dashboard queries as the department tabs (asked for
+// a longer date range). SOI only; Business Development and full access.
+const ANALYTICS_VIEWS = ["rfqs", "quotes", "sales_orders", "purchase_orders"];
+const ANALYTICS_CACHE_MS = 5 * 60_000;
+const analyticsCache = new Map(); // queryName|from -> { at, rows, error }
+
+async function analyticsRows(view, from) {
+  const key = `${view.queryName}|${from}`;
+  const hit = analyticsCache.get(key);
+  if (hit && Date.now() - hit.at < ANALYTICS_CACHE_MS) return hit;
+  let entry;
+  try {
+    const data = await pentagonQuery(view.queryName, { params: { date_from: from, date_to: "", status: "", account_no: "" }, limit: 500 });
+    entry = { at: Date.now(), rows: resultRows(data), error: null };
+  } catch (err) {
+    console.error(`Analytics ${view.queryName} failed: ${err.message}`);
+    entry = { at: Date.now(), rows: [], error: /not configured/i.test(err.message) ? "Pentagon isn't connected" : `${view.queryName} didn't run` };
+  }
+  analyticsCache.set(key, entry);
+  return entry;
+}
+
+function mondayOfYmd(ymd) {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  return d.toISOString().slice(0, 10);
+}
+
+app.get(
+  "/api/analytics/business-development",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!req.user.companies.includes("SOI Aviation") || !inDepartment(req.user, "Business Development")) {
+      return res.status(403).json({ error: "Business Development analytics aren't available for your account" });
+    }
+    const days = [30, 90].includes(parseInt(req.query.days, 10)) ? parseInt(req.query.days, 10) : 30;
+    const from = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+    const users = (await getUsers()).map(normalizeUser);
+    const codeToUser = new Map();
+    users.forEach((u) => { if (u.pentagonCode) codeToUser.set(u.pentagonCode.trim().toLowerCase(), u.username); });
+    const cell = (v) => (v === null || v === undefined ? "" : String(v));
+    const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+
+    const views = ANALYTICS_VIEWS.map(viewById).filter(Boolean);
+    const results = await Promise.all(views.map((v) => analyticsRows(v, from)));
+    const summary = [];
+    const weeks = {};      // monday -> { view: { count, value } }
+    const customers = {};  // name -> { view: { count, value } }
+    const people = {};     // username or code -> { view: count }
+    views.forEach((view, i) => {
+      const { rows, error } = results[i];
+      const sample = rows[0];
+      const f = {
+        party: resolveField(view, sample, "party"), person: resolveField(view, sample, "person"),
+        entered: resolveField(view, sample, "entered"), amount: resolveField(view, sample, "amount"),
+      };
+      let value = 0;
+      for (const row of rows) {
+        const amount = f.amount ? num(row[f.amount]) : 0;
+        value += amount;
+        const day = f.entered ? cell(row[f.entered]).slice(0, 10) : "";
+        if (/^\d{4}-\d{2}-\d{2}$/.test(day) && day >= from) {
+          const w = (weeks[mondayOfYmd(day)] = weeks[mondayOfYmd(day)] || {});
+          const slot = (w[view.id] = w[view.id] || { count: 0, value: 0 });
+          slot.count += 1;
+          slot.value += amount;
+        }
+        const party = f.party ? cell(row[f.party]).trim() : "";
+        if (party) {
+          const c = (customers[party] = customers[party] || {});
+          const slot = (c[view.id] = c[view.id] || { count: 0, value: 0 });
+          slot.count += 1;
+          slot.value += amount;
+        }
+        const code = f.person ? cell(row[f.person]).trim() : "";
+        if (code) {
+          const who = codeToUser.get(code.toLowerCase()) || code;
+          const p = (people[who] = people[who] || {});
+          p[view.id] = (p[view.id] || 0) + 1;
+        }
+      }
+      summary.push({
+        id: view.id, label: view.label, count: rows.length, value: Math.round(value * 100) / 100,
+        hasValue: !!f.amount, error, capped: rows.length >= 200,
+      });
+    });
+
+    // Every week in the range, oldest first, so the chart has no gaps.
+    const weekList = [];
+    for (let w = mondayOfYmd(from); w <= new Date().toISOString().slice(0, 10); ) {
+      weekList.push({ week: w, data: weeks[w] || {} });
+      const d = new Date(`${w}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() + 7);
+      w = d.toISOString().slice(0, 10);
+    }
+    const topCustomers = Object.entries(customers)
+      .map(([name, d]) => ({ name, data: d, soValue: (d.sales_orders || {}).value || 0, activity: Object.values(d).reduce((s, x) => s + x.count, 0) }))
+      .sort((a, b) => b.soValue - a.soValue || b.activity - a.activity)
+      .slice(0, 10);
+    const byPerson = Object.entries(people)
+      .map(([name, d]) => ({ name, data: d, total: Object.values(d).reduce((s, x) => s + x, 0) }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 15);
+    res.json({ days, from, summary, weeks: weekList, topCustomers, byPerson });
+  })
+);
+
 // ---------- Claude project links per department ----------
 // claude.ai can't be embedded in another site, so each department tab links
 // out to its Claude project. Links are set on the admin page.
@@ -1438,6 +1591,40 @@ function ensureCert() {
   );
   console.log(`Generated a new self-signed certificate for ${SERVER_IP}`);
 }
+
+// One-time rename: the "Operations" department is now "Business
+// Development". Moves logins, tasks and per-department settings over;
+// does nothing once there's nothing left to rename.
+async function renameDepartment(from, to) {
+  let users = 0, tasks = 0;
+  const [u0, t0, s0] = await Promise.all([getUsers(), getTasks(), getSettings()]);
+  const needed =
+    u0.some((u) => (Array.isArray(u.departments) && u.departments.includes(from)) || u.department === from) ||
+    t0.some((t) => t.department === from) ||
+    ["claudeProjects", "departmentDefaults"].some((k) => s0[k] && s0[k][from]);
+  if (!needed) return;
+  await withUsers((list) => {
+    for (const u of list) {
+      if (Array.isArray(u.departments) && u.departments.includes(from)) {
+        u.departments = [...new Set(u.departments.map((d) => (d === from ? to : d)))];
+        users++;
+      }
+      if (u.department === from) { u.department = to; users++; }
+    }
+  });
+  await withTasks((list) => {
+    for (const t of list) if (t.department === from) { t.department = to; tasks++; }
+  });
+  await withSettings((s) => {
+    for (const k of ["claudeProjects", "departmentDefaults"]) {
+      if (s[k] && s[k][from] && !s[k][to]) { s[k][to] = s[k][from]; delete s[k][from]; }
+    }
+  });
+  if (users || tasks) console.log(`Renamed department "${from}" to "${to}": ${users} login(s), ${tasks} task(s).`);
+}
+renameDepartment("Operations", "Business Development").catch((err) =>
+  console.error("Department rename failed (will retry next start):", err.message)
+);
 
 ensureCert();
 

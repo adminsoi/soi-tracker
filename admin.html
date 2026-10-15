@@ -217,6 +217,16 @@
     </div>
 
     <div class="card">
+      <h2>Default person per department</h2>
+      <div class="hint" style="margin-bottom:12px;">A new task added in a department goes to this person when nobody else is picked — e.g. every IT request lands with IT. Managers can still assign anyone. Suggested picks are shown until you save.</div>
+      <form id="defaultsForm">
+        <div id="defaultsFields"></div>
+        <button type="submit">Save defaults</button>
+        <div class="msg" id="defaultsMsg"></div>
+      </form>
+    </div>
+
+    <div class="card">
       <h2>Claude projects</h2>
       <div class="hint" style="margin-bottom:12px;">Paste each department's Claude project link (it starts with https://claude.ai/project/). It shows up as a "Claude project" button on that department's tab and opens in a new tab — claude.ai can't be embedded inside the tracker. Leave blank for none.</div>
       <form id="claudeForm">
@@ -575,11 +585,50 @@
     }).catch(function (err) { msg.textContent = err.message; });
   });
 
+  // ---------- Default person per department ----------
+  // Suggestions (by first name) until defaults are saved for the first time.
+  var SUGGESTED_DEFAULTS = { "IT": "shreya", "Administrative": "melissa", "HR": "alexis", "Accounting & Finance": "mark", "Business Development": "ramin" };
+  function loadDefaults() {
+    return Promise.all([api("/api/admin/department-defaults"), api("/api/admin/users")]).then(function (r) {
+      var saved = r[0] || {}, users = r[1].map(function (u) { return u.username; }).sort(function (a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); });
+      var neverSaved = Object.keys(saved).length === 0;
+      var suggest = function (dept) {
+        var name = SUGGESTED_DEFAULTS[dept];
+        if (!name) return "";
+        return users.filter(function (u) { return u.toLowerCase() === name || u.toLowerCase().indexOf(name) === 0; })[0] || "";
+      };
+      var wrap = document.getElementById("defaultsFields");
+      wrap.innerHTML = "";
+      DEPARTMENTS.forEach(function (d, i) {
+        var current = saved[d] || (neverSaved ? suggest(d) : "");
+        var field = document.createElement("div");
+        field.className = "field";
+        field.innerHTML = '<label for="def-' + i + '">' + escapeHtml(d) + (neverSaved && current ? " <span style=\"font-weight:400\">(suggested)</span>" : "") + "</label>" +
+          '<select id="def-' + i + '" data-dept="' + escapeHtml(d) + '"><option value="">No default</option>' +
+          users.map(function (u) { return '<option value="' + escapeHtml(u) + '"' + (u === current ? " selected" : "") + ">" + escapeHtml(u) + "</option>"; }).join("") + "</select>";
+        wrap.appendChild(field);
+      });
+    }).catch(function (err) { document.getElementById("defaultsMsg").textContent = err.message; });
+  }
+
+  document.getElementById("defaultsForm").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var msg = document.getElementById("defaultsMsg");
+    msg.textContent = "";
+    msg.className = "msg";
+    var body = {};
+    document.querySelectorAll("#defaultsFields select").forEach(function (el) { body[el.getAttribute("data-dept")] = el.value; });
+    api("/api/admin/department-defaults", { method: "PUT", body: JSON.stringify(body) })
+      .then(function () { msg.textContent = "Saved."; msg.className = "msg ok"; loadDefaults(); })
+      .catch(function (err) { msg.textContent = err.message; });
+  });
+
   function start() {
     showPanel();
     Promise.all([loadCompanies(), loadDepartments()]).then(function () {
       loadClaudeProjects();
       loadSharedCalendar();
+      loadDefaults();
       return loadUsers();
     });
   }
