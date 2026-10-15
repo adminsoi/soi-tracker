@@ -265,6 +265,14 @@ the same Microsoft app as the Work inbox (needs **`Mail.Read`**).
      other lines go into the notes too.
 2. In Portainer, set `IT_REQUESTS_MAILBOX` on the stack and redeploy.
 
+The tracker lists the last two weeks of mail by date and matches subjects
+starting with `[IT Request]` (or `IT Request` without brackets when the body
+has a `Response ID:` line). It doesn't use Outlook search, which skips
+common words like "it". Replies, forwards and Sent Items are ignored.
+**IT → Requests** shows a status line (which mailbox, when it last
+checked, how many form emails it found, or what went wrong) and a **Check
+now** button for managers.
+
 The emails stay in the mailbox untouched (an Outlook rule can file them in a
 folder; every folder is read) and are left out of the Work inbox. Each
 response is added once and only from the last two weeks; deleting the task

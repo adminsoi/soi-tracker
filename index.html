@@ -1270,7 +1270,7 @@
         '<span class="grow"></span><button type="button" class="text-button" data-itr-clear>Clear</button></div>'
       : "";
 
-    return '<div class="summary-cards four">' +
+    return itSyncLine(itr.data.sync, can) + '<div class="summary-cards four">' +
         metric("Requests", all.length, (first ? "Since " + fmtDate(first) + " · " : "") + all.filter(function (r) { return r.submittedAt >= since30; }).length + " in the last 30 days") +
         metric("New", count("new"), "Just came in from the form", count("new") > 0) +
         metric("In progress", count("progress"), unrated ? unrated + " open ones not rated yet" : "All rated") +
@@ -1312,7 +1312,18 @@
       }).join("") : '<tr><td colspan="8" class="empty">No requests yet.</td></tr>') + "</tbody></table></div>" +
       '<p class="small-note" style="margin-top:12px;">Priority is your internal rating: ' + IT_PRIOS.map(function (p) { return p.id + " " + p.note; }).join(" · ") +
       ". On a request that's on the IT board, priority and Resolved carry over to that task." +
-      (itr.data.mailboxConnected ? " New form answers arrive every few minutes as New." : " New form answers will arrive automatically once IT_REQUESTS_MAILBOX is set.") + "</p>";
+      " New form answers arrive every few minutes as New.</p>";
+  }
+  // Whether form emails are coming through, and why not if they aren't.
+  function itSyncLine(st, can) {
+    if (!st) return "";
+    var btn = can ? ' <button type="button" class="text-button" data-itr-checknow>Check now</button>' : "";
+    if (!st.configured) return '<div class="banner"><b>Form emails aren\'t connected.</b> Set <code>IT_REQUESTS_MAILBOX</code> on the stack in Portainer to the mailbox the flow emails (and redeploy). Until then, only imported answers show here.</div>';
+    if (st.ok === false) return '<div class="banner"><b>Couldn\'t check ' + E(st.mailbox) + " for form emails.</b> " + E(st.error) + btn + "</div>";
+    var ago = st.at ? Math.max(0, Math.round((Date.now() - st.at) / 60000)) : null;
+    return '<p class="small-note" style="margin:14px 0 0;">Form emails: <b>' + E(st.mailbox) + "</b> · " +
+      (ago == null ? "first check in progress" : "checked " + (ago < 1 ? "just now" : ago + " min ago") + " · " + st.matched + " form email" + (st.matched === 1 ? "" : "s") + " in the last 2 weeks" + (st.added ? ", " + st.added + " new" : "")) +
+      " · every " + st.everyMinutes + " minutes" + btn + "</p>";
   }
   function changeItRequests(ids, change) {
     var set = {}; ids.forEach(function (id) { set[id] = 1; });
@@ -1334,10 +1345,19 @@
     }, function (err) { toast(err.message, true); itr.at = 0; render(); });
   }
   document.addEventListener("click", function (e) {
-    var t = e.target.closest && e.target.closest("[data-itr-tab],[data-itr-who],[data-itr-bulk],[data-itr-clear],[data-itr-merge],[data-itr-dup],[data-itr-notdup],[data-itr-undup],[data-itr-main],#itrImport");
+    var t = e.target.closest && e.target.closest("[data-itr-tab],[data-itr-who],[data-itr-bulk],[data-itr-clear],[data-itr-merge],[data-itr-dup],[data-itr-notdup],[data-itr-undup],[data-itr-main],[data-itr-checknow],#itrImport");
     if (!t) return;
     var ds = t.dataset;
     if (t.id === "itrImport") { $("#itrFile").click(); return; }
+    if ("itrChecknow" in ds) {
+      t.disabled = true; t.textContent = "Checking…";
+      api("/api/it-requests/check-now", { method: "POST", body: "{}" }).then(function (st) {
+        if (itr.data) itr.data.sync = st;
+        toast(st.ok === false ? "Couldn't check: " + st.error : st.added ? st.added + " new request" + (st.added === 1 ? "" : "s") + " added." : "Checked — " + st.matched + " form email" + (st.matched === 1 ? "" : "s") + ", nothing new.", st.ok === false);
+        itr.at = 0; render(); if (st.added) refresh();
+      }, function (err) { toast(err.message, true); render(); });
+      return;
+    }
     if (ds.itrTab) { itr.tab = ds.itrTab; render(); return; }
     if ("itrWho" in ds) { itr.person = itr.person === ds.itrWho ? "" : ds.itrWho; render(); window.scrollTo(0, 0); return; }
     if (ds.itrBulk) { var ids = Object.keys(itr.picked); itr.picked = {}; if (ids.length) changeItRequests(ids, { status: ds.itrBulk }); return; }
