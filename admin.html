@@ -292,6 +292,15 @@
     var t = token();
     if (t) headers.Authorization = "Bearer " + t;
     return fetch(path, Object.assign({}, options, { headers: headers })).then(function (res) {
+      // Admin sign-in lasts 2 hours (and a redeploy can end it). When it runs
+      // out, go back to the sign-in box instead of showing empty lists.
+      if (res.status === 401 && path !== "/api/admin/login") {
+        clearToken();
+        showLogin();
+        var m = document.getElementById("adminLoginMsg");
+        if (m) { m.textContent = "Your admin session ran out — sign in again. Nothing was lost."; m.className = "msg"; }
+        throw new Error("Admin session ran out");
+      }
       if (res.status === 204) return null;
       return res.json().then(function (data) {
         if (!res.ok) throw new Error(data.error || "Request failed");
