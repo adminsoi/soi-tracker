@@ -261,6 +261,24 @@ department (or full access); only managers change things.
 The responses (names, emails, phone numbers) are stored in the tracker's S3
 bucket as `it_requests.json`, never in this repo.
 
+### Resolved tab (private IT notebook)
+
+**IT → Resolved** is a private notebook, shown only to logins with
+**Private IT notebook** ticked in `/admin.html`. Other managers and full-access
+logins can't see or open it; the server checks the saved login on every
+request.
+
+- **Resolved tickets:** every request marked done on the Requests tab. Add
+  a category, **what fixed it** and private notes. "Needs write-up" shows
+  the ones you haven't written up yet.
+- **Turn into article:** makes a knowledge base article from the ticket
+  (problem, fix, notes) and links them.
+- **Knowledge base:** your articles with a title, category and body. Read
+  mode formats `# headings`, `- bullets` and `` `commands` ``. "Find an
+  article" filters the list.
+
+Everything saves as you type. It's stored in S3 as `it_notebook.json`.
+
 ## Finance from Pentagon
 
 For SOI Aviation, the Finance view also fills in from three Pentagon queries

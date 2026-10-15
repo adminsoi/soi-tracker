@@ -171,6 +171,10 @@
               <input type="checkbox" id="u-leadership" />
               <label for="u-leadership" style="margin:0;font-weight:600;color:var(--text);">Leadership — can see the HR global calendar and Who's in office tabs on the Calendar page</label>
             </div>
+            <div class="check-row full-access-row">
+              <input type="checkbox" id="u-itnotebook" />
+              <label for="u-itnotebook" style="margin:0;font-weight:600;color:var(--text);">Private IT notebook — the Resolved tab on the IT page (ticket write-ups and knowledge base). Only people ticked here can see it, even managers and full access can't.</label>
+            </div>
           </div>
         </div>
         <div class="hint" style="margin-top:-10px;">Everyone sees their own Personal calendar; only Leadership logins also get the HR global calendar and Who's in office.</div>
@@ -385,7 +389,8 @@
           : (u.departments || []).map(function (d) { return '<span class="tag">' + escapeHtml(d) + '</span>'; }).join("") || "—") +
           (u.manager || u.fullAccess ? ' <span class="tag full">Manager</span>' : "") +
           (u.breakdown ? ' <span class="tag">In breakdown</span>' : "") +
-          (u.leadership ? ' <span class="tag">Leadership</span>' : "");
+          (u.leadership ? ' <span class="tag">Leadership</span>' : "") +
+          (u.itNotebook ? ' <span class="tag">IT notebook</span>' : "");
         tr.innerHTML =
           "<td>" + escapeHtml(u.username) + "</td>" +
           "<td>" + escapeHtml(u.email || "") + "</td>" +
@@ -447,6 +452,7 @@
     document.getElementById("u-manager").checked = !!user.manager;
     document.getElementById("u-breakdown").checked = !!user.breakdown;
     document.getElementById("u-leadership").checked = !!user.leadership;
+    document.getElementById("u-itnotebook").checked = !!user.itNotebook;
     document.getElementById("u-calnames").value = (user.calendarNames || []).join(", ");
     var fullAccessBox = document.getElementById("u-fullaccess");
     fullAccessBox.checked = !!user.fullAccess;
@@ -506,6 +512,7 @@
       manager: document.getElementById("u-manager").checked,
       breakdown: document.getElementById("u-breakdown").checked,
       leadership: document.getElementById("u-leadership").checked,
+      itNotebook: document.getElementById("u-itnotebook").checked,
       calendarNames: document.getElementById("u-calnames").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean),
       departments: departments
     };
