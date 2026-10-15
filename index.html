@@ -155,6 +155,28 @@
   .prio-none { background: transparent; color: var(--muted); border: 1px dashed var(--line); }
   .itr-issue { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; max-width: 420px; }
   .itr-person { background: none; border: 0; padding: 0; font: inherit; color: var(--ink); text-align: left; cursor: pointer; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
+  /* Attendance */
+  .att-chip { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 6px 12px; font-size: 11.5px; color: var(--ink); cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+  .att-chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .att-chip.office .dot { background: #4c6b3c; } .att-chip.remote .dot { background: #3f5f8f; } .att-chip.out .dot { background: #9a8f84; }
+  .att-chip.todo { background: #fbeef2; border-color: #e9c9d4; color: var(--rose-ink); font-weight: 600; }
+  .att-modal { position: fixed; inset: 0; background: rgba(40, 32, 26, .35); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px; }
+  .att-modal[hidden] { display: none; }
+  .att-card { background: var(--card); border-radius: 16px; padding: 28px; width: 100%; max-width: 440px; box-shadow: 0 20px 60px rgba(0,0,0,.18); }
+  .att-card h3 { font: 26px/1.15 'Libre Caslon Display', Georgia, serif; margin: 0 0 6px; }
+  .att-card p { margin: 0 0 18px; color: var(--muted); font-size: 13px; }
+  .att-opts { display: grid; gap: 10px; }
+  .att-opt { display: flex; gap: 12px; align-items: center; text-align: left; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); cursor: pointer; font: inherit; color: var(--ink); }
+  .att-opt:hover, .att-opt:focus-visible { border-color: var(--rose-ink); background: #fdf7f9; }
+  .att-opt b { display: block; font-size: 14px; } .att-opt small { color: var(--muted); font-size: 12px; }
+  .att-opt .ic { font-size: 20px; width: 28px; text-align: center; }
+  .att-later { margin-top: 14px; text-align: center; }
+  .att-pill { display: inline-block; padding: 2px 9px; border-radius: 9px; font-size: 11px; font-weight: 600; }
+  .att-pill.office { background: #e3eedf; color: #4c6b3c; } .att-pill.remote { background: #e6ebf3; color: #3f5f8f; } .att-pill.out { background: #ecebe8; color: #6d655c; }
+  .att-flag { display: inline-block; padding: 2px 8px; border-radius: 9px; font-size: 10.5px; font-weight: 600; }
+  .att-flag.missing { background: #f6dcdb; color: #a03d3a; } .att-flag.late { background: #f7e6cc; color: #8a5a14; }
+  .att-week td { white-space: nowrap; }
+  .att-time { width: 96px; padding: 5px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); font: inherit; font-size: 12px; }
   /* IT notebook (IT → Resolved) */
   .nb-grid { display: grid; grid-template-columns: minmax(250px, 320px) 1fr; gap: 18px; align-items: start; margin-top: 16px; }
   .nb-list { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; max-height: 72vh; overflow-y: auto; }
@@ -319,11 +341,13 @@
     <header class="top">
       <div id="breadcrumb">DEPARTMENTS</div>
       <div class="header-tools">
+        <button type="button" id="attChip" class="att-chip" hidden></button>
         <a href="https://claude.ai/new" target="_blank" rel="noopener noreferrer" title="Opens claude.ai in a new tab">Claude ↗</a>
         <button type="button" class="pink" id="quickAdd">+ Add row</button>
       </div>
     </header>
     <div id="view"></div>
+    <div id="attModal" class="att-modal" hidden role="dialog" aria-modal="true" aria-labelledby="attTitle"></div>
     <footer class="foot">SOI AVIATION · DEPARTMENT TASK TRACKER <span>Internal use only · Saved to the SOI server</span></footer>
   </main>
 </div>
@@ -538,6 +562,7 @@
 
   function onSignedIn() {
     me.departments = me.departments || [];
+    loadAttMe(true);
     var saved = null;
     try { saved = localStorage.getItem(COMPANY_KEY); } catch (e) {}
     var ok = saved && ((saved === ALL && canUseAll()) || me.companies.indexOf(saved) !== -1);
@@ -733,6 +758,7 @@
     subs.push({ id: "tasks", label: isOps(dept) ? "Tasks" : "Projects" });
     if (dept === "IT" && canSeeItRequests()) subs.push({ id: "requests", label: "Requests" });
     if (dept === "IT" && me.itNotebook) subs.push({ id: "resolved", label: "Resolved" });
+    if (dept === "HR" && canSeeAttendance()) subs.push({ id: "attendance", label: "Attendance" });
     views.forEach(function (v) { subs.push({ id: v.id, label: v.label }); });
     var sub = subView[dept];
     if (!sub || !subs.some(function (s) { return s.id === sub; })) sub = subView[dept] = subs[0].id;
@@ -773,6 +799,7 @@
     else if (sub === "analytics") body = renderBdAnalytics();
     else if (sub === "requests") body = renderItRequests();
     else if (sub === "resolved") body = renderNotebook();
+    else if (sub === "attendance") body = renderAttendance();
     else if (sub === "tasks") body = isOps(dept) ? renderOpsTable(dept) : renderProjectTable(dept);
     else {
       var view = views.filter(function (v) { return v.id === sub; })[0];
@@ -1363,6 +1390,182 @@
         .then(function (d) { toast("Imported " + d.rows + " responses: " + d.added + " new, " + d.updated + " updated."); itr.at = 0; render(); },
               function (err) { toast(err.message, true); });
     }
+  });
+
+  // ---- Attendance ----
+  // Check-in pop-up the first time someone opens the tracker on a workday,
+  // a chip in the top bar to check out or switch, and HR → Attendance for HR
+  // and leadership. Times come from the server in office time.
+  var attMe = null;
+  var ATT_LABEL = { office: "In the office", remote: "Remote", out: "Out today" };
+  var ATT_SHORT = { office: "In office", remote: "Remote", out: "Out" };
+  function canSeeAttendance() { return !!(me && (me.leadership || me.departments.indexOf("HR") !== -1)); }
+  function t12(hm) {
+    if (!hm) return "";
+    var h = +hm.slice(0, 2), m = hm.slice(3, 5);
+    return (h % 12 || 12) + ":" + m + " " + (h < 12 ? "AM" : "PM");
+  }
+  function attSnoozed() { try { return +sessionStorage.getItem("att_snooze") > Date.now(); } catch (e) { return false; } }
+  function loadAttMe(prompt) {
+    return api("/api/attendance/me").then(function (d) {
+      attMe = d;
+      drawAttChip();
+      if (prompt && d.required && d.workday && !d.record && !attSnoozed() && $("#attModal").hidden) openAttModal();
+    }).catch(function () {});
+  }
+  setInterval(function () { if (me && !document.hidden) loadAttMe(true); }, 10 * 60 * 1000);
+  function drawAttChip() {
+    var chip = $("#attChip"), d = attMe;
+    if (!d || !d.required || (!d.workday && !d.record)) { chip.hidden = true; return; }
+    var r = d.record;
+    chip.hidden = false;
+    chip.className = "att-chip " + (r ? r.status : "todo");
+    chip.innerHTML = !r ? "Check in" :
+      '<span class="dot"></span>' + E(ATT_SHORT[r.status]) + (r.status === "out" ? "" : r.out ? " · left " + E(t12(r.out)) : " · since " + E(t12(r.in)));
+    chip.title = !r ? "Check in for today" : "Change or check out";
+  }
+  function openAttModal() {
+    var d = attMe, r = d && d.record, m = $("#attModal");
+    var first = me.username.split(/[ ._]/)[0];
+    first = first.charAt(0).toUpperCase() + first.slice(1);
+    var hour = +String(d.time).slice(0, 2);
+    var greet = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Hi";
+    var opt = function (id, ic, title, note) {
+      return '<button type="button" class="att-opt" data-att-where="' + id + '"><span class="ic" aria-hidden="true">' + ic + "</span><span><b>" + E(title) + "</b><small>" + E(note) + "</small></span></button>";
+    };
+    var html;
+    if (!r) {
+      var late = d.time >= d.cutoff;
+      html = '<h3 id="attTitle">' + E(greet) + ", " + E(first) + '</h3><p>Where are you working today? ' +
+        (late ? "It's after " + E(t12(d.cutoff)) + ", so this will show as a late check-in." : "Check in by " + E(t12(d.cutoff)) + ".") + "</p>" +
+        '<div class="att-opts">' + opt("office", "🏢", "In the office", "Checks you in at " + t12(d.time)) + opt("remote", "🏠", "Remote", "Working from somewhere else today") + opt("out", "🌴", "Out today", "PTO, sick or otherwise off") + "</div>" +
+        '<div class="att-later"><button type="button" class="text-button" data-att-later>Not now</button></div>';
+    } else {
+      html = '<h3 id="attTitle">' + E(ATT_LABEL[r.status]) + "</h3><p>" +
+        (r.status === "out" ? "You're marked out for today." : "Checked in at " + E(t12(r.in)) + (r.out ? ", checked out at " + E(t12(r.out)) + "." : ".")) + "</p>" +
+        '<div class="att-opts">' +
+        (r.status !== "out" && !r.out ? '<button type="button" class="att-opt" data-att-checkout><span class="ic" aria-hidden="true">👋</span><span><b>Check out</b><small>Heading out now (' + E(t12(d.time)) + ")</small></span></button>" : "") +
+        (r.status !== "office" ? opt("office", "🏢", "Switch to In the office", r.in ? "Keeps your " + t12(r.in) + " check-in" : "Checks you in now") : "") +
+        (r.status !== "remote" ? opt("remote", "🏠", "Switch to Remote", r.in ? "Keeps your " + t12(r.in) + " check-in" : "Checks you in now") : "") +
+        (r.status !== "out" ? opt("out", "🌴", "Switch to Out today", "PTO, sick or otherwise off") : "") + "</div>" +
+        '<div class="att-later"><button type="button" class="text-button" data-att-close>Close</button></div>';
+    }
+    m.innerHTML = '<div class="att-card">' + html + "</div>";
+    m.hidden = false;
+    var b = m.querySelector(".att-opt"); if (b) b.focus();
+  }
+  function closeAttModal() { $("#attModal").hidden = true; }
+  document.addEventListener("click", function (e) {
+    if (e.target.id === "attChip" || (e.target.closest && e.target.closest("#attChip"))) { loadAttMe(false).then(openAttModal); return; }
+    if (e.target.id === "attModal") { closeAttModal(); return; }
+    var t = e.target.closest && e.target.closest("[data-att-where],[data-att-checkout],[data-att-later],[data-att-close]");
+    if (!t) return;
+    if ("attLater" in t.dataset) { try { sessionStorage.setItem("att_snooze", String(Date.now() + 30 * 60 * 1000)); } catch (x) {} closeAttModal(); return; }
+    if ("attClose" in t.dataset) { closeAttModal(); return; }
+    var req = "attCheckout" in t.dataset
+      ? api("/api/attendance/check-out", { method: "POST", body: "{}" })
+      : api("/api/attendance/check-in", { method: "POST", body: JSON.stringify({ where: t.dataset.attWhere }) });
+    req.then(function (rec) {
+      attMe.record = rec; drawAttChip(); closeAttModal();
+      toast("attCheckout" in t.dataset ? "Checked out at " + t12(rec.out) + ". See you next time!" :
+        rec.status === "out" ? "Marked out for today." : ATT_LABEL[rec.status] + " — checked in at " + t12(rec.in) + ".");
+      if (canSeeAttendance()) { attHr.at = 0; if (page !== "overview") requestRender(); }
+    }, function (err) { toast(err.message, true); });
+  });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !$("#attModal").hidden) closeAttModal(); });
+
+  // HR → Attendance: one day (everyone, flags first) or a Monday–Friday week.
+  var attHr = { view: "day", date: "", data: null, key: "", at: 0, loading: false, error: "" };
+  function loadAttHr() {
+    var key = attHr.view + "|" + attHr.date;
+    if (attHr.loading) return;
+    attHr.loading = true;
+    api("/api/attendance/" + attHr.view + (attHr.date ? "?date=" + encodeURIComponent(attHr.date) : ""))
+      .then(function (d) { attHr.data = d; attHr.key = key; attHr.error = ""; if (!attHr.date) attHr.date = d.date || d.today; attHr.key = attHr.view + "|" + attHr.date; },
+            function (err) { attHr.error = err.message; })
+      .then(function () { attHr.loading = false; attHr.at = Date.now(); requestRender(); });
+  }
+  function renderAttendance() {
+    var key = attHr.view + "|" + attHr.date;
+    if (!attHr.data || attHr.key !== key || Date.now() - attHr.at > 60000) loadAttHr();
+    if (attHr.error) return '<div class="banner">' + E(attHr.error) + "</div>";
+    var d = attHr.data;
+    var bar = '<div class="table-toolbar" style="margin-top:16px;"><div class="seg">' +
+      '<button type="button" data-atth-view="day" class="' + (attHr.view === "day" ? "active" : "") + '">Day</button>' +
+      '<button type="button" data-atth-view="week" class="' + (attHr.view === "week" ? "active" : "") + '">Week</button></div>' +
+      '<button type="button" data-atth-step="-1" aria-label="Earlier">‹</button>' +
+      '<input type="date" id="atthDate" value="' + E(attHr.date) + '" aria-label="Date">' +
+      '<button type="button" data-atth-step="1" aria-label="Later">›</button>' +
+      (d && attHr.date !== (d.today || "") ? '<button type="button" class="text-button" data-atth-today>Today</button>' : "") +
+      '<span class="small-note">' + (d ? "Check in by " + E(t12(d.cutoff)) + " · set in /admin.html" : "") + "</span></div>";
+    if (!d || attHr.key !== key) return bar + '<div class="empty">Loading attendance…</div>';
+    return bar + (attHr.view === "week" ? renderAttWeek(d) : renderAttDay(d));
+  }
+  function renderAttDay(d) {
+    var ppl = d.people, n = function (f) { return ppl.filter(f).length; };
+    var st = function (s) { return function (p) { return p.record && p.record.status === s; }; };
+    var missing = n(function (p) { return p.flag === "missing"; }), late = n(function (p) { return p.flag === "late"; });
+    var rank = { missing: 0, late: 1, "": 2 };
+    var rows = ppl.slice().sort(function (a, b) { return rank[a.flag] - rank[b.flag] || a.username.toLowerCase().localeCompare(b.username.toLowerCase()); });
+    var isToday = d.date === d.today;
+    return '<div class="summary-cards four">' +
+        metric("In the office", n(st("office")), "") + metric("Remote", n(st("remote")), "") + metric("Out", n(st("out")), "PTO, sick or off") +
+        metric(isToday && d.time < d.cutoff ? "Not in yet" : "Not checked in", missing || (isToday && d.time < d.cutoff ? n(function (p) { return !p.record; }) : 0),
+          late ? late + " checked in late" : isToday && d.time < d.cutoff ? "Flags after " + t12(d.cutoff) : "", missing > 0) + "</div>" +
+      (!d.workday ? '<div class="banner">That\'s a weekend — nobody is expected to check in.</div>' : "") +
+      '<div class="table-wrap"><table class="plain"><thead><tr><th>Person</th><th>Where</th><th>In</th><th>Out</th><th>Flag</th></tr></thead><tbody>' +
+      rows.map(function (p) {
+        var r = p.record || {};
+        var u = E(p.username), dt = E(d.date);
+        return "<tr><td>" + u + (r.editedBy ? ' <span class="small-note" title="Changed by ' + E(r.editedBy) + '">(edited)</span>' : "") + "</td>" +
+          '<td><select class="fb-in" data-atth-st="' + u + '" data-date="' + dt + '" aria-label="Where ' + u + ' was">' +
+            '<option value="">—</option>' + ["office", "remote", "out"].map(function (s) { return '<option value="' + s + '"' + (r.status === s ? " selected" : "") + ">" + E(ATT_LABEL[s]) + "</option>"; }).join("") + "</select></td>" +
+          '<td><input type="time" class="att-time" data-atth-time="in" data-user="' + u + '" data-date="' + dt + '" value="' + E(r.in || "") + '"' + (r.status ? "" : " disabled") + ' aria-label="Check-in time"></td>' +
+          '<td><input type="time" class="att-time" data-atth-time="out" data-user="' + u + '" data-date="' + dt + '" value="' + E(r.out || "") + '"' + (r.status && r.status !== "out" ? "" : " disabled") + ' aria-label="Check-out time"></td>' +
+          "<td>" + (p.flag === "missing" ? '<span class="att-flag missing">Not checked in</span>' : p.flag === "late" ? '<span class="att-flag late">Late · ' + E(t12(r.in)) + "</span>" : "") + "</td></tr>";
+      }).join("") + "</tbody></table></div>" +
+      '<p class="small-note" style="margin-top:12px;">Change where someone was or their times to correct a day (it\'s marked edited). Setting “—” clears the day. People with “Checks in each workday” unticked in /admin.html aren\'t listed.</p>';
+  }
+  function renderAttWeek(d) {
+    var dayName = function (ds) { return new Date(ds + "T12:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }); };
+    var cell = function (c) {
+      var r = c.record;
+      if (c.flag === "missing") return '<span class="att-flag missing">Missing</span>';
+      if (!r) return c.date > d.today ? "" : '<span class="dim">—</span>';
+      return '<span class="att-pill ' + r.status + '">' + E(ATT_SHORT[r.status]) + "</span>" +
+        (r.in && r.status !== "out" ? '<span class="co-note">' + E(t12(r.in)) + (r.out ? "–" + E(t12(r.out)) : "") + "</span>" : "") +
+        (c.flag === "late" ? '<span class="att-flag late" style="margin-top:3px;">Late</span>' : "");
+    };
+    return '<div class="table-wrap"><table class="plain att-week"><thead><tr><th>Person</th>' + d.days.map(function (x) { return "<th>" + E(dayName(x)) + "</th>"; }).join("") +
+      "<th>Office</th><th>Remote</th><th>Out</th><th>Late</th><th>Missed</th></tr></thead><tbody>" +
+      d.people.map(function (p) {
+        var t = p.totals;
+        return "<tr><td>" + E(p.username) + "</td>" + p.days.map(function (c) { return "<td>" + cell(c) + "</td>"; }).join("") +
+          "<td>" + t.office + "</td><td>" + t.remote + "</td><td>" + t.out + "</td><td>" + (t.late ? '<b style="color:#8a5a14">' + t.late + "</b>" : 0) + "</td><td>" + (t.missing ? '<b style="color:#a03d3a">' + t.missing + "</b>" : 0) + "</td></tr>";
+      }).join("") + "</tbody></table></div>";
+  }
+  function attStep(n) {
+    var base = new Date((attHr.date || new Date().toISOString().slice(0, 10)) + "T12:00:00Z");
+    base.setUTCDate(base.getUTCDate() + n * (attHr.view === "week" ? 7 : 1));
+    attHr.date = base.toISOString().slice(0, 10);
+  }
+  document.addEventListener("click", function (e) {
+    var t = e.target.closest && e.target.closest("[data-atth-view],[data-atth-step],[data-atth-today]");
+    if (!t) return;
+    if (t.dataset.atthView) attHr.view = t.dataset.atthView;
+    else if (t.dataset.atthStep) attStep(+t.dataset.atthStep);
+    else attHr.date = attHr.data ? attHr.data.today : "";
+    render();
+  });
+  document.addEventListener("change", function (e) {
+    var t = e.target;
+    if (t.id === "atthDate") { if (t.value) { attHr.date = t.value; render(); } return; }
+    var user = t.dataset && (t.dataset.atthSt || t.dataset.user);
+    if (!user || !t.dataset.date) return;
+    var body = {};
+    if (t.dataset.atthSt !== undefined) body.status = t.value; else body[t.dataset.atthTime] = t.value;
+    api("/api/attendance/" + encodeURIComponent(t.dataset.date) + "/" + encodeURIComponent(user), { method: "PUT", body: JSON.stringify(body) })
+      .then(function () { toast("Saved."); attHr.at = 0; render(); if (sameUser(user, me.username)) loadAttMe(false); }, function (err) { toast(err.message, true); attHr.at = 0; render(); });
   });
 
   // ---- Private IT notebook (IT → Resolved) ----
