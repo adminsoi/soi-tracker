@@ -1719,17 +1719,38 @@ async function changeRequests(req, res, ids) {
     if (!IT_STATUSES.includes(body.status)) return res.status(400).json({ error: "Status must be new, progress or done" });
     change.status = body.status;
   }
+  // Duplicates: "duplicateOf" links a request to the original (closing it as
+  // resolved); "" unlinks it (back to In progress). "notDuplicate" hides the
+  // "looks like a repeat" hint.
+  if ("duplicateOf" in body) {
+    change.duplicateOf = String(body.duplicateOf || "").slice(0, 80);
+    change.status = change.duplicateOf ? "done" : "progress";
+    if (change.duplicateOf) change.notDuplicate = false;
+  }
+  if ("notDuplicate" in body) change.notDuplicate = !!body.notDuplicate;
   if (!Object.keys(change).length) return res.status(400).json({ error: "Nothing to change" });
   const wanted = new Set(ids.map((x) => String(x)).slice(0, 1000));
-  const changed = await withItRequests((list) => {
+  const result = await withItRequests((list) => {
+    if (change.duplicateOf) {
+      // Point at the original's original, never at itself.
+      let target = list.find((x) => x.id === change.duplicateOf);
+      for (let hops = 0; target && target.duplicateOf && hops < 10; hops++) target = list.find((x) => x.id === target.duplicateOf);
+      if (!target) return { error: "The original request isn't here any more" };
+      if (wanted.has(target.id)) return { error: "A request can't be a duplicate of itself" };
+      change.duplicateOf = target.id;
+    }
     const out = [];
     for (const r of list) {
       if (!wanted.has(r.id)) continue;
       Object.assign(r, change, { updatedAt: Date.now(), updatedBy: req.user.username });
       out.push(Object.assign({}, r));
     }
-    return out;
+    // Anything that was a duplicate of these now points at the new original.
+    if (change.duplicateOf) for (const r of list) if (wanted.has(r.duplicateOf)) r.duplicateOf = change.duplicateOf;
+    return { out };
   });
+  if (result.error) return res.status(400).json({ error: result.error });
+  const changed = result.out;
   if (!changed.length) return res.status(404).json({ error: "Those requests aren't here any more" });
   const linked = changed.filter((r) => r.taskId);
   if (linked.length && (change.priority || change.status)) {
@@ -1792,7 +1813,7 @@ app.get(
         const task = r.taskId ? byId.get(r.taskId) : null;
         return Object.assign({}, r, { status: requestStatus(r, task) });
       })
-      .filter((r) => r.status === "done" || nb.tickets[r.id])
+      .filter((r) => !r.duplicateOf && (r.status === "done" || nb.tickets[r.id]))
       .map((r) => Object.assign(r, { writeup: nb.tickets[r.id] || null }))
       .sort((a, b) => String(b.submittedAt).localeCompare(String(a.submittedAt)));
     const articles = nb.articles.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
