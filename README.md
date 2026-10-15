@@ -119,7 +119,7 @@ editable table; changes save to the server when you leave a field.
 
 ## Calendar
 
-The **Calendar** page (sidebar → Tools) has two tabs:
+The **Calendar** page (sidebar → Tools) has up to three tabs:
 
 - **Personal calendar** (everyone) — the signed-in person's own Outlook events for the next
   1–4 weeks, read live from Microsoft 365. Read-only: the tracker never
@@ -134,7 +134,20 @@ The **Calendar** page (sidebar → Tools) has two tabs:
   calendar. Anyone with that link can view it, so only publish a calendar
   that's fine to share.
 
-### One-time Microsoft 365 setup for "Your calendar"
+- **Who's in office** — Leadership only. One row per person, Mon–Fri, each
+  day **In office**, **Out** or **Remote** (with times for part of a day).
+  It reads only *Out of office* / *Working elsewhere* time from each
+  person's own Outlook, plus HR calendar entries whose title names the
+  person and says they're out or remote (e.g. "Greg – PTO", "Alexis WFH").
+  Event titles and details never reach the browser. To include the HR
+  calendar, set **Mailbox it lives in** (and optionally the calendar's name)
+  under **HR global calendar** in `/admin.html`; add nicknames per login
+  under **Names on the HR calendar**. Days use `OFFICE_TIMEZONE` (default
+  Pacific Standard Time).
+
+The Personal calendar can be shown as a **List** or a **Month** grid.
+
+### One-time Microsoft 365 setup for the calendars
 
 It uses the same app registration as assignment emails (`MS_TENANT_ID`,
 `MS_CLIENT_ID`, `MS_CLIENT_SECRET`). A Microsoft 365 admin needs to:
@@ -147,7 +160,8 @@ It uses the same app registration as assignment emails (`MS_TENANT_ID`,
 4. Recommended: limit the app to SOI staff mailboxes instead of the whole
    tenant, using Exchange Online's RBAC for Applications (or the older
    Application Access Policy). If you do, include the `MS_FROM_EMAIL`
-   mailbox so assignment emails keep working.
+   mailbox (so assignment emails keep working) and the HR calendar's
+   mailbox (so Who's in office can read it).
 
 No redeploy is needed after consent; it can take a few minutes to apply.
 Until then the page says the permission hasn't been granted yet.
