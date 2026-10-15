@@ -33,6 +33,7 @@ const {
 const { sendMail } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError } = require("./calendar");
 const { hrEvents, cleanFeedUrl, FeedError } = require("./hrcal");
+const { itRequestsConfigured, fetchItRequests, IT_REQUESTS_MAILBOX } = require("./itrequests");
 const { unreadThreads, MailError } = require("./mail");
 const { pentagonQuery } = require("./pentagon");
 const {
@@ -1638,6 +1639,55 @@ async function renameDepartment(from, to) {
 renameDepartment("Operations", "Business Development").catch((err) =>
   console.error("Department rename failed (will retry next start):", err.message)
 );
+
+// IT requests from the Microsoft Form (see itrequests.js): every few
+// minutes, each new "[IT Request]" email becomes an IT task for the IT
+// default person. Handled ones are remembered in settings, so a task that's
+// deleted later doesn't come back.
+const IT_REQUESTS_EVERY_MS = 3 * 60 * 1000;
+let itRequestsRunning = false;
+async function syncItRequests() {
+  if (!itRequestsConfigured || itRequestsRunning) return;
+  itRequestsRunning = true;
+  try {
+    const found = await fetchItRequests();
+    if (!found.length) return;
+    const settings = await getSettings();
+    const seen = new Set(settings.itRequestsSeen || []);
+    const fresh = found.filter((r) => !seen.has(r.responseId || r.messageId));
+    if (!fresh.length) return;
+    const owner = (settings.departmentDefaults || {}).IT || "";
+    const added = fresh.map((r, i) => ({
+      id: Date.now().toString(36) + i + Math.random().toString(36).slice(2, 6),
+      title: r.title.slice(0, 140),
+      company: "SOI Aviation",
+      department: "IT",
+      status: "todo",
+      priority: r.urgent ? "high" : "medium",
+      owner,
+      dueDate: "",
+      notes: r.fields.map((f) => `${f.label}: ${f.value}`).join("\n").slice(0, 500),
+      createdAt: Date.parse(r.receivedAt) || Date.now(),
+      createdBy: "IT request form",
+      source: "form",
+      requester: r.requester.slice(0, 120),
+      formResponseId: r.responseId || r.messageId,
+    }));
+    await withTasks((tasks) => { tasks.unshift(...added.reverse()); });
+    await withSettings((s) => {
+      s.itRequestsSeen = [...fresh.map((r) => r.responseId || r.messageId), ...(s.itRequestsSeen || [])].slice(0, 1000);
+    });
+    console.log(`IT requests: added ${added.length} task(s) from ${IT_REQUESTS_MAILBOX}.`);
+  } catch (err) {
+    console.error("IT request sync failed (will retry):", err.message);
+  } finally {
+    itRequestsRunning = false;
+  }
+}
+if (itRequestsConfigured) {
+  setTimeout(syncItRequests, 15 * 1000);
+  setInterval(syncItRequests, IT_REQUESTS_EVERY_MS);
+}
 
 ensureCert();
 

@@ -208,6 +208,35 @@ consent, and (strongly recommended) limit it to SOI staff mailboxes with
 Exchange Online RBAC for Applications. Until then the page says the
 permission hasn't been granted.
 
+## IT requests from the Microsoft Form
+
+Each response to the IT request form becomes a task on the **IT** page,
+assigned to the IT default person (see above), marked "From the IT form" with
+who asked. Urgent requests come in as **high** priority. Everything the
+person answered goes into the task's notes.
+
+How it gets there: the server isn't reachable from Microsoft's cloud, so
+the Power Automate flow can't send to it directly. Instead the flow emails
+each response, and the tracker reads those emails every 3 minutes through
+the same Microsoft app as the Work inbox (needs **`Mail.Read`**).
+
+1. In the flow, after **Get response details**, add **Office 365 Outlook →
+   Send an email (V2)**:
+   - **To:** the mailbox in `IT_REQUESTS_MAILBOX`.
+   - **Subject:** `[IT Request] ` followed by the issue answer. The tag must
+     be spelled exactly like that.
+   - **Body:** one `Label: value` per line, for example
+     `Response ID: <Response Id>`, `Requested by: <Responders' Email>`,
+     `Urgent: <answer>`, `Details: <answer>`. Response ID stops duplicates;
+     `Urgent` set to Yes / Urgent / High makes the task high priority. Any
+     other lines go into the notes too.
+2. In Portainer, set `IT_REQUESTS_MAILBOX` on the stack and redeploy.
+
+The emails stay in the mailbox untouched (an Outlook rule can file them in a
+folder; every folder is read) and are left out of the Work inbox. Each
+response is added once and only from the last two weeks; deleting the task
+won't bring it back.
+
 ## Finance from Pentagon
 
 For SOI Aviation, the Finance view also fills in from three Pentagon queries
