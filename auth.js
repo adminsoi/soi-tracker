@@ -14,7 +14,7 @@ const DEPARTMENTS = [
   "Purchasing",
   "IT",
   "HR",
-  "Operations",
+  "Business Development",
   "US Government",
   "Warehouse",
   "Administrative",

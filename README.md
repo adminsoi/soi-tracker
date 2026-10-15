@@ -2,7 +2,7 @@
 
 A small internal Kanban tracker with real logins: each account belongs to
 one department and only sees/edits that department's tasks. An
-`Operations` account sees and can touch everything. Data is stored as JSON
+full-access account sees and can touch everything. Data is stored as JSON
 in an S3 bucket — no separate database container needed.
 
 ## What's here
@@ -108,7 +108,7 @@ editable table; changes save to the server when you leave a field.
   Customer, Obsolete, Due date, Responsible, Done ✓ / ✗, Notes. Pentagon
   RFQs / Quotes / SOs / POs appear as rows too, and each Pentagon list is
   still there as its own view with date filters.
-- **IT, Admin, HR, Operations, US Government:** projects with sub-tasks
+- **IT, Admin, HR, Business Development, US Government:** projects with sub-tasks
   (a sub-task is a task with `parentId`; deleting a project deletes its
   sub-tasks).
 - **Accounting & Finance → Finance:** bank balances, daily payments
@@ -170,6 +170,26 @@ It uses the same app registration as assignment emails (`MS_TENANT_ID`,
 No redeploy is needed after consent; it can take a few minutes to apply.
 Until then the page says the permission hasn't been granted yet.
 
+## Default person per department
+
+Under **Default person per department** in `/admin.html`, pick who new
+tasks in each department go to when nobody else is chosen (for example IT →
+Shreya, Admin → Melissa, HR → Alexis, Accounting & Finance → Mark, Business
+Development → Ramin). This applies to everyone's new tasks, so a request
+added in IT lands with IT; the person who added it can still edit it, and
+only managers tick things off. A manager can still pick anyone.
+
+## Business Development
+
+"Operations" was renamed **Business Development**; logins, tasks and
+per-department settings move over automatically the first time the new
+version starts. Its tab has **Analytics** (SOI, Business Development and
+full-access logins): RFQs, Quotes, Sales Orders and Purchase Orders over the
+last 30 or 90 days — totals, weekly activity, top customers by sales order
+value, and activity by person (Pentagon contact) — from the same Pentagon
+queries as the department tabs. Its tasks are under **Projects**. If a
+query's `TOP 200` limit is hit for the range, the page says so.
+
 ## Work inbox
 
 **Work inbox** (sidebar → You) shows the signed-in person's own unread Outlook
@@ -207,7 +227,7 @@ These queries run only on the server, never from the browser.
 
 ## How access control works
 
-- Every login belongs to exactly one department (or `Operations`, which
+- Every login belongs to one or more departments (or has full access, which
   sees and can edit every department's board).
 - The server enforces this on every request — `GET /api/tasks` only
   returns that department's tasks, and `PATCH`/`DELETE` reject anything

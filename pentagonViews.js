@@ -53,6 +53,7 @@ const FIELD_GUESSES = {
   due: [["DUE_DATE", "DATE_DUE", "REQUIRED_DATE"], ["DUE"]],
   notes: [["NOTES", "REMARKS", "COMMENTS"], ["NOTE", "REMARK", "COMMENT"]],
   entered: [["ENTER_DATE", "DOC_DATE"], ["DATE"]],
+  amount: [["DOC_TOTAL", "TOTAL", "AMOUNT"], ["TOTAL", "AMT", "AMOUNT"]],
 };
 
 function allViews() {

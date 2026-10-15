@@ -293,9 +293,10 @@
   var COMPANY_ORDER = ["SOI Aviation", "CAS", "RedSun Aviation", "NanoTech Aviation"];
   var COMPANY_SHORT = { "SOI Aviation": "SOI", "CAS": "CAS", "RedSun Aviation": "RedSun", "NanoTech Aviation": "Nano" };
   // Tab order follows the design; anything else the server lists comes after.
-  var DEPT_ORDER = ["Procurement", "Purchasing", "Warehouse", "IT", "Administrative", "HR", "Accounting & Finance", "Operations", "US Government"];
-  var DEPT_SHORT = { "Administrative": "Admin", "Accounting & Finance": "Finance" };
+  var DEPT_ORDER = ["Procurement", "Purchasing", "Warehouse", "IT", "Administrative", "HR", "Accounting & Finance", "Business Development", "US Government"];
+  var DEPT_SHORT = { "Administrative": "Admin", "Accounting & Finance": "Finance", "Business Development": "Business Dev" };
   var DEPT_TAGLINE = {
+    "Business Development": "Pipeline analytics from Pentagon — RFQs, quotes and orders — plus business development projects.",
     "Procurement": "Parts, platforms and customers, plus RFQs and quotes from Pentagon.",
     "Purchasing": "Parts, platforms and customers, plus sales and purchase orders from Pentagon.",
     "Warehouse": "Parts, platforms and customers moving through the warehouse.",
@@ -303,7 +304,7 @@
   };
   // Procurement / Purchasing / Warehouse use part rows; everything else is projects with sub-tasks.
   var OPS_DEPTS = ["Procurement", "Purchasing", "Warehouse"];
-  var DEPARTMENTS_FALLBACK = ["Procurement", "Purchasing", "IT", "HR", "Operations", "US Government", "Warehouse", "Administrative", "Accounting & Finance"];
+  var DEPARTMENTS_FALLBACK = ["Procurement", "Purchasing", "IT", "HR", "Business Development", "US Government", "Warehouse", "Administrative", "Accounting & Finance"];
 
   // Quick links per department. The department's Claude project (set in
   // /admin.html) is added automatically.
@@ -359,6 +360,7 @@
   var showPerson = "";
   var addCompany = null;           // which company "+ Add row" uses on the All view
   var claudeProjects = {};
+  var deptDefaults = {};           // department -> default person (set in /admin.html)
   var usersByCompany = {};         // company -> [usernames] (managers only)
   var finance = null;              // { company, data } or { company, error }
   var loadedOnce = false;
@@ -511,6 +513,7 @@
       requestRender();
     }).catch(function () {});
     api("/api/claude-projects").then(function (p) { claudeProjects = p || {}; requestRender(); }).catch(function () {});
+    api("/api/department-defaults").then(function (d) { deptDefaults = d || {}; requestRender(); }).catch(function () {});
     loadInbox(true);
   }
 
@@ -625,7 +628,8 @@
 
   function render() {
     if (!me) return;
-    charts.concat(mnCharts).forEach(function (c) { try { c.destroy(); } catch (e) {} });
+    charts.concat(mnCharts, bdCharts).forEach(function (c) { try { c.destroy(); } catch (e) {} });
+    bdCharts = [];
     charts = [];
     mnCharts = [];
     renderNav();
@@ -679,6 +683,7 @@
     var views = pentagonViewsFor(dept);
     var subs = [];
     if (dept === "Accounting & Finance" && canSeeFinance()) subs.push({ id: "finance", label: "Finance" });
+    if (dept === "Business Development" && (activeCompany === "SOI Aviation" || (activeCompany === ALL && hasSOI()))) subs.push({ id: "analytics", label: "Analytics" });
     subs.push({ id: "tasks", label: isOps(dept) ? "Tasks" : "Projects" });
     views.forEach(function (v) { subs.push({ id: v.id, label: v.label }); });
     var sub = subView[dept];
@@ -717,6 +722,7 @@
 
     var body;
     if (sub === "finance") body = renderFinance();
+    else if (sub === "analytics") body = renderBdAnalytics();
     else if (sub === "tasks") body = isOps(dept) ? renderOpsTable(dept) : renderProjectTable(dept);
     else {
       var view = views.filter(function (v) { return v.id === sub; })[0];
@@ -796,7 +802,7 @@
   function responsibleCell(t) {
     var company = t.company || activeCompany;
     var current = isCard(t) ? t.assignee : t.owner;
-    if (!isManager()) return t.draft ? staticCell("You") : staticCell(t.owner);
+    if (!isManager()) return t.draft ? staticCell(deptDefaults[t.department] ? deptDefaults[t.department] + " (department default)" : "You") : staticCell(t.owner);
     var users = usersFor(company).slice();
     if (current && !users.some(function (u) { return sameUser(u, current); })) users.unshift(current);
     var none = isCard(t) && t.pentagonUser ? "Unassigned (" + t.pentagonUser + ")" : "Unassigned";
@@ -913,6 +919,145 @@
       (rows || '<tr><td colspan="6" class="empty">No projects yet. Add one above.</td></tr>') +
       "</tbody></table></div>" + legend();
   }
+
+  // ---- Business Development analytics (Pentagon) ----
+  // Stat tiles, weekly activity (RFQs / Quotes / Sales orders — a validated
+  // 3-colour set, each line labelled at its end), top customers by sales
+  // order value (one hue), and activity by person. Hover for exact numbers;
+  // the tables below double as the table view of the charts.
+  var BD_SERIES = [
+    { id: "rfqs", label: "RFQs", color: "#3f6ba8" },
+    { id: "quotes", label: "Quotes", color: "#b3761f" },
+    { id: "sales_orders", label: "Sales orders", color: "#2f8f6f" }
+  ];
+  var bdDays = 30, bdData = null, bdLoading = false, bdCharts = [];
+  function renderBdAnalytics() {
+    setQuickAdd("Add project", "Business Development");
+    if (!bdData || bdData.days !== bdDays) {
+      if (!bdLoading) {
+        bdLoading = true;
+        api("/api/analytics/business-development?days=" + bdDays).then(function (d) { bdData = d; bdLoading = false; requestRender(); })
+          .catch(function (err) { bdData = { days: bdDays, error: err.message }; bdLoading = false; requestRender(); });
+      }
+      return '<div class="empty">Loading analytics…</div>';
+    }
+    if (bdData.error) return '<div class="banner">' + E(bdData.error) + "</div>";
+    var d = bdData;
+    var byId = {};
+    d.summary.forEach(function (x) { byId[x.id] = x; });
+    var tile = function (id, label) {
+      var x = byId[id] || { count: 0, value: 0 };
+      var note = x.error ? x.error : x.hasValue ? money(x.value) + " total" : "No value column";
+      return metric(label, x.error ? "—" : x.count, note);
+    };
+    var errors = d.summary.filter(function (x) { return x.error; });
+    var capped = d.summary.filter(function (x) { return x.capped; });
+    setTimeout(drawBdCharts, 0);
+    return '<div class="table-toolbar" style="margin-top:16px;"><span class="small-note">Last</span><div class="seg">' + [30, 90].map(function (n) {
+        return '<button type="button" data-bd-days="' + n + '" class="' + (n === bdDays ? "active" : "") + '">' + n + " days</button>";
+      }).join("") + '</div><span class="small-note">From Pentagon, refreshed every 5 minutes</span></div>' +
+      (errors.length ? '<div class="banner">Not available yet: ' + E(errors.map(function (x) { return x.label + " (" + x.error + ")"; }).join(" · ")) + ".</div>" : "") +
+      (capped.length ? '<div class="banner">' + E(capped.map(function (x) { return x.label; }).join(", ")) + " hit the query's 200-row limit, so totals may be low for this range. Raise <b>TOP 200</b> in those queries to see everything.</div>" : "") +
+      '<div class="summary-cards four">' + tile("rfqs", "RFQs received") + tile("quotes", "Quotes") + tile("sales_orders", "Sales orders") + tile("purchase_orders", "Purchase orders") + "</div>" +
+      '<div class="grid-2" style="margin-bottom:18px;">' +
+      '<div class="card"><div class="card-label">Weekly activity</div><div class="chart-wrap"><canvas id="bd-weekly" aria-label="RFQs, quotes and sales orders per week"></canvas></div></div>' +
+      '<div class="card"><div class="card-label">Top customers by sales order value</div><div class="chart-wrap"><canvas id="bd-customers" aria-label="Top customers by sales order value"></canvas></div><div class="small-note" id="bd-cust-note"></div></div></div>' +
+      '<div class="grid-2">' +
+      '<div class="table-wrap"><table class="plain"><thead><tr><th>Customer</th><th>RFQs</th><th>Quotes</th><th>Sales orders</th><th>SO value</th></tr></thead><tbody>' +
+      (d.topCustomers.length ? d.topCustomers.map(function (c) {
+        var g = function (id) { return (c.data[id] || {}).count || 0; };
+        return "<tr><td>" + E(c.name) + "</td><td>" + g("rfqs") + "</td><td>" + g("quotes") + "</td><td>" + g("sales_orders") + "</td><td>" + E(c.soValue ? money(c.soValue) : "—") + "</td></tr>";
+      }).join("") : '<tr><td colspan="5" class="empty">No customer activity in this range.</td></tr>') + "</tbody></table></div>" +
+      '<div class="table-wrap"><table class="plain"><thead><tr><th>Person (Pentagon contact)</th><th>RFQs</th><th>Quotes</th><th>SOs</th><th>POs</th></tr></thead><tbody>' +
+      (d.byPerson.length ? d.byPerson.map(function (p) {
+        var g = function (id) { return p.data[id] || 0; };
+        return "<tr><td>" + E(p.name) + "</td><td>" + g("rfqs") + "</td><td>" + g("quotes") + "</td><td>" + g("sales_orders") + "</td><td>" + g("purchase_orders") + "</td></tr>";
+      }).join("") : '<tr><td colspan="5" class="empty">No Pentagon contacts in this range.</td></tr>') + "</tbody></table></div></div>" +
+      '<p class="small-note" style="margin-top:12px;">People are matched by the Pentagon code on their login; unmatched codes show as the code. Business Development projects are under <b>Projects</b>.</p>';
+  }
+  // Labels each line at its last point, in text ink beside a colour key.
+  var bdEndLabels = {
+    id: "bdEndLabels",
+    afterDatasetsDraw: function (chart) {
+      var ctx = chart.ctx;
+      // Collect each line's end point, then nudge labels apart (>= 14px) so
+      // lines ending at the same value don't print on top of each other.
+      var labels = [];
+      chart.data.datasets.forEach(function (ds, i) {
+        var meta = chart.getDatasetMeta(i);
+        if (meta.hidden || !meta.data.length) return;
+        var pt = meta.data[meta.data.length - 1];
+        labels.push({ x: pt.x, y: pt.y, text: ds.label, color: ds.borderColor });
+      });
+      labels.sort(function (a, b) { return a.y - b.y; });
+      for (var k = 1; k < labels.length; k++) {
+        if (labels[k].y - labels[k - 1].y < 14) labels[k].y = labels[k - 1].y + 14;
+      }
+      var bottom = chart.chartArea.bottom + 6;
+      for (var m = labels.length - 1; m >= 0; m--) {
+        var limit = m === labels.length - 1 ? bottom : labels[m + 1].y - 14;
+        if (labels[m].y > limit) labels[m].y = limit;
+      }
+      labels.forEach(function (l) {
+        ctx.save();
+        ctx.fillStyle = l.color;
+        ctx.fillRect(l.x + 6, l.y - 1, 8, 2);
+        ctx.fillStyle = "#3f352c";
+        ctx.font = "600 11px 'DM Sans', system-ui, sans-serif";
+        ctx.textBaseline = "middle";
+        ctx.fillText(l.text, l.x + 17, l.y);
+        ctx.restore();
+      });
+    }
+  };
+  function drawBdCharts() {
+    bdCharts.forEach(function (c) { try { c.destroy(); } catch (e) {} });
+    bdCharts = [];
+    if (typeof Chart === "undefined" || !bdData || bdData.error) return;
+    var tick = { color: "#948575", font: { size: 11 } };
+    var grid = { color: "rgba(63,53,44,0.06)" };
+    var tooltip = { backgroundColor: "#3f352c", padding: 8 };
+    var w = $("#bd-weekly");
+    if (w) {
+      bdCharts.push(new Chart(w, {
+        type: "line",
+        data: {
+          labels: bdData.weeks.map(function (x) { return new Date(x.week + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" }); }),
+          datasets: BD_SERIES.map(function (s) {
+            return { label: s.label, data: bdData.weeks.map(function (x) { return (x.data[s.id] || {}).count || 0; }), borderColor: s.color, backgroundColor: s.color, borderWidth: 2, pointRadius: 4, pointHoverRadius: 6, pointBorderColor: "#fffdfa", pointBorderWidth: 2, cubicInterpolationMode: "monotone" };
+          })
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, layout: { padding: { right: 92, top: 8 } },
+          interaction: { mode: "index", intersect: false },
+          plugins: { legend: { position: "bottom", labels: { color: "#948575", boxWidth: 10, boxHeight: 2, font: { size: 11 } } }, tooltip: Object.assign({ callbacks: { title: function (items) { return "Week of " + items[0].label; } } }, tooltip) },
+          scales: { x: { ticks: tick, grid: { display: false }, border: { display: false } }, y: { beginAtZero: true, ticks: Object.assign({ precision: 0 }, tick), grid: grid, border: { display: false } } }
+        },
+        plugins: [bdEndLabels]
+      }));
+    }
+    var c = $("#bd-customers");
+    if (c) {
+      var top = bdData.topCustomers.filter(function (x) { return x.soValue > 0; }).slice(0, 8);
+      if (!top.length) { c.parentElement.innerHTML = '<div class="empty">No sales order values in this range.</div>'; return; }
+      bdCharts.push(new Chart(c, {
+        type: "bar",
+        data: { labels: top.map(function (x) { return x.name; }), datasets: [{ label: "Sales order value", data: top.map(function (x) { return Math.round(x.soValue); }), backgroundColor: "#2f8f6f", borderRadius: 4, borderSkipped: "start", maxBarThickness: 16 }] },
+        options: {
+          indexAxis: "y", responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false }, tooltip: Object.assign({ displayColors: false, callbacks: { label: function (i) { return money(i.raw); } } }, tooltip) },
+          scales: { x: { beginAtZero: true, ticks: Object.assign({ callback: function (v) { return "$" + Number(v).toLocaleString(); } }, tick), grid: grid, border: { display: false } },
+                    y: { ticks: Object.assign({ callback: function (v) { var l = this.getLabelForValue(v); return l.length > 22 ? l.slice(0, 21) + "…" : l; } }, tick), grid: { display: false }, border: { display: false } } }
+        }
+      }));
+    }
+  }
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest && e.target.closest("[data-bd-days]");
+    if (!b) return;
+    bdDays = +b.dataset.bdDays;
+    render();
+  });
 
   // ---- Finance ----
   function renderFinance() {
@@ -1999,7 +2144,7 @@
     if (parentId) { var parent = findItem(parentId); if (parent && parent.company) co = parent.company; }
     var d = {
       id: "draft-" + Date.now() + "-" + Math.random().toString(16).slice(2, 6), draft: true, company: co, department: dept,
-      title: "", part: "", platform: "", customer: "", obsolete: "No", dueDate: "", notes: "", owner: "", status: "todo"
+      title: "", part: "", platform: "", customer: "", obsolete: "No", dueDate: "", notes: "", owner: deptDefaults[dept] || "", status: "todo"
     };
     if (parentId) d.parentId = parentId;
     drafts.unshift(d);
