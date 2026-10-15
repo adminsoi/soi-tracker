@@ -137,6 +137,13 @@
   .del:hover { color: var(--danger); background: transparent; }
   .row-tools { white-space: nowrap; text-align: right; }
   .row-tools .text-button { margin-right: 8px; }
+  .st, .st-select { display: inline-block; padding: 3px 9px; border-radius: 9px; font-size: 11px; font-weight: 600; border: 1px solid transparent; }
+  .st-select { cursor: pointer; padding: 4px 8px; font-family: inherit; }
+  .st-new { background: #e6ebf3; color: #3f5f8f; } .st-progress { background: #f7e6cc; color: #8a5a14; } .st-done { background: #e3eedf; color: #4c6b3c; }
+  .bulk-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: var(--soft); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; font-size: 13px; }
+  .bulk-bar .grow { flex: 1; }
+  .st-btn { border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
+  tr.picked td { background: #fbf1e3; }
   .prio { display: inline-block; padding: 2px 8px; border-radius: 9px; font-size: 10px; font-weight: 600; letter-spacing: .3px; }
   .prio-P1 { background: #f6dcdb; color: #a03d3a; } .prio-P2 { background: #f7e6cc; color: #8a5a14; }
   .prio-P3 { background: #e6ebf3; color: #3f5f8f; } .prio-P4 { background: var(--soft); color: var(--muted); }
@@ -1008,51 +1015,121 @@
 
   // ---- IT requests (IT → Requests) ----
   // Every IT form response: the Excel import plus new ones the flow emails.
-  // Sort or filter by person; managers give each an internal priority
-  // (P1–P4, separate from the form's own urgency) and mark it done.
+  // Tabs by status (New / In progress / Resolved); tick rows to change many
+  // at once. Managers give each an internal priority (P1–P4, separate from
+  // the form's own urgency). People are matched across spellings (below).
   var IT_PRIOS = [
     { id: "P1", label: "P1 · Critical", note: "drop everything" },
     { id: "P2", label: "P2 · High", note: "today" },
     { id: "P3", label: "P3 · Normal", note: "this week" },
     { id: "P4", label: "P4 · Low", note: "when there's time" }
   ];
-  var itr = { data: null, at: 0, loading: false, error: "", person: "", status: "open", sort: "newest" };
+  var IT_STATUSES = [
+    { id: "new", label: "New", note: "Just came in from the form" },
+    { id: "progress", label: "In progress", note: "Being worked on" },
+    { id: "done", label: "Resolved", note: "Fixed and closed" }
+  ];
+  var IT_STATUS_LABEL = { new: "New", progress: "In progress", done: "Resolved" };
+  var itr = { data: null, at: 0, loading: false, error: "", person: "", tab: "all", sort: "newest", picked: {} };
   function canSeeItRequests() { return !!(me && (me.fullAccess || me.departments.indexOf("IT") !== -1)); }
   function loadItRequests() {
     if (itr.loading) return;
     itr.loading = true;
-    api("/api/it-requests").then(function (d) { itr.data = d; itr.error = ""; }, function (err) { itr.error = err.message; })
+    api("/api/it-requests").then(function (d) { matchPeople(d.requests); itr.data = d; itr.error = ""; }, function (err) { itr.error = err.message; })
       .then(function () { itr.loading = false; itr.at = Date.now(); requestRender(); });
   }
-  function itrPerson(r) { return r.name || r.email || "Unknown"; }
+
+  // One person, however they typed their name: "ELVIS", "elvis" and
+  // "Elvis Smith" are the same. Requests join up on the same name (ignoring
+  // capitals and spacing), or the same email when the names agree; a first
+  // name on its own joins a full name when only one person has that first
+  // name. Names show in normal capitals. Sets r.pkey and r.pname.
+  function matchPeople(list) {
+    var parent = [];
+    var find = function (i) { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+    var join = function (a, b) { a = find(a); b = find(b); if (a !== b) parent[b] = a; };
+    var norm = function (n) { return String(n || "").toLowerCase().replace(/[^a-zÀ-ɏ'\- ]+/g, " ").replace(/\s+/g, " ").trim(); };
+    // Two names can be one person: the same, one missing, a first name on
+    // its own, or an initial ("J Smith" / "John Smith").
+    var fits = function (a, b) {
+      if (!a || !b || a === b) return true;
+      var x = a.split(" "), y = b.split(" ");
+      if (x.length === 1 || y.length === 1) return x[0] === y[0] || (x[0].length === 1 || y[0].length === 1) && x[0][0] === y[0][0];
+      return x[x.length - 1] === y[y.length - 1] && x[0][0] === y[0][0] && (x[0].length === 1 || y[0].length === 1 || x[0] === y[0]);
+    };
+    var byEmail = {}, byName = {};
+    list.forEach(function (r, i) {
+      parent[i] = i;
+      var em = String(r.email || "").trim().toLowerCase();
+      var nm = String(r.name || "").indexOf("@") === -1 ? norm(r.name) : "";
+      r._em = em; r._nm = nm;
+      if (nm) { if (byName[nm] != null) join(byName[nm], i); else byName[nm] = i; }
+      // A shared address (front desk, a manager filing for someone) mustn't
+      // merge different people, so the names have to agree too.
+      if (em) {
+        (byEmail[em] = byEmail[em] || []).forEach(function (k) { if (fits(nm, list[k]._nm)) join(k, i); });
+        byEmail[em].push(i);
+      }
+    });
+    // First name only -> the one person whose full name starts with it.
+    var fullByFirst = {};
+    list.forEach(function (r, i) {
+      if (r._nm.indexOf(" ") === -1) return;
+      var f = r._nm.split(" ")[0];
+      (fullByFirst[f] = fullByFirst[f] || {})[find(i)] = 1;
+    });
+    list.forEach(function (r, i) {
+      if (!r._nm || r._nm.indexOf(" ") !== -1) return;
+      var roots = Object.keys(fullByFirst[r._nm] || {}).map(function (x) { return find(+x); });
+      var uniq = roots.filter(function (x, k) { return roots.indexOf(x) === k; });
+      if (uniq.length === 1) join(uniq[0], i);
+    });
+    // Display name: the fullest version used, in normal capitals.
+    var names = {};
+    list.forEach(function (r, i) {
+      var g = find(i), n = names[g] || (names[g] = { counts: {}, email: "" });
+      if (r._nm) n.counts[r._nm] = (n.counts[r._nm] || 0) + 1;
+      if (!n.email && r._em) n.email = r._em;
+    });
+    var title = function (n) { return n.replace(/(^|[\s'\-])([a-zà-ɏ])/g, function (m, a, b) { return a + b.toUpperCase(); }); };
+    list.forEach(function (r, i) {
+      var g = find(i), n = names[g];
+      var best = Object.keys(n.counts).sort(function (a, b) {
+        return b.split(" ").length - a.split(" ").length || n.counts[b] - n.counts[a] || b.length - a.length;
+      })[0];
+      r.pkey = "p" + g;
+      r.pname = best ? title(best) : n.email || "Unknown";
+      delete r._em; delete r._nm;
+    });
+    return list;
+  }
+  function itrPerson(r) { return r.pname || r.name || r.email || "Unknown"; }
+
   function renderItRequests() {
     if (!itr.data || Date.now() - itr.at > 120000) loadItRequests();
     if (itr.error) return '<div class="banner">' + E(itr.error) + "</div>";
     if (!itr.data) return '<div class="empty">Loading requests…</div>';
     var all = itr.data.requests, can = itr.data.canRate;
     var since30 = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
-    var open = all.filter(function (r) { return r.status !== "done"; });
-    var unrated = open.filter(function (r) { return !r.priority; });
-    var immediate = all.filter(function (r) { return /^immediate/i.test(r.urgency); }).length;
+    var count = function (st) { return all.filter(function (r) { return r.status === st; }).length; };
     var first = all.length ? all[all.length - 1].submittedAt : "";
+    var unrated = all.filter(function (r) { return r.status !== "done" && !r.priority; }).length;
 
     // By person
     var people = {};
     all.forEach(function (r) {
-      var k = itrPerson(r);
-      var p = people[k] || (people[k] = { name: k, company: r.company, n: 0, open: 0, p12: 0, last: "" });
-      p.n++; if (r.status !== "done") p.open++; if (r.priority === "P1" || r.priority === "P2") p.p12++;
+      var p = people[r.pkey] || (people[r.pkey] = { key: r.pkey, name: itrPerson(r), company: r.company, n: 0, new: 0, progress: 0, done: 0, p12: 0, last: "" });
+      p.n++; p[r.status] = (p[r.status] || 0) + 1;
+      if (r.priority === "P1" || r.priority === "P2") p.p12++;
       if (r.submittedAt > p.last) p.last = r.submittedAt;
+      if (!p.company && r.company) p.company = r.company;
     });
     var plist = Object.keys(people).map(function (k) { return people[k]; })
       .sort(function (a, b) { return b.n - a.n || a.name.localeCompare(b.name); });
+    if (itr.person && !people[itr.person]) itr.person = "";
 
-    var rows = all.filter(function (r) {
-      if (itr.person && itrPerson(r) !== itr.person) return false;
-      if (itr.status === "open" && r.status === "done") return false;
-      if (itr.status === "done" && r.status !== "done") return false;
-      return true;
-    });
+    var inPerson = all.filter(function (r) { return !itr.person || r.pkey === itr.person; });
+    var rows = inPerson.filter(function (r) { return itr.tab === "all" || r.status === itr.tab; });
     var prank = function (r) { return r.priority ? +r.priority.slice(1) : 9; };
     rows.sort(function (a, b) {
       if (itr.sort === "oldest") return String(a.submittedAt).localeCompare(String(b.submittedAt));
@@ -1060,6 +1137,11 @@
       if (itr.sort === "person") return itrPerson(a).localeCompare(itrPerson(b)) || String(b.submittedAt).localeCompare(String(a.submittedAt));
       return String(b.submittedAt).localeCompare(String(a.submittedAt));
     });
+    // Keep only ticks on rows that still exist.
+    var ids = {}; all.forEach(function (r) { ids[r.id] = 1; });
+    Object.keys(itr.picked).forEach(function (id) { if (!ids[id]) delete itr.picked[id]; });
+    var picked = Object.keys(itr.picked);
+    var allShownPicked = rows.length > 0 && rows.every(function (r) { return itr.picked[r.id]; });
 
     var prioCell = function (r) {
       if (!can) return r.priority ? '<span class="prio prio-' + r.priority + '">' + E(r.priority) + "</span>" : '<span class="prio prio-none">Not rated</span>';
@@ -1068,73 +1150,102 @@
       }).join("") + "</select>";
     };
     var statusCell = function (r) {
-      var done = r.status === "done";
-      return '<button type="button" class="toggle ' + (done ? "yes" : "no") + '" data-itr-status="' + E(r.id) + '"' + (can ? "" : " disabled") +
-        ' title="' + (done ? "Done" : "Open") + (can ? " — click to change" : " — only a manager can change this") + '" aria-label="' + (done ? "Done" : "Open") + '">' + (done ? "✓" : "✗") + "</button>";
+      if (!can) return '<span class="st st-' + r.status + '">' + E(IT_STATUS_LABEL[r.status]) + "</span>";
+      return '<select class="st-select st-' + r.status + '" data-itr-st="' + E(r.id) + '" aria-label="Status">' + IT_STATUSES.map(function (s) {
+        return '<option value="' + s.id + '"' + (r.status === s.id ? " selected" : "") + ">" + E(s.label) + "</option>";
+      }).join("") + "</select>";
     };
     var when = function (s) { return s ? E(fmtDate(s)) + '<span class="co-note">' + E(String(s).slice(11, 16)) + "</span>" : "—"; };
+    var tabCount = function (st) { return st === "all" ? inPerson.length : inPerson.filter(function (r) { return r.status === st; }).length; };
 
     var personOpts = '<option value="">Everyone</option>' + plist.map(function (p) {
-      return '<option value="' + E(p.name) + '"' + (p.name === itr.person ? " selected" : "") + ">" + E(p.name) + " (" + p.n + ")</option>";
+      return '<option value="' + E(p.key) + '"' + (p.key === itr.person ? " selected" : "") + ">" + E(p.name) + " (" + p.n + ")</option>";
     }).join("");
 
+    var bulk = can && picked.length
+      ? '<div class="bulk-bar"><b>' + picked.length + " selected</b><span>Mark as</span>" + IT_STATUSES.map(function (s) {
+          return '<button type="button" class="st-btn st-' + s.id + '" data-itr-bulk="' + s.id + '">' + E(s.label) + "</button>";
+        }).join("") + '<span class="grow"></span><button type="button" class="text-button" data-itr-clear>Clear</button></div>'
+      : "";
+
     return '<div class="summary-cards four">' +
-        metric("Requests", all.length, first ? "Since " + fmtDate(first) : "None yet") +
-        metric("Open", open.length, unrated.length ? unrated.length + " not rated yet" : "All rated", unrated.length > 0) +
-        metric("Last 30 days", all.filter(function (r) { return r.submittedAt >= since30; }).length, "Submitted on the form") +
-        metric("Marked “Immediate”", all.length ? Math.round(immediate / all.length * 100) + "%" : "—", "Form urgency — your P1–P4 rating is separate") + "</div>" +
+        metric("Requests", all.length, (first ? "Since " + fmtDate(first) + " · " : "") + all.filter(function (r) { return r.submittedAt >= since30; }).length + " in the last 30 days") +
+        metric("New", count("new"), "Just came in from the form", count("new") > 0) +
+        metric("In progress", count("progress"), unrated ? unrated + " open ones not rated yet" : "All rated") +
+        metric("Resolved", count("done"), "Fixed and closed") + "</div>" +
+      '<div class="tabs" role="tablist" style="margin-top:4px;">' + [{ id: "all", label: "All" }].concat(IT_STATUSES).map(function (t) {
+        var n = tabCount(t.id);
+        return '<button type="button" role="tab" class="tab ' + (itr.tab === t.id ? "active" : "") + '" aria-selected="' + (itr.tab === t.id) + '" data-itr-tab="' + t.id + '">' +
+          E(t.label) + (n ? '<span class="badge">' + n + "</span>" : "") + "</button>";
+      }).join("") + "</div>" +
       '<div class="table-toolbar"><select id="itrPerson" aria-label="Show one person">' + personOpts + "</select>" +
-        '<div class="seg">' + [["open", "Open"], ["done", "Done"], ["all", "All"]].map(function (x) {
-          return '<button type="button" data-itr-show="' + x[0] + '" class="' + (itr.status === x[0] ? "active" : "") + '">' + x[1] + "</button>";
-        }).join("") + "</div>" +
         '<select id="itrSort" aria-label="Sort by">' + [["newest", "Newest first"], ["oldest", "Oldest first"], ["priority", "Priority"], ["person", "Person A–Z"]].map(function (x) {
           return '<option value="' + x[0] + '"' + (itr.sort === x[0] ? " selected" : "") + ">Sort: " + x[1] + "</option>";
         }).join("") + "</select>" +
+        (itr.person ? '<button type="button" class="text-button" data-itr-who="">Show everyone</button>' : "") +
         (can ? '<input type="file" id="itrFile" accept=".xlsx" hidden><button type="button" class="primary" id="itrImport">Import from Excel</button>' : "") + "</div>" +
-      '<div class="table-wrap"><table class="wide"><thead><tr><th>Submitted</th><th>Person</th><th>Issue</th><th>Form says</th><th>Priority</th><th>Done</th><th>Contact</th></tr></thead><tbody>' +
+      bulk +
+      '<div class="table-wrap"><table class="wide"><thead><tr>' +
+        (can ? '<th class="center" style="width:34px;"><input type="checkbox" class="check" data-itr-pickall' + (allShownPicked ? " checked" : "") + ' aria-label="Select all shown"></th>' : "") +
+        "<th>Submitted</th><th>Person</th><th>Issue</th><th>Form says</th><th>Priority</th><th>Status</th><th>Contact</th></tr></thead><tbody>" +
       (rows.length ? rows.map(function (r) {
-        return '<tr class="' + (r.status === "done" ? "done" : "") + '"><td>' + when(r.submittedAt) + "</td>" +
-          '<td><button type="button" class="itr-person" data-itr-who="' + E(itrPerson(r)) + '">' + E(itrPerson(r)) + "</button>" +
+        var on = !!itr.picked[r.id];
+        return '<tr class="' + (on ? "picked " : "") + (r.status === "done" ? "done" : "") + '">' +
+          (can ? '<td class="center"><input type="checkbox" class="check" data-itr-pick="' + E(r.id) + '"' + (on ? " checked" : "") + ' aria-label="Select this request"></td>' : "") +
+          "<td>" + when(r.submittedAt) + "</td>" +
+          '<td><button type="button" class="itr-person" data-itr-who="' + E(r.pkey) + '">' + E(itrPerson(r)) + "</button>" +
             '<span class="co-note">' + E([r.company, r.remote === "Yes" ? "Remote" : ""].filter(Boolean).join(" · ")) + "</span></td>" +
           '<td><div class="itr-issue" title="' + E(r.issue) + '">' + E(r.issue || "—") + "</div>" +
             (r.notes ? '<span class="co-note" title="' + E(r.notes) + '">Note: ' + E(r.notes.length > 90 ? r.notes.slice(0, 90) + "…" : r.notes) + "</span>" : "") +
-            (r.startedOn ? '<span class="co-note">Started ' + E(fmtDate(r.startedOn)) + "</span>" : "") +
             (r.taskId ? '<span class="co-note">On the IT board' + (r.taskOwner ? " · " + E(r.taskOwner) : "") + "</span>" : "") + "</td>" +
-          "<td>" + E(r.urgency || "—") + "</td><td>" + prioCell(r) + '</td><td class="center">' + statusCell(r) + "</td>" +
+          "<td>" + E(r.urgency || "—") + "</td><td>" + prioCell(r) + "</td><td>" + statusCell(r) + "</td>" +
           "<td>" + E(r.contact || "—") + (r.phone ? '<span class="co-note">' + E(r.phone) + "</span>" : "") + (r.email ? '<span class="co-note">' + E(r.email) + "</span>" : "") + "</td></tr>";
-      }).join("") : '<tr><td colspan="7" class="empty">' + (all.length ? "Nothing matches." : can ? "No requests yet — use Import from Excel for past form answers." : "No requests yet.") + "</td></tr>") +
+      }).join("") : '<tr><td colspan="' + (can ? 8 : 7) + '" class="empty">' + (all.length ? "Nothing here." : can ? "No requests yet — use Import from Excel for past form answers." : "No requests yet.") + "</td></tr>") +
       "</tbody></table></div>" +
       '<div class="section-title" style="margin-top:26px;"><div><h2>By person</h2><span class="small-note">Click a name to see only their requests.</span></div></div>' +
-      '<div class="table-wrap"><table class="plain"><thead><tr><th>Person</th><th>Company</th><th>Requests</th><th>Open</th><th>P1 / P2</th><th>Last request</th></tr></thead><tbody>' +
+      '<div class="table-wrap"><table class="plain"><thead><tr><th>Person</th><th>Company</th><th>Requests</th><th>New</th><th>In progress</th><th>Resolved</th><th>P1 / P2</th><th>Last request</th></tr></thead><tbody>' +
       (plist.length ? plist.map(function (p) {
-        return '<tr><td><button type="button" class="itr-person" data-itr-who="' + E(p.name) + '">' + E(p.name) + "</button></td><td>" + E(p.company || "—") + "</td><td>" + p.n + "</td><td>" + p.open + "</td><td>" + p.p12 + "</td><td>" + E(fmtDate(p.last)) + "</td></tr>";
-      }).join("") : '<tr><td colspan="6" class="empty">No requests yet.</td></tr>') + "</tbody></table></div>" +
+        return '<tr><td><button type="button" class="itr-person" data-itr-who="' + E(p.key) + '">' + E(p.name) + "</button></td><td>" + E(p.company || "—") + "</td><td>" + p.n + "</td><td>" + (p.new || 0) + "</td><td>" + (p.progress || 0) + "</td><td>" + (p.done || 0) + "</td><td>" + p.p12 + "</td><td>" + E(fmtDate(p.last)) + "</td></tr>";
+      }).join("") : '<tr><td colspan="8" class="empty">No requests yet.</td></tr>') + "</tbody></table></div>" +
       '<p class="small-note" style="margin-top:12px;">Priority is your internal rating: ' + IT_PRIOS.map(function (p) { return p.id + " " + p.note; }).join(" · ") +
-      ". Setting it on a request that's on the IT board also sets that task's priority (P1–P2 high, P3 medium, P4 low)." +
-      (itr.data.mailboxConnected ? " New form answers arrive every few minutes." : " New form answers will arrive automatically once IT_REQUESTS_MAILBOX is set.") + "</p>";
+      ". On a request that's on the IT board, priority and Resolved carry over to that task." +
+      (itr.data.mailboxConnected ? " New form answers arrive every few minutes as New." : " New form answers will arrive automatically once IT_REQUESTS_MAILBOX is set.") + "</p>";
   }
-  function patchItRequest(id, change) {
-    var r = itr.data && itr.data.requests.filter(function (x) { return x.id === id; })[0];
-    if (r) { Object.assign(r, change); render(); }
-    api("/api/it-requests/" + encodeURIComponent(id), { method: "PATCH", body: JSON.stringify(change) })
-      .then(function () { if (r && r.taskId) refresh(); }, function (err) { toast(err.message, true); itr.at = 0; render(); });
+  function changeItRequests(ids, change) {
+    var set = {}; ids.forEach(function (id) { set[id] = 1; });
+    var hit = itr.data ? itr.data.requests.filter(function (x) { return set[x.id]; }) : [];
+    hit.forEach(function (r) { Object.assign(r, change); });
+    render();
+    var req = ids.length === 1
+      ? api("/api/it-requests/" + encodeURIComponent(ids[0]), { method: "PATCH", body: JSON.stringify(change) })
+      : api("/api/it-requests/bulk", { method: "POST", body: JSON.stringify(Object.assign({ ids: ids }, change)) });
+    req.then(function () {
+      if (hit.some(function (r) { return r.taskId; })) refresh();
+      if (change.status && ids.length > 1) toast(ids.length + " requests marked " + IT_STATUS_LABEL[change.status] + ".");
+      nb.at = 0; // the Resolved tab picks it up next time
+    }, function (err) { toast(err.message, true); itr.at = 0; render(); });
   }
   document.addEventListener("click", function (e) {
-    var t = e.target.closest && e.target.closest("[data-itr-show],[data-itr-who],[data-itr-status],#itrImport");
+    var t = e.target.closest && e.target.closest("[data-itr-tab],[data-itr-who],[data-itr-bulk],[data-itr-clear],#itrImport");
     if (!t) return;
+    var ds = t.dataset;
     if (t.id === "itrImport") { $("#itrFile").click(); return; }
-    if (t.dataset.itrShow) { itr.status = t.dataset.itrShow; render(); return; }
-    if (t.dataset.itrWho) { itr.person = itr.person === t.dataset.itrWho ? "" : t.dataset.itrWho; render(); window.scrollTo(0, 0); return; }
-    if (t.dataset.itrStatus) {
-      var r = itr.data.requests.filter(function (x) { return x.id === t.dataset.itrStatus; })[0];
-      if (r) patchItRequest(r.id, { status: r.status === "done" ? "open" : "done" });
-    }
+    if (ds.itrTab) { itr.tab = ds.itrTab; render(); return; }
+    if ("itrWho" in ds) { itr.person = itr.person === ds.itrWho ? "" : ds.itrWho; render(); window.scrollTo(0, 0); return; }
+    if (ds.itrBulk) { var ids = Object.keys(itr.picked); itr.picked = {}; if (ids.length) changeItRequests(ids, { status: ds.itrBulk }); return; }
+    if ("itrClear" in ds) { itr.picked = {}; render(); }
   });
   document.addEventListener("change", function (e) {
     var t = e.target;
     if (t.id === "itrPerson") { itr.person = t.value; render(); }
     else if (t.id === "itrSort") { itr.sort = t.value; render(); }
-    else if (t.dataset && t.dataset.itrPrio) patchItRequest(t.dataset.itrPrio, { priority: t.value });
+    else if (t.dataset && t.dataset.itrPrio) changeItRequests([t.dataset.itrPrio], { priority: t.value });
+    else if (t.dataset && t.dataset.itrSt) changeItRequests([t.dataset.itrSt], { status: t.value });
+    else if (t.dataset && t.dataset.itrPick) { if (t.checked) itr.picked[t.dataset.itrPick] = 1; else delete itr.picked[t.dataset.itrPick]; render(); }
+    else if (t.dataset && "itrPickall" in t.dataset) {
+      Array.prototype.forEach.call(document.querySelectorAll("[data-itr-pick]"), function (box) { if (t.checked) itr.picked[box.dataset.itrPick] = 1; else delete itr.picked[box.dataset.itrPick]; });
+      render();
+    }
     else if (t.id === "itrFile" && t.files && t.files[0]) {
       var file = t.files[0];
       toast("Importing " + file.name + "…");
@@ -1154,7 +1265,7 @@
   function loadNotebook() {
     if (nb.loading) return;
     nb.loading = true;
-    api("/api/it-notebook").then(function (d) { nb.data = d; nb.error = ""; }, function (err) { nb.error = err.message; })
+    api("/api/it-notebook").then(function (d) { matchPeople(d.resolved); nb.data = d; nb.error = ""; }, function (err) { nb.error = err.message; })
       .then(function () { nb.loading = false; nb.at = Date.now(); requestRender(); });
   }
   function nbCategories() {

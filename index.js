@@ -1649,12 +1649,42 @@ renameDepartment("Operations", "Business Development").catch((err) =>
   console.error("Department rename failed (will retry next start):", err.message)
 );
 
+// One-time: requests used to be open / done, with imports starting as done.
+// Move to New / In progress / Resolved, treating imports nobody has touched
+// as In progress. Runs once (remembered in settings).
+async function migrateRequestStatuses() {
+  const settings = await getSettings();
+  if (settings.itRequestStatusesV2) return;
+  let moved = 0;
+  await withItRequests((list) => {
+    for (const r of list) {
+      const before = r.status;
+      if (r.status === "open") r.status = r.source === "email" ? "new" : "progress";
+      else if (r.status === "done" && r.source === "import" && !r.updatedBy) r.status = "progress";
+      if (r.status !== before) moved++;
+    }
+  });
+  await withSettings((s) => { s.itRequestStatusesV2 = true; });
+  if (moved) console.log(`IT requests: moved ${moved} to New / In progress.`);
+}
+migrateRequestStatuses().catch((err) => console.error("IT request status update failed (will retry next start):", err.message));
+
 // ---- IT request history (IT page → Requests) ----
 // Everyone with the IT department (or full access) can see it; managers set
 // the internal priority and open / done. A request that became a task takes
 // its open / done from that task, and changes here go to the task too.
 const IT_PRIORITIES = ["P1", "P2", "P3", "P4"];
 const PRIORITY_TO_TASK = { P1: "high", P2: "high", P3: "medium", P4: "low" };
+// New (just came in from the flow), In progress, Resolved ("done").
+const IT_STATUSES = ["new", "progress", "done"];
+
+// A request's status, taking a linked IT task into account: ticking the
+// task done resolves the request, and reopening it puts it back in progress.
+function requestStatus(r, task) {
+  let st = IT_STATUSES.includes(r.status) ? r.status : r.source === "email" ? "new" : "progress";
+  if (task) st = task.status === "done" ? "done" : st === "done" ? "progress" : st;
+  return st;
+}
 
 function canSeeItRequests(user) {
   return user.fullAccess || (user.departments || []).includes("IT");
@@ -1669,44 +1699,62 @@ app.get(
     const byId = new Map(tasks.map((t) => [t.id, t]));
     const requests = list.map((r) => {
       const task = r.taskId ? byId.get(r.taskId) : null;
-      return Object.assign({}, r, task ? { status: task.status === "done" ? "done" : "open", taskOwner: task.owner || "" } : { taskId: "" });
+      return Object.assign({}, r, { status: requestStatus(r, task) }, task ? { taskOwner: task.owner || "" } : { taskId: "" });
     }).sort((a, b) => String(b.submittedAt).localeCompare(String(a.submittedAt)));
     res.json({ requests, canRate: isManager(req.user), mailboxConnected: itRequestsConfigured });
   })
 );
 
+// Change one or several requests (status and / or priority). Linked IT
+// tasks follow: Resolved ticks the task done, New / In progress reopen it.
+async function changeRequests(req, res, ids) {
+  if (!canSeeItRequests(req.user) || !isManager(req.user)) return res.status(403).json({ error: "Only managers can change requests" });
+  const body = req.body || {};
+  const change = {};
+  if ("priority" in body) {
+    if (body.priority !== "" && !IT_PRIORITIES.includes(body.priority)) return res.status(400).json({ error: "Priority must be P1–P4" });
+    change.priority = body.priority;
+  }
+  if ("status" in body) {
+    if (!IT_STATUSES.includes(body.status)) return res.status(400).json({ error: "Status must be new, progress or done" });
+    change.status = body.status;
+  }
+  if (!Object.keys(change).length) return res.status(400).json({ error: "Nothing to change" });
+  const wanted = new Set(ids.map((x) => String(x)).slice(0, 1000));
+  const changed = await withItRequests((list) => {
+    const out = [];
+    for (const r of list) {
+      if (!wanted.has(r.id)) continue;
+      Object.assign(r, change, { updatedAt: Date.now(), updatedBy: req.user.username });
+      out.push(Object.assign({}, r));
+    }
+    return out;
+  });
+  if (!changed.length) return res.status(404).json({ error: "Those requests aren't here any more" });
+  const linked = changed.filter((r) => r.taskId);
+  if (linked.length && (change.priority || change.status)) {
+    await withTasks((tasks) => {
+      for (const rec of linked) {
+        const t = tasks.find((x) => x.id === rec.taskId);
+        if (!t) continue;
+        if (change.priority) t.priority = PRIORITY_TO_TASK[change.priority];
+        if (change.status) t.status = change.status === "done" ? "done" : "todo";
+      }
+    });
+  }
+  res.json({ changed: changed.length, requests: changed });
+}
+
 app.patch(
   "/api/it-requests/:id",
   authMiddleware,
-  asyncHandler(async (req, res) => {
-    if (!canSeeItRequests(req.user) || !isManager(req.user)) return res.status(403).json({ error: "Only managers can rate or close requests" });
-    const body = req.body || {};
-    const change = {};
-    if ("priority" in body) {
-      if (body.priority !== "" && !IT_PRIORITIES.includes(body.priority)) return res.status(400).json({ error: "Priority must be P1–P4" });
-      change.priority = body.priority;
-    }
-    if ("status" in body) {
-      if (!["open", "done"].includes(body.status)) return res.status(400).json({ error: "Status must be open or done" });
-      change.status = body.status;
-    }
-    const rec = await withItRequests((list) => {
-      const r = list.find((x) => x.id === req.params.id);
-      if (!r) return null;
-      Object.assign(r, change, { updatedAt: Date.now(), updatedBy: req.user.username });
-      return Object.assign({}, r);
-    });
-    if (!rec) return res.status(404).json({ error: "That request isn't here any more" });
-    if (rec.taskId && (change.priority || change.status)) {
-      await withTasks((tasks) => {
-        const t = tasks.find((x) => x.id === rec.taskId);
-        if (!t) return;
-        if (change.priority) t.priority = PRIORITY_TO_TASK[change.priority];
-        if (change.status) t.status = change.status === "done" ? "done" : "todo";
-      });
-    }
-    res.json(rec);
-  })
+  asyncHandler((req, res) => changeRequests(req, res, [req.params.id]))
+);
+
+app.post(
+  "/api/it-requests/bulk",
+  authMiddleware,
+  asyncHandler((req, res) => changeRequests(req, res, Array.isArray((req.body || {}).ids) ? req.body.ids : []))
 );
 
 // ---- Private IT notebook (IT → Resolved) ----
@@ -1742,7 +1790,7 @@ app.get(
     const resolved = list
       .map((r) => {
         const task = r.taskId ? byId.get(r.taskId) : null;
-        return Object.assign({}, r, task ? { status: task.status === "done" ? "done" : "open" } : {});
+        return Object.assign({}, r, { status: requestStatus(r, task) });
       })
       .filter((r) => r.status === "done" || nb.tickets[r.id])
       .map((r) => Object.assign(r, { writeup: nb.tickets[r.id] || null }))
@@ -1832,7 +1880,7 @@ app.delete(
 
 // One-time (or repeat) import of the Forms "Open results in Excel" file.
 // Re-importing updates the answers but keeps priorities and open / done.
-// Imported requests start as done, since they're from before the tracker.
+// Imported requests start as In progress; you move them along from there.
 app.post(
   "/api/it-requests/import",
   authMiddleware,
@@ -1859,7 +1907,7 @@ app.post(
           updated++;
         } else {
           const task = taskByForm.get(rec.id);
-          list.push(Object.assign(rec, { priority: "", status: task ? (task.status === "done" ? "done" : "open") : "done", taskId: task ? task.id : "", addedAt: Date.now() }));
+          list.push(Object.assign(rec, { priority: "", status: task && task.status === "done" ? "done" : "progress", taskId: task ? task.id : "", addedAt: Date.now() }));
           added++;
         }
       }
@@ -1908,7 +1956,7 @@ async function syncItRequests() {
       fresh.forEach((r, i) => {
         const rec = recordFromEmail(r);
         if (list.some((x) => x.id === rec.id)) return;
-        list.push(Object.assign(rec, { priority: "", status: "open", taskId: added[i].id, addedAt: Date.now() }));
+        list.push(Object.assign(rec, { priority: "", status: "new", taskId: added[i].id, addedAt: Date.now() }));
       });
     });
     await withSettings((s) => {

@@ -245,14 +245,24 @@ department (or full access); only managers change things.
 
 - **Import past answers:** in Microsoft Forms open the form → **Responses →
   Open results in Excel**, download it, then click **Import from Excel** on
-  the Requests tab. Imported requests start as done. Importing the same file
-  again updates the answers and keeps your ratings.
+  the Requests tab. Imported requests start as **In progress**. Importing
+  the same file again updates the answers and keeps your ratings and
+  statuses.
+- **Status tabs:** **New** (just came in through the flow), **In
+  progress** and **Resolved**, plus All. Change one with its status menu,
+  or tick several rows (or the header box for everything shown) and use
+  **Mark as**. Resolved requests appear on the Resolved tab.
+- **One person, any spelling:** "ELVIS", "elvis" and "Elvis Smith" are
+  grouped as one person (same name ignoring capitals, or same email when
+  the names agree; a first name alone joins the only full name that starts
+  with it). Names show in normal capitals.
 - **Internal priority:** managers rate each request **P1 Critical** (drop
   everything), **P2 High** (today), **P3 Normal** (this week) or **P4 Low**
   (when there's time). This is separate from the form's own urgency, which
   most people set to Immediate. On a request that's also an IT task, the
-  rating sets the task's priority too (P1–P2 high, P3 medium, P4 low), and
-  open / done stays in step with the task.
+  rating sets the task's priority too (P1–P2 high, P3 medium, P4 low).
+  Resolving the request ticks the task done, and ticking the task done
+  resolves the request.
 - **By person:** filter or sort by person, or click a name; the **By
   person** table shows requests, open, P1/P2 and last request for everyone.
 - **Overview** shows requests per week (last 12 weeks) and open requests
