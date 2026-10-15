@@ -1965,11 +1965,23 @@
     api(calSource() + "?start=" + today + "&days=" + calDays).then(function (data) {
       var box = $("#cal-mine");
       if (!box || unchanged(key, data, quiet)) return;
-      var events = data.events.filter(function (e) { return dayKey(e) >= today; });
+      // An event shows on every day it covers from today on — so something
+      // that started earlier and is still going (e.g. a week of OOO) is listed.
+      var lastShown = shiftDays(today, calDays - 1);
+      var byDay = {};
+      var events = data.events.filter(function (e) {
+        var first = dayKey(e);
+        var last = e.allDay ? shiftDays(e.end, -1) : ymd(new Date(new Date(e.end).getTime() - 1));
+        if (last < first) last = first;
+        var shown = false;
+        for (var d = first < today ? today : first; d <= last && d <= lastShown; d = shiftDays(d, 1)) {
+          (byDay[d] = byDay[d] || []).push(e);
+          shown = true;
+        }
+        return shown;
+      });
       $("#cal-note").textContent = events.length + " event" + (events.length === 1 ? "" : "s") + " in the next " + (calDays === 7 ? "week" : calDays / 7 + " weeks") + " · times in your time zone";
       if (!events.length) { box.innerHTML = '<div class="card empty">Nothing on ' + (calTab === "hr" ? "the HR calendar" : "your calendar") + ".</div>"; return; }
-      var byDay = {};
-      events.forEach(function (e) { (byDay[dayKey(e)] = byDay[dayKey(e)] || []).push(e); });
       box.innerHTML = Object.keys(byDay).sort().map(function (day) {
         var label = new Date(day + "T00:00:00").toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
         return '<div class="card" style="margin-bottom:14px;"><div class="card-label" style="margin-bottom:10px;">' + E(day === today ? "Today · " + label : label) + "</div>" +
