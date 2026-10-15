@@ -255,8 +255,10 @@ department (or full access); only managers change things.
 - **Duplicates:** when the same person sends something similar (or
   anything on the same day) within 7 days, the newer one says "Looks like a
   repeat" with **Mark duplicate** / **Not a duplicate**. Or tick several and
-  **Merge as duplicates**: the earliest stays, the rest link to it. Duplicates
-  are closed, listed on their own **Duplicates** tab (with Undo), and left out
+  **Merge as duplicates, keep newest / keep oldest**. On a duplicate, **Make
+  this the main one** swaps it with its original (the others become its
+  duplicates), **Undo** or its status menu takes it back out. Duplicates
+  are closed, listed on their own **Duplicates** tab, and left out
   of the other tabs, the numbers, the charts and the Resolved notebook. The
   original shows "+N duplicates".
 - **One person, any spelling:** "ELVIS", "elvis" and "Elvis Smith" are
