@@ -1403,13 +1403,37 @@
     box.innerHTML = '<div class="banner">' + E(err.message) + "</div>";
   }
 
+  // ---- Quiet auto-update ----
+  // Every few minutes the open calendar tab re-checks its data and redraws
+  // only that part of the page, and only if something changed. Paused while
+  // the browser tab is hidden; the embedded Outlook page is never reloaded.
+  var CAL_POLL_MS = 3 * 60 * 1000;
+  var calLast = {};
+  function calKey(kind) { return [kind, calTab, calDays, calMonth, whoWeek].join("|"); }
+  function unchanged(key, data, quiet) {
+    var sig = JSON.stringify(data);
+    var same = calLast[key] === sig;
+    calLast[key] = sig;
+    return quiet && same;
+  }
+  function quietCalendarRefresh() {
+    if (page !== "calendar" || document.hidden || !me) return;
+    if (calTab === "whos") loadWhosIn(true);
+    else if (calTab === "hr" && hrCal && !hrCal.hasFeed) return;
+    else if (calMode === "month") loadMonth(true);
+    else loadCalendar(true);
+  }
+  setInterval(quietCalendarRefresh, CAL_POLL_MS);
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) quietCalendarRefresh(); });
+
   // ---- Personal: list ----
   // Personal and HR tabs share the List / Month views; only the source differs.
   function calSource() { return calTab === "hr" ? "/api/calendar/hr" : "/api/calendar/me"; }
-  function loadCalendar() {
+  function loadCalendar(quiet) {
+    var key = calKey("list");
     api(calSource() + "?start=" + today + "&days=" + calDays).then(function (data) {
       var box = $("#cal-mine");
-      if (!box) return;
+      if (!box || unchanged(key, data, quiet)) return;
       var events = data.events.filter(function (e) { return dayKey(e) >= today; });
       $("#cal-note").textContent = events.length + " event" + (events.length === 1 ? "" : "s") + " in the next " + (calDays === 7 ? "week" : calDays / 7 + " weeks") + " · times in your time zone";
       if (!events.length) { box.innerHTML = '<div class="card empty">Nothing on ' + (calTab === "hr" ? "the HR calendar" : "your calendar") + ".</div>"; return; }
@@ -1433,17 +1457,18 @@
               (link ? '<a href="' + E(link) + '" target="_blank" rel="noopener noreferrer">Open in Outlook ↗</a>' : "") + "</span></div>";
           }).join("") + "</div>";
       }).join("");
-    }).catch(function (err) { calError("#cal-mine", err); });
+    }).catch(function (err) { if (!quiet) calError("#cal-mine", err); });
   }
 
   // ---- Personal: month grid (weeks start on Sunday) ----
-  function loadMonth() {
+  function loadMonth(quiet) {
+    var key = calKey("month");
     var first = new Date(calMonth + "T00:00:00");
     var gridStart = shiftDays(calMonth, -first.getDay());
     var month = calMonth.slice(0, 7);
     api(calSource() + "?start=" + gridStart + "&days=42").then(function (data) {
       var box = $("#cal-month");
-      if (!box) return;
+      if (!box || unchanged(key, data, quiet)) return;
       var byDay = {};
       data.events.forEach(function (e) {
         // An all-day event can span several days; show it on each.
@@ -1468,7 +1493,7 @@
         cells += '<div class="mg-cell' + (day.slice(0, 7) !== month ? " out" : "") + (day === today ? " today" : "") + '"><span class="mg-num">' + Number(day.slice(8)) + "</span>" + shown + more + "</div>";
       }
       box.innerHTML = '<div class="month-grid">' + head + cells + "</div>";
-    }).catch(function (err) { calError("#cal-month", err); });
+    }).catch(function (err) { if (!quiet) calError("#cal-month", err); });
   }
 
   // ---- HR global calendar (Leadership) ----
@@ -1498,10 +1523,11 @@
     var f = function (s) { return new Date(s + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" }); };
     return f(mon) + " – " + f(fri);
   }
-  function loadWhosIn() {
+  function loadWhosIn(quiet) {
+    var key = calKey("whos");
     api("/api/calendar/whos-in?week=" + whoWeek).then(function (data) {
       var box = $("#cal-who");
-      if (!box) return;
+      if (!box || unchanged(key, data, quiet)) return;
       var counts = data.days.map(function (d) {
         return data.people.filter(function (p) { return !p.error && p.days[d].status === "in"; }).length;
       });
@@ -1522,7 +1548,7 @@
             data.days.map(function (d) { return '<td class="' + (d === today ? "who-today" : "") + '">' + (p.error && p.days[d].status === "in" ? '<span class="dim">—</span>' : cell(p.days[d])) + "</td>"; }).join("") + "</tr>";
         }).join("") + "</tbody></table></div>" +
         '<p class="small-note" style="margin-top:12px;">In office = nothing marked Out of office or Working elsewhere on their Outlook, and no matching entry on the HR calendar. Days are in ' + E(data.timeZone) + ". Updates every few minutes.</p>";
-    }).catch(function (err) { calError("#cal-who", err); });
+    }).catch(function (err) { if (!quiet) calError("#cal-who", err); });
   }
 
   // ---------- Global ----------

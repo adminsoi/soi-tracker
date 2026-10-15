@@ -145,7 +145,12 @@ The **Calendar** page (sidebar → Tools) has up to three tabs:
   under **Names on the HR calendar**. Days use `OFFICE_TIMEZONE` (default
   Pacific Standard Time).
 
-The Personal calendar can be shown as a **List** or a **Month** grid.
+The Personal calendar can be shown as a **List** or a **Month** grid. The open Calendar tab quietly
+re-checks every 3 minutes (and when you come back to the browser tab) and
+redraws only if something changed, so new Outlook events appear on their
+own. The server caches personal calendars for 2 minutes and the HR feed and
+Who's in office for 5; Outlook also updates a published calendar's feed on
+its own schedule, so HR entries can take a bit longer.
 
 ### One-time Microsoft 365 setup for the calendars
 
