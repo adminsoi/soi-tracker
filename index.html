@@ -1199,7 +1199,13 @@
       }).join("") + "</select>";
     };
     var statusCell = function (r) {
-      if (r.duplicateOf) return '<span class="st st-dup">Duplicate</span>';
+      if (r.duplicateOf) {
+        if (!can) return '<span class="st st-dup">Duplicate</span>';
+        // Picking a status takes it out of duplicates.
+        return '<select class="st-select st-dup" data-itr-st="' + E(r.id) + '" aria-label="Status"><option value="dup" selected>Duplicate</option>' + IT_STATUSES.map(function (s) {
+          return '<option value="' + s.id + '">Move to ' + E(s.label) + "</option>";
+        }).join("") + "</select>";
+      }
       if (!can) return '<span class="st st-' + r.status + '">' + E(IT_STATUS_LABEL[r.status]) + "</span>";
       return '<select class="st-select st-' + r.status + '" data-itr-st="' + E(r.id) + '" aria-label="Status">' + IT_STATUSES.map(function (s) {
         return '<option value="' + s.id + '"' + (r.status === s.id ? " selected" : "") + ">" + E(s.label) + "</option>";
@@ -1212,7 +1218,9 @@
     };
     var short = function (o) { return o ? fmtDate(o.submittedAt) + " — " + (String(o.issue || "").length > 60 ? o.issue.slice(0, 60) + "…" : o.issue || "no description") : "a request that's gone"; };
     var dupCell = function (r) {
-      if (r.duplicateOf) return '<span class="dup-note">Duplicate of ' + E(short(byId[r.duplicateOf])) + (can ? ' <button type="button" class="text-button" data-itr-undup="' + E(r.id) + '">Undo</button>' : "") + "</span>";
+      if (r.duplicateOf) return '<span class="dup-note">Duplicate of ' + E(short(byId[r.duplicateOf])) +
+        (can ? ' <button type="button" class="text-button" data-itr-main="' + E(r.id) + '">Make this the main one</button>' +
+          ' <button type="button" class="text-button" data-itr-undup="' + E(r.id) + '">Undo</button>' : "") + "</span>";
       var out = r.dupes ? '<span class="co-note">+' + r.dupes + (r.dupes === 1 ? " duplicate" : " duplicates") + "</span>" : "";
       if (r.repeatOf && r.status !== "done") {
         out += '<span class="dup-hint">Looks like a repeat of their ' + E(fmtDate(byId[r.repeatOf].submittedAt)) + " request" +
@@ -1229,7 +1237,9 @@
     var bulk = can && picked.length
       ? '<div class="bulk-bar"><b>' + picked.length + " selected</b><span>Mark as</span>" + IT_STATUSES.map(function (s) {
           return '<button type="button" class="st-btn st-' + s.id + '" data-itr-bulk="' + s.id + '">' + E(s.label) + "</button>";
-        }).join("") + (picked.length > 1 ? '<button type="button" class="st-btn st-dup" data-itr-merge title="The earliest one stays; the others become its duplicates">Merge as duplicates</button>' : "") +
+        }).join("") + (picked.length > 1 ? '<span>Merge as duplicates,</span>' +
+          '<button type="button" class="st-btn st-dup" data-itr-merge="newest" title="The most recent one stays; the others become its duplicates">keep newest</button>' +
+          '<button type="button" class="st-btn st-dup" data-itr-merge="oldest" title="The earliest one stays; the others become its duplicates">keep oldest</button>' : "") +
         '<span class="grow"></span><button type="button" class="text-button" data-itr-clear>Clear</button></div>'
       : "";
 
@@ -1282,7 +1292,7 @@
     var hit = itr.data ? itr.data.requests.filter(function (x) { return set[x.id]; }) : [];
     hit.forEach(function (r) {
       Object.assign(r, change);
-      if ("duplicateOf" in change) r.status = change.duplicateOf ? "done" : "progress";
+      if ("duplicateOf" in change) { r.status = change.duplicateOf ? "done" : change.status || "progress"; r.notDuplicate = !change.duplicateOf; }
     });
     render();
     var req = ids.length === 1
@@ -1297,7 +1307,7 @@
     }, function (err) { toast(err.message, true); itr.at = 0; render(); });
   }
   document.addEventListener("click", function (e) {
-    var t = e.target.closest && e.target.closest("[data-itr-tab],[data-itr-who],[data-itr-bulk],[data-itr-clear],[data-itr-merge],[data-itr-dup],[data-itr-notdup],[data-itr-undup],#itrImport");
+    var t = e.target.closest && e.target.closest("[data-itr-tab],[data-itr-who],[data-itr-bulk],[data-itr-clear],[data-itr-merge],[data-itr-dup],[data-itr-notdup],[data-itr-undup],[data-itr-main],#itrImport");
     if (!t) return;
     var ds = t.dataset;
     if (t.id === "itrImport") { $("#itrFile").click(); return; }
@@ -1305,11 +1315,17 @@
     if ("itrWho" in ds) { itr.person = itr.person === ds.itrWho ? "" : ds.itrWho; render(); window.scrollTo(0, 0); return; }
     if (ds.itrBulk) { var ids = Object.keys(itr.picked); itr.picked = {}; if (ids.length) changeItRequests(ids, { status: ds.itrBulk }); return; }
     if ("itrClear" in ds) { itr.picked = {}; render(); }
-    if ("itrMerge" in ds) {
+    if (ds.itrMerge) {
       var sel = itr.data.requests.filter(function (r) { return itr.picked[r.id]; })
         .sort(function (a, b) { return String(a.submittedAt).localeCompare(String(b.submittedAt)); });
       if (sel.length < 2) return;
+      if (ds.itrMerge === "newest") sel.reverse();
       var keep = sel[0];
+      if (keep.duplicateOf) {
+        // The one to keep is itself a duplicate: make it the main one first.
+        toast("Use “Make this the main one” on that request first.", true);
+        return;
+      }
       if (!confirm("Keep the " + fmtDate(keep.submittedAt) + " request from " + itrPerson(keep) + " and mark the other " + (sel.length - 1) + " as its duplicates?")) return;
       itr.picked = {};
       changeItRequests(sel.slice(1).map(function (r) { return r.id; }), { duplicateOf: keep.duplicateOf || keep.id });
@@ -1317,13 +1333,23 @@
     if (ds.itrDup) changeItRequests([ds.itrDup], { duplicateOf: ds.of });
     if (ds.itrNotdup) changeItRequests([ds.itrNotdup], { notDuplicate: true });
     if (ds.itrUndup) changeItRequests([ds.itrUndup], { duplicateOf: "" });
+    if (ds.itrMain) {
+      api("/api/it-requests/" + encodeURIComponent(ds.itrMain), { method: "PATCH", body: JSON.stringify({ makeOriginal: true }) }).then(function () {
+        toast("That's the main request now; the others are its duplicates.");
+        itr.at = 0; nb.at = 0; render(); refresh();
+      }, function (err) { toast(err.message, true); });
+    }
   });
   document.addEventListener("change", function (e) {
     var t = e.target;
     if (t.id === "itrPerson") { itr.person = t.value; render(); }
     else if (t.id === "itrSort") { itr.sort = t.value; render(); }
     else if (t.dataset && t.dataset.itrPrio) changeItRequests([t.dataset.itrPrio], { priority: t.value });
-    else if (t.dataset && t.dataset.itrSt) changeItRequests([t.dataset.itrSt], { status: t.value });
+    else if (t.dataset && t.dataset.itrSt) {
+      var cur = itr.data.requests.filter(function (x) { return x.id === t.dataset.itrSt; })[0];
+      if (cur && cur.duplicateOf) { if (t.value !== "dup") changeItRequests([cur.id], { duplicateOf: "", status: t.value }); }
+      else changeItRequests([t.dataset.itrSt], { status: t.value });
+    }
     else if (t.dataset && t.dataset.itrPick) { if (t.checked) itr.picked[t.dataset.itrPick] = 1; else delete itr.picked[t.dataset.itrPick]; render(); }
     else if (t.dataset && "itrPickall" in t.dataset) {
       Array.prototype.forEach.call(document.querySelectorAll("[data-itr-pick]"), function (box) { if (t.checked) itr.picked[box.dataset.itrPick] = 1; else delete itr.picked[box.dataset.itrPick]; });

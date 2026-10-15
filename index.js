@@ -1720,17 +1720,46 @@ async function changeRequests(req, res, ids) {
     change.status = body.status;
   }
   // Duplicates: "duplicateOf" links a request to the original (closing it as
-  // resolved); "" unlinks it (back to In progress). "notDuplicate" hides the
-  // "looks like a repeat" hint.
+  // resolved); "" unlinks it — to the status sent, or In progress — and
+  // counts as "not a duplicate" so the repeat hint doesn't bring it back.
+  // "notDuplicate" just hides the hint. "makeOriginal" (one request) turns a
+  // duplicate into the main request: its old original and the other
+  // duplicates become duplicates of it, and it takes over the open status.
   if ("duplicateOf" in body) {
     change.duplicateOf = String(body.duplicateOf || "").slice(0, 80);
-    change.status = change.duplicateOf ? "done" : "progress";
-    if (change.duplicateOf) change.notDuplicate = false;
+    if (change.duplicateOf) { change.status = "done"; change.notDuplicate = false; }
+    else { change.status = change.status || "progress"; change.notDuplicate = true; }
   }
   if ("notDuplicate" in body) change.notDuplicate = !!body.notDuplicate;
-  if (!Object.keys(change).length) return res.status(400).json({ error: "Nothing to change" });
+  const makeOriginal = body.makeOriginal === true;
+  if (!Object.keys(change).length && !makeOriginal) return res.status(400).json({ error: "Nothing to change" });
+  if (makeOriginal && ids.length !== 1) return res.status(400).json({ error: "Pick one request to keep" });
   const wanted = new Set(ids.map((x) => String(x)).slice(0, 1000));
+  const now = { updatedAt: Date.now(), updatedBy: req.user.username };
+
   const result = await withItRequests((list) => {
+    const touched = new Map(); // id -> record, for syncing linked tasks
+    const touch = (r) => touched.set(r.id, r);
+    if (makeOriginal) {
+      const keep = list.find((x) => wanted.has(x.id));
+      if (!keep) return { out: [] };
+      const rootId = keep.duplicateOf;
+      if (!rootId) return { error: "That one is already the main request" };
+      const root = list.find((x) => x.id === rootId);
+      keep.duplicateOf = "";
+      keep.notDuplicate = true;
+      keep.status = root && root.status !== "done" ? root.status : "progress";
+      if (!keep.priority && root && root.priority) keep.priority = root.priority;
+      Object.assign(keep, now); touch(keep);
+      for (const x of list) {
+        if (x.id === keep.id) continue;
+        if (x.id === rootId || x.duplicateOf === rootId) {
+          Object.assign(x, { duplicateOf: keep.id, status: "done", notDuplicate: false }, now);
+          touch(x);
+        }
+      }
+      return { out: [Object.assign({}, keep)], touched: [...touched.values()].map((r) => Object.assign({}, r)) };
+    }
     if (change.duplicateOf) {
       // Point at the original's original, never at itself.
       let target = list.find((x) => x.id === change.duplicateOf);
@@ -1742,24 +1771,27 @@ async function changeRequests(req, res, ids) {
     const out = [];
     for (const r of list) {
       if (!wanted.has(r.id)) continue;
-      Object.assign(r, change, { updatedAt: Date.now(), updatedBy: req.user.username });
+      Object.assign(r, change, now);
+      touch(r);
       out.push(Object.assign({}, r));
     }
     // Anything that was a duplicate of these now points at the new original.
-    if (change.duplicateOf) for (const r of list) if (wanted.has(r.duplicateOf)) r.duplicateOf = change.duplicateOf;
-    return { out };
+    if (change.duplicateOf) for (const r of list) if (wanted.has(r.duplicateOf)) { r.duplicateOf = change.duplicateOf; touch(r); }
+    return { out, touched: [...touched.values()].map((r) => Object.assign({}, r)) };
   });
   if (result.error) return res.status(400).json({ error: result.error });
   const changed = result.out;
   if (!changed.length) return res.status(404).json({ error: "Those requests aren't here any more" });
-  const linked = changed.filter((r) => r.taskId);
-  if (linked.length && (change.priority || change.status)) {
+  // Linked IT tasks follow: Resolved / duplicate -> done, otherwise open.
+  const linked = (result.touched || []).filter((r) => r.taskId);
+  const statusMoved = "status" in change || "duplicateOf" in change || makeOriginal;
+  if (linked.length && (change.priority || statusMoved)) {
     await withTasks((tasks) => {
       for (const rec of linked) {
         const t = tasks.find((x) => x.id === rec.taskId);
         if (!t) continue;
         if (change.priority) t.priority = PRIORITY_TO_TASK[change.priority];
-        if (change.status) t.status = change.status === "done" ? "done" : "todo";
+        if (statusMoved) t.status = rec.status === "done" ? "done" : "todo";
       }
     });
   }
