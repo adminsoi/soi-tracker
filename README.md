@@ -252,6 +252,13 @@ department (or full access); only managers change things.
   progress** and **Resolved**, plus All. Change one with its status menu,
   or tick several rows (or the header box for everything shown) and use
   **Mark as**. Resolved requests appear on the Resolved tab.
+- **Duplicates:** when the same person sends something similar (or
+  anything on the same day) within 7 days, the newer one says "Looks like a
+  repeat" with **Mark duplicate** / **Not a duplicate**. Or tick several and
+  **Merge as duplicates**: the earliest stays, the rest link to it. Duplicates
+  are closed, listed on their own **Duplicates** tab (with Undo), and left out
+  of the other tabs, the numbers, the charts and the Resolved notebook. The
+  original shows "+N duplicates".
 - **One person, any spelling:** "ELVIS", "elvis" and "Elvis Smith" are
   grouped as one person (same name ignoring capitals, or same email when
   the names agree; a first name alone joins the only full name that starts

@@ -140,6 +140,11 @@
   .st, .st-select { display: inline-block; padding: 3px 9px; border-radius: 9px; font-size: 11px; font-weight: 600; border: 1px solid transparent; }
   .st-select { cursor: pointer; padding: 4px 8px; font-family: inherit; }
   .st-new { background: #e6ebf3; color: #3f5f8f; } .st-progress { background: #f7e6cc; color: #8a5a14; } .st-done { background: #e3eedf; color: #4c6b3c; }
+  .st-dup { background: #ecebe8; color: #6d655c; }
+  .dup-hint, .dup-note { display: block; margin-top: 6px; font-size: 11px; padding: 4px 8px; border-radius: 6px; }
+  .dup-hint { background: #fff4df; color: #8a5a14; } .dup-note { background: #f0eeea; color: #6d655c; }
+  .dup-hint .text-button, .dup-note .text-button { font-size: 11px; margin-left: 4px; }
+  .hint-badge { background: #fff4df; color: #8a5a14; }
   .bulk-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: var(--soft); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; font-size: 13px; }
   .bulk-bar .grow { flex: 1; }
   .st-btn { border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
@@ -1105,11 +1110,51 @@
   }
   function itrPerson(r) { return r.pname || r.name || r.email || "Unknown"; }
 
+  // Duplicates. r.duplicateOf links a request to its original (set by a
+  // manager). r.repeatOf is only a hint: the same person sent something
+  // similar (or anything on the same day) in the 7 days before, and nobody
+  // has said "not a duplicate". r.dupes counts duplicates on an original.
+  var STOP = { the: 1, and: 1, for: 1, you: 1, please: 1, with: 1, this: 1, that: 1, have: 1, can: 1, not: 1, are: 1, was: 1, but: 1, all: 1, our: 1, from: 1, need: 1, issue: 1, help: 1, its: 1, it: 1 };
+  function words(t) {
+    var w = {};
+    String(t || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(" ").forEach(function (x) { if (x.length > 2 && !STOP[x]) w[x] = 1; });
+    return w;
+  }
+  function similar(a, b) {
+    var x = words(a), y = words(b), both = 0, either = 0, k;
+    for (k in x) { either++; if (y[k]) both++; }
+    for (k in y) if (!x[k]) either++;
+    return either ? both / either : 0;
+  }
+  function findRepeats(list) {
+    var byId = {}, byPerson = {};
+    list.forEach(function (r) { byId[r.id] = r; r.repeatOf = ""; r.dupes = 0; });
+    list.forEach(function (r) { if (r.duplicateOf && byId[r.duplicateOf]) byId[r.duplicateOf].dupes++; });
+    list.forEach(function (r) { if (!r.duplicateOf) (byPerson[r.pkey] = byPerson[r.pkey] || []).push(r); });
+    Object.keys(byPerson).forEach(function (k) {
+      var mine = byPerson[k].slice().sort(function (a, b) { return String(a.submittedAt).localeCompare(String(b.submittedAt)); });
+      mine.forEach(function (r, i) {
+        if (r.notDuplicate) return;
+        var t = Date.parse(String(r.submittedAt).replace(" ", "T"));
+        for (var j = i - 1; j >= 0; j--) {
+          var o = mine[j], ot = Date.parse(String(o.submittedAt).replace(" ", "T"));
+          if (t - ot > 7 * 864e5) break;
+          if (String(o.submittedAt).slice(0, 10) === String(r.submittedAt).slice(0, 10) || similar(r.issue, o.issue) >= 0.3) { r.repeatOf = o.id; break; }
+        }
+      });
+    });
+    return byId;
+  }
+
   function renderItRequests() {
     if (!itr.data || Date.now() - itr.at > 120000) loadItRequests();
     if (itr.error) return '<div class="banner">' + E(itr.error) + "</div>";
     if (!itr.data) return '<div class="empty">Loading requests…</div>';
-    var all = itr.data.requests, can = itr.data.canRate;
+    var every = itr.data.requests, can = itr.data.canRate;
+    var byId = findRepeats(every);
+    var dupes = every.filter(function (r) { return r.duplicateOf; });
+    // Duplicates live on their own tab; everything else counts once.
+    var all = every.filter(function (r) { return !r.duplicateOf; });
     var since30 = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
     var count = function (st) { return all.filter(function (r) { return r.status === st; }).length; };
     var first = all.length ? all[all.length - 1].submittedAt : "";
@@ -1128,8 +1173,12 @@
       .sort(function (a, b) { return b.n - a.n || a.name.localeCompare(b.name); });
     if (itr.person && !people[itr.person]) itr.person = "";
 
-    var inPerson = all.filter(function (r) { return !itr.person || r.pkey === itr.person; });
-    var rows = inPerson.filter(function (r) { return itr.tab === "all" || r.status === itr.tab; });
+    var mineOnly = function (r) { return !itr.person || r.pkey === itr.person; };
+    var inPerson = all.filter(mineOnly);
+    var hints = inPerson.filter(function (r) { return r.repeatOf && r.status !== "done"; });
+    var rows = itr.tab === "dupes"
+      ? hints.concat(dupes.filter(mineOnly))
+      : inPerson.filter(function (r) { return itr.tab === "all" || r.status === itr.tab; });
     var prank = function (r) { return r.priority ? +r.priority.slice(1) : 9; };
     rows.sort(function (a, b) {
       if (itr.sort === "oldest") return String(a.submittedAt).localeCompare(String(b.submittedAt));
@@ -1138,7 +1187,7 @@
       return String(b.submittedAt).localeCompare(String(a.submittedAt));
     });
     // Keep only ticks on rows that still exist.
-    var ids = {}; all.forEach(function (r) { ids[r.id] = 1; });
+    var ids = {}; every.forEach(function (r) { ids[r.id] = 1; });
     Object.keys(itr.picked).forEach(function (id) { if (!ids[id]) delete itr.picked[id]; });
     var picked = Object.keys(itr.picked);
     var allShownPicked = rows.length > 0 && rows.every(function (r) { return itr.picked[r.id]; });
@@ -1150,13 +1199,28 @@
       }).join("") + "</select>";
     };
     var statusCell = function (r) {
+      if (r.duplicateOf) return '<span class="st st-dup">Duplicate</span>';
       if (!can) return '<span class="st st-' + r.status + '">' + E(IT_STATUS_LABEL[r.status]) + "</span>";
       return '<select class="st-select st-' + r.status + '" data-itr-st="' + E(r.id) + '" aria-label="Status">' + IT_STATUSES.map(function (s) {
         return '<option value="' + s.id + '"' + (r.status === s.id ? " selected" : "") + ">" + E(s.label) + "</option>";
       }).join("") + "</select>";
     };
     var when = function (s) { return s ? E(fmtDate(s)) + '<span class="co-note">' + E(String(s).slice(11, 16)) + "</span>" : "—"; };
-    var tabCount = function (st) { return st === "all" ? inPerson.length : inPerson.filter(function (r) { return r.status === st; }).length; };
+    var tabCount = function (st) {
+      if (st === "dupes") return dupes.filter(mineOnly).length;
+      return st === "all" ? inPerson.length : inPerson.filter(function (r) { return r.status === st; }).length;
+    };
+    var short = function (o) { return o ? fmtDate(o.submittedAt) + " — " + (String(o.issue || "").length > 60 ? o.issue.slice(0, 60) + "…" : o.issue || "no description") : "a request that's gone"; };
+    var dupCell = function (r) {
+      if (r.duplicateOf) return '<span class="dup-note">Duplicate of ' + E(short(byId[r.duplicateOf])) + (can ? ' <button type="button" class="text-button" data-itr-undup="' + E(r.id) + '">Undo</button>' : "") + "</span>";
+      var out = r.dupes ? '<span class="co-note">+' + r.dupes + (r.dupes === 1 ? " duplicate" : " duplicates") + "</span>" : "";
+      if (r.repeatOf && r.status !== "done") {
+        out += '<span class="dup-hint">Looks like a repeat of their ' + E(fmtDate(byId[r.repeatOf].submittedAt)) + " request" +
+          (can ? ' <button type="button" class="text-button" data-itr-dup="' + E(r.id) + '" data-of="' + E(r.repeatOf) + '">Mark duplicate</button>' +
+            ' <button type="button" class="text-button" data-itr-notdup="' + E(r.id) + '">Not a duplicate</button>' : "") + "</span>";
+      }
+      return out;
+    };
 
     var personOpts = '<option value="">Everyone</option>' + plist.map(function (p) {
       return '<option value="' + E(p.key) + '"' + (p.key === itr.person ? " selected" : "") + ">" + E(p.name) + " (" + p.n + ")</option>";
@@ -1165,7 +1229,8 @@
     var bulk = can && picked.length
       ? '<div class="bulk-bar"><b>' + picked.length + " selected</b><span>Mark as</span>" + IT_STATUSES.map(function (s) {
           return '<button type="button" class="st-btn st-' + s.id + '" data-itr-bulk="' + s.id + '">' + E(s.label) + "</button>";
-        }).join("") + '<span class="grow"></span><button type="button" class="text-button" data-itr-clear>Clear</button></div>'
+        }).join("") + (picked.length > 1 ? '<button type="button" class="st-btn st-dup" data-itr-merge title="The earliest one stays; the others become its duplicates">Merge as duplicates</button>' : "") +
+        '<span class="grow"></span><button type="button" class="text-button" data-itr-clear>Clear</button></div>'
       : "";
 
     return '<div class="summary-cards four">' +
@@ -1173,11 +1238,12 @@
         metric("New", count("new"), "Just came in from the form", count("new") > 0) +
         metric("In progress", count("progress"), unrated ? unrated + " open ones not rated yet" : "All rated") +
         metric("Resolved", count("done"), "Fixed and closed") + "</div>" +
-      '<div class="tabs" role="tablist" style="margin-top:4px;">' + [{ id: "all", label: "All" }].concat(IT_STATUSES).map(function (t) {
+      '<div class="tabs" role="tablist" style="margin-top:4px;">' + [{ id: "all", label: "All" }].concat(IT_STATUSES, [{ id: "dupes", label: "Duplicates" }]).map(function (t) {
         var n = tabCount(t.id);
         return '<button type="button" role="tab" class="tab ' + (itr.tab === t.id ? "active" : "") + '" aria-selected="' + (itr.tab === t.id) + '" data-itr-tab="' + t.id + '">' +
-          E(t.label) + (n ? '<span class="badge">' + n + "</span>" : "") + "</button>";
+          E(t.label) + (n ? '<span class="badge">' + n + "</span>" : "") + (t.id === "dupes" && hints.length ? '<span class="badge hint-badge" title="Possible repeats to review">' + hints.length + " to review</span>" : "") + "</button>";
       }).join("") + "</div>" +
+      (itr.tab === "dupes" ? '<p class="small-note" style="margin:6px 0 0;">Possible repeats to review come first (same person, something similar within 7 days), then the ones you\'ve marked. Duplicates don\'t count in the other tabs, the numbers or the charts.</p>' : "") +
       '<div class="table-toolbar"><select id="itrPerson" aria-label="Show one person">' + personOpts + "</select>" +
         '<select id="itrSort" aria-label="Sort by">' + [["newest", "Newest first"], ["oldest", "Oldest first"], ["priority", "Priority"], ["person", "Person A–Z"]].map(function (x) {
           return '<option value="' + x[0] + '"' + (itr.sort === x[0] ? " selected" : "") + ">Sort: " + x[1] + "</option>";
@@ -1197,10 +1263,10 @@
             '<span class="co-note">' + E([r.company, r.remote === "Yes" ? "Remote" : ""].filter(Boolean).join(" · ")) + "</span></td>" +
           '<td><div class="itr-issue" title="' + E(r.issue) + '">' + E(r.issue || "—") + "</div>" +
             (r.notes ? '<span class="co-note" title="' + E(r.notes) + '">Note: ' + E(r.notes.length > 90 ? r.notes.slice(0, 90) + "…" : r.notes) + "</span>" : "") +
-            (r.taskId ? '<span class="co-note">On the IT board' + (r.taskOwner ? " · " + E(r.taskOwner) : "") + "</span>" : "") + "</td>" +
+            (r.taskId ? '<span class="co-note">On the IT board' + (r.taskOwner ? " · " + E(r.taskOwner) : "") + "</span>" : "") + dupCell(r) + "</td>" +
           "<td>" + E(r.urgency || "—") + "</td><td>" + prioCell(r) + "</td><td>" + statusCell(r) + "</td>" +
           "<td>" + E(r.contact || "—") + (r.phone ? '<span class="co-note">' + E(r.phone) + "</span>" : "") + (r.email ? '<span class="co-note">' + E(r.email) + "</span>" : "") + "</td></tr>";
-      }).join("") : '<tr><td colspan="' + (can ? 8 : 7) + '" class="empty">' + (all.length ? "Nothing here." : can ? "No requests yet — use Import from Excel for past form answers." : "No requests yet.") + "</td></tr>") +
+      }).join("") : '<tr><td colspan="' + (can ? 8 : 7) + '" class="empty">' + (itr.tab === "dupes" ? "No duplicates." : all.length ? "Nothing here." : can ? "No requests yet — use Import from Excel for past form answers." : "No requests yet.") + "</td></tr>") +
       "</tbody></table></div>" +
       '<div class="section-title" style="margin-top:26px;"><div><h2>By person</h2><span class="small-note">Click a name to see only their requests.</span></div></div>' +
       '<div class="table-wrap"><table class="plain"><thead><tr><th>Person</th><th>Company</th><th>Requests</th><th>New</th><th>In progress</th><th>Resolved</th><th>P1 / P2</th><th>Last request</th></tr></thead><tbody>' +
@@ -1214,7 +1280,10 @@
   function changeItRequests(ids, change) {
     var set = {}; ids.forEach(function (id) { set[id] = 1; });
     var hit = itr.data ? itr.data.requests.filter(function (x) { return set[x.id]; }) : [];
-    hit.forEach(function (r) { Object.assign(r, change); });
+    hit.forEach(function (r) {
+      Object.assign(r, change);
+      if ("duplicateOf" in change) r.status = change.duplicateOf ? "done" : "progress";
+    });
     render();
     var req = ids.length === 1
       ? api("/api/it-requests/" + encodeURIComponent(ids[0]), { method: "PATCH", body: JSON.stringify(change) })
@@ -1222,11 +1291,13 @@
     req.then(function () {
       if (hit.some(function (r) { return r.taskId; })) refresh();
       if (change.status && ids.length > 1) toast(ids.length + " requests marked " + IT_STATUS_LABEL[change.status] + ".");
+      if (change.duplicateOf) toast(ids.length === 1 ? "Marked as a duplicate." : ids.length + " requests merged as duplicates.");
+      if ("duplicateOf" in change) { itr.at = 0; requestRender(); }
       nb.at = 0; // the Resolved tab picks it up next time
     }, function (err) { toast(err.message, true); itr.at = 0; render(); });
   }
   document.addEventListener("click", function (e) {
-    var t = e.target.closest && e.target.closest("[data-itr-tab],[data-itr-who],[data-itr-bulk],[data-itr-clear],#itrImport");
+    var t = e.target.closest && e.target.closest("[data-itr-tab],[data-itr-who],[data-itr-bulk],[data-itr-clear],[data-itr-merge],[data-itr-dup],[data-itr-notdup],[data-itr-undup],#itrImport");
     if (!t) return;
     var ds = t.dataset;
     if (t.id === "itrImport") { $("#itrFile").click(); return; }
@@ -1234,6 +1305,18 @@
     if ("itrWho" in ds) { itr.person = itr.person === ds.itrWho ? "" : ds.itrWho; render(); window.scrollTo(0, 0); return; }
     if (ds.itrBulk) { var ids = Object.keys(itr.picked); itr.picked = {}; if (ids.length) changeItRequests(ids, { status: ds.itrBulk }); return; }
     if ("itrClear" in ds) { itr.picked = {}; render(); }
+    if ("itrMerge" in ds) {
+      var sel = itr.data.requests.filter(function (r) { return itr.picked[r.id]; })
+        .sort(function (a, b) { return String(a.submittedAt).localeCompare(String(b.submittedAt)); });
+      if (sel.length < 2) return;
+      var keep = sel[0];
+      if (!confirm("Keep the " + fmtDate(keep.submittedAt) + " request from " + itrPerson(keep) + " and mark the other " + (sel.length - 1) + " as its duplicates?")) return;
+      itr.picked = {};
+      changeItRequests(sel.slice(1).map(function (r) { return r.id; }), { duplicateOf: keep.duplicateOf || keep.id });
+    }
+    if (ds.itrDup) changeItRequests([ds.itrDup], { duplicateOf: ds.of });
+    if (ds.itrNotdup) changeItRequests([ds.itrNotdup], { notDuplicate: true });
+    if (ds.itrUndup) changeItRequests([ds.itrUndup], { duplicateOf: "" });
   });
   document.addEventListener("change", function (e) {
     var t = e.target;
@@ -1757,6 +1840,7 @@
     var weeks = [];
     for (var i = 0; i < 12; i++) { var w = new Date(start); w.setDate(start.getDate() + 7 * i); weeks.push({ from: w, n: 0 }); }
     (itr.data ? itr.data.requests : []).forEach(function (r) {
+      if (r.duplicateOf) return;
       var d = new Date(String(r.submittedAt).replace(" ", "T"));
       if (isNaN(d) || d < start) return;
       var i = Math.floor((monday(d) - start) / (7 * 864e5));
@@ -1769,7 +1853,7 @@
     var html = '<div class="section-title"><div><h2>IT requests</h2><span class="small-note">From the IT form. Rate and close them on <a href="#dept/IT">IT → Requests</a>.</span></div></div>';
     if (itr.error) return html + '<div class="empty">' + E(itr.error) + "</div>";
     if (!itr.data) return html + '<div class="empty">Loading…</div>';
-    var open = itr.data.requests.filter(function (r) { return r.status !== "done"; });
+    var open = itr.data.requests.filter(function (r) { return r.status !== "done" && !r.duplicateOf; });
     var rows = IT_PRIOS.map(function (p) { return { label: p.label, n: open.filter(function (r) { return r.priority === p.id; }).length }; });
     rows.push({ label: "Not rated", n: open.filter(function (r) { return !r.priority; }).length });
     var weeks = itWeeks(), total = weeks.reduce(function (s, w) { return s + w.n; }, 0);
