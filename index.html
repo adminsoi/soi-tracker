@@ -137,6 +137,12 @@
   .del:hover { color: var(--danger); background: transparent; }
   .row-tools { white-space: nowrap; text-align: right; }
   .row-tools .text-button { margin-right: 8px; }
+  .prio { display: inline-block; padding: 2px 8px; border-radius: 9px; font-size: 10px; font-weight: 600; letter-spacing: .3px; }
+  .prio-P1 { background: #f6dcdb; color: #a03d3a; } .prio-P2 { background: #f7e6cc; color: #8a5a14; }
+  .prio-P3 { background: #e6ebf3; color: #3f5f8f; } .prio-P4 { background: var(--soft); color: var(--muted); }
+  .prio-none { background: transparent; color: var(--muted); border: 1px dashed var(--line); }
+  .itr-issue { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; max-width: 420px; }
+  .itr-person { background: none; border: 0; padding: 0; font: inherit; color: var(--ink); text-align: left; cursor: pointer; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
   .src { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 4px; font-size: 9px; background: #eef0e8; color: #697957; font-weight: 600; letter-spacing: .5px; vertical-align: 1px; }
   .co-note { display: block; padding: 0 8px; font-size: 10px; color: var(--muted); }
   tr.project td { background: #f7f3ea; }
@@ -681,6 +687,7 @@
     if (dept === "Accounting & Finance" && canSeeFinance()) subs.push({ id: "finance", label: "Finance" });
     if (dept === "Business Development" && (activeCompany === "SOI Aviation" || (activeCompany === ALL && hasSOI()))) subs.push({ id: "analytics", label: "Analytics" });
     subs.push({ id: "tasks", label: isOps(dept) ? "Tasks" : "Projects" });
+    if (dept === "IT" && canSeeItRequests()) subs.push({ id: "requests", label: "Requests" });
     views.forEach(function (v) { subs.push({ id: v.id, label: v.label }); });
     var sub = subView[dept];
     if (!sub || !subs.some(function (s) { return s.id === sub; })) sub = subView[dept] = subs[0].id;
@@ -719,6 +726,7 @@
     var body;
     if (sub === "finance") body = renderFinance();
     else if (sub === "analytics") body = renderBdAnalytics();
+    else if (sub === "requests") body = renderItRequests();
     else if (sub === "tasks") body = isOps(dept) ? renderOpsTable(dept) : renderProjectTable(dept);
     else {
       var view = views.filter(function (v) { return v.id === sub; })[0];
@@ -962,6 +970,145 @@
     if (!b) return;
     bdDays = +b.dataset.bdDays;
     render();
+  });
+
+  // ---- IT requests (IT → Requests) ----
+  // Every IT form response: the Excel import plus new ones the flow emails.
+  // Sort or filter by person; managers give each an internal priority
+  // (P1–P4, separate from the form's own urgency) and mark it done.
+  var IT_PRIOS = [
+    { id: "P1", label: "P1 · Critical", note: "drop everything" },
+    { id: "P2", label: "P2 · High", note: "today" },
+    { id: "P3", label: "P3 · Normal", note: "this week" },
+    { id: "P4", label: "P4 · Low", note: "when there's time" }
+  ];
+  var itr = { data: null, at: 0, loading: false, error: "", person: "", status: "open", sort: "newest" };
+  function canSeeItRequests() { return !!(me && (me.fullAccess || me.departments.indexOf("IT") !== -1)); }
+  function loadItRequests() {
+    if (itr.loading) return;
+    itr.loading = true;
+    api("/api/it-requests").then(function (d) { itr.data = d; itr.error = ""; }, function (err) { itr.error = err.message; })
+      .then(function () { itr.loading = false; itr.at = Date.now(); requestRender(); });
+  }
+  function itrPerson(r) { return r.name || r.email || "Unknown"; }
+  function renderItRequests() {
+    if (!itr.data || Date.now() - itr.at > 120000) loadItRequests();
+    if (itr.error) return '<div class="banner">' + E(itr.error) + "</div>";
+    if (!itr.data) return '<div class="empty">Loading requests…</div>';
+    var all = itr.data.requests, can = itr.data.canRate;
+    var since30 = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+    var open = all.filter(function (r) { return r.status !== "done"; });
+    var unrated = open.filter(function (r) { return !r.priority; });
+    var immediate = all.filter(function (r) { return /^immediate/i.test(r.urgency); }).length;
+    var first = all.length ? all[all.length - 1].submittedAt : "";
+
+    // By person
+    var people = {};
+    all.forEach(function (r) {
+      var k = itrPerson(r);
+      var p = people[k] || (people[k] = { name: k, company: r.company, n: 0, open: 0, p12: 0, last: "" });
+      p.n++; if (r.status !== "done") p.open++; if (r.priority === "P1" || r.priority === "P2") p.p12++;
+      if (r.submittedAt > p.last) p.last = r.submittedAt;
+    });
+    var plist = Object.keys(people).map(function (k) { return people[k]; })
+      .sort(function (a, b) { return b.n - a.n || a.name.localeCompare(b.name); });
+
+    var rows = all.filter(function (r) {
+      if (itr.person && itrPerson(r) !== itr.person) return false;
+      if (itr.status === "open" && r.status === "done") return false;
+      if (itr.status === "done" && r.status !== "done") return false;
+      return true;
+    });
+    var prank = function (r) { return r.priority ? +r.priority.slice(1) : 9; };
+    rows.sort(function (a, b) {
+      if (itr.sort === "oldest") return String(a.submittedAt).localeCompare(String(b.submittedAt));
+      if (itr.sort === "priority") return prank(a) - prank(b) || String(b.submittedAt).localeCompare(String(a.submittedAt));
+      if (itr.sort === "person") return itrPerson(a).localeCompare(itrPerson(b)) || String(b.submittedAt).localeCompare(String(a.submittedAt));
+      return String(b.submittedAt).localeCompare(String(a.submittedAt));
+    });
+
+    var prioCell = function (r) {
+      if (!can) return r.priority ? '<span class="prio prio-' + r.priority + '">' + E(r.priority) + "</span>" : '<span class="prio prio-none">Not rated</span>';
+      return '<select class="fb-in" data-itr-prio="' + E(r.id) + '" aria-label="Internal priority"><option value="">Rate…</option>' + IT_PRIOS.map(function (p) {
+        return '<option value="' + p.id + '"' + (r.priority === p.id ? " selected" : "") + ">" + E(p.label) + "</option>";
+      }).join("") + "</select>";
+    };
+    var statusCell = function (r) {
+      var done = r.status === "done";
+      return '<button type="button" class="toggle ' + (done ? "yes" : "no") + '" data-itr-status="' + E(r.id) + '"' + (can ? "" : " disabled") +
+        ' title="' + (done ? "Done" : "Open") + (can ? " — click to change" : " — only a manager can change this") + '" aria-label="' + (done ? "Done" : "Open") + '">' + (done ? "✓" : "✗") + "</button>";
+    };
+    var when = function (s) { return s ? E(fmtDate(s)) + '<span class="co-note">' + E(String(s).slice(11, 16)) + "</span>" : "—"; };
+
+    var personOpts = '<option value="">Everyone</option>' + plist.map(function (p) {
+      return '<option value="' + E(p.name) + '"' + (p.name === itr.person ? " selected" : "") + ">" + E(p.name) + " (" + p.n + ")</option>";
+    }).join("");
+
+    return '<div class="summary-cards four">' +
+        metric("Requests", all.length, first ? "Since " + fmtDate(first) : "None yet") +
+        metric("Open", open.length, unrated.length ? unrated.length + " not rated yet" : "All rated", unrated.length > 0) +
+        metric("Last 30 days", all.filter(function (r) { return r.submittedAt >= since30; }).length, "Submitted on the form") +
+        metric("Marked “Immediate”", all.length ? Math.round(immediate / all.length * 100) + "%" : "—", "Form urgency — your P1–P4 rating is separate") + "</div>" +
+      '<div class="table-toolbar"><select id="itrPerson" aria-label="Show one person">' + personOpts + "</select>" +
+        '<div class="seg">' + [["open", "Open"], ["done", "Done"], ["all", "All"]].map(function (x) {
+          return '<button type="button" data-itr-show="' + x[0] + '" class="' + (itr.status === x[0] ? "active" : "") + '">' + x[1] + "</button>";
+        }).join("") + "</div>" +
+        '<select id="itrSort" aria-label="Sort by">' + [["newest", "Newest first"], ["oldest", "Oldest first"], ["priority", "Priority"], ["person", "Person A–Z"]].map(function (x) {
+          return '<option value="' + x[0] + '"' + (itr.sort === x[0] ? " selected" : "") + ">Sort: " + x[1] + "</option>";
+        }).join("") + "</select>" +
+        (can ? '<input type="file" id="itrFile" accept=".xlsx" hidden><button type="button" class="primary" id="itrImport">Import from Excel</button>' : "") + "</div>" +
+      '<div class="table-wrap"><table class="wide"><thead><tr><th>Submitted</th><th>Person</th><th>Issue</th><th>Form says</th><th>Priority</th><th>Done</th><th>Contact</th></tr></thead><tbody>' +
+      (rows.length ? rows.map(function (r) {
+        return '<tr class="' + (r.status === "done" ? "done" : "") + '"><td>' + when(r.submittedAt) + "</td>" +
+          '<td><button type="button" class="itr-person" data-itr-who="' + E(itrPerson(r)) + '">' + E(itrPerson(r)) + "</button>" +
+            '<span class="co-note">' + E([r.company, r.remote === "Yes" ? "Remote" : ""].filter(Boolean).join(" · ")) + "</span></td>" +
+          '<td><div class="itr-issue" title="' + E(r.issue) + '">' + E(r.issue || "—") + "</div>" +
+            (r.notes ? '<span class="co-note" title="' + E(r.notes) + '">Note: ' + E(r.notes.length > 90 ? r.notes.slice(0, 90) + "…" : r.notes) + "</span>" : "") +
+            (r.startedOn ? '<span class="co-note">Started ' + E(fmtDate(r.startedOn)) + "</span>" : "") +
+            (r.taskId ? '<span class="co-note">On the IT board' + (r.taskOwner ? " · " + E(r.taskOwner) : "") + "</span>" : "") + "</td>" +
+          "<td>" + E(r.urgency || "—") + "</td><td>" + prioCell(r) + '</td><td class="center">' + statusCell(r) + "</td>" +
+          "<td>" + E(r.contact || "—") + (r.phone ? '<span class="co-note">' + E(r.phone) + "</span>" : "") + (r.email ? '<span class="co-note">' + E(r.email) + "</span>" : "") + "</td></tr>";
+      }).join("") : '<tr><td colspan="7" class="empty">' + (all.length ? "Nothing matches." : can ? "No requests yet — use Import from Excel for past form answers." : "No requests yet.") + "</td></tr>") +
+      "</tbody></table></div>" +
+      '<div class="section-title" style="margin-top:26px;"><div><h2>By person</h2><span class="small-note">Click a name to see only their requests.</span></div></div>' +
+      '<div class="table-wrap"><table class="plain"><thead><tr><th>Person</th><th>Company</th><th>Requests</th><th>Open</th><th>P1 / P2</th><th>Last request</th></tr></thead><tbody>' +
+      (plist.length ? plist.map(function (p) {
+        return '<tr><td><button type="button" class="itr-person" data-itr-who="' + E(p.name) + '">' + E(p.name) + "</button></td><td>" + E(p.company || "—") + "</td><td>" + p.n + "</td><td>" + p.open + "</td><td>" + p.p12 + "</td><td>" + E(fmtDate(p.last)) + "</td></tr>";
+      }).join("") : '<tr><td colspan="6" class="empty">No requests yet.</td></tr>') + "</tbody></table></div>" +
+      '<p class="small-note" style="margin-top:12px;">Priority is your internal rating: ' + IT_PRIOS.map(function (p) { return p.id + " " + p.note; }).join(" · ") +
+      ". Setting it on a request that's on the IT board also sets that task's priority (P1–P2 high, P3 medium, P4 low)." +
+      (itr.data.mailboxConnected ? " New form answers arrive every few minutes." : " New form answers will arrive automatically once IT_REQUESTS_MAILBOX is set.") + "</p>";
+  }
+  function patchItRequest(id, change) {
+    var r = itr.data && itr.data.requests.filter(function (x) { return x.id === id; })[0];
+    if (r) { Object.assign(r, change); render(); }
+    api("/api/it-requests/" + encodeURIComponent(id), { method: "PATCH", body: JSON.stringify(change) })
+      .then(function () { if (r && r.taskId) refresh(); }, function (err) { toast(err.message, true); itr.at = 0; render(); });
+  }
+  document.addEventListener("click", function (e) {
+    var t = e.target.closest && e.target.closest("[data-itr-show],[data-itr-who],[data-itr-status],#itrImport");
+    if (!t) return;
+    if (t.id === "itrImport") { $("#itrFile").click(); return; }
+    if (t.dataset.itrShow) { itr.status = t.dataset.itrShow; render(); return; }
+    if (t.dataset.itrWho) { itr.person = itr.person === t.dataset.itrWho ? "" : t.dataset.itrWho; render(); window.scrollTo(0, 0); return; }
+    if (t.dataset.itrStatus) {
+      var r = itr.data.requests.filter(function (x) { return x.id === t.dataset.itrStatus; })[0];
+      if (r) patchItRequest(r.id, { status: r.status === "done" ? "open" : "done" });
+    }
+  });
+  document.addEventListener("change", function (e) {
+    var t = e.target;
+    if (t.id === "itrPerson") { itr.person = t.value; render(); }
+    else if (t.id === "itrSort") { itr.sort = t.value; render(); }
+    else if (t.dataset && t.dataset.itrPrio) patchItRequest(t.dataset.itrPrio, { priority: t.value });
+    else if (t.id === "itrFile" && t.files && t.files[0]) {
+      var file = t.files[0];
+      toast("Importing " + file.name + "…");
+      fetch("/api/it-requests/import", { method: "POST", headers: { "Content-Type": "application/octet-stream", Authorization: "Bearer " + token() }, body: file })
+        .then(function (res) { return res.json().then(function (d) { if (!res.ok) throw new Error(d.error || "Import failed"); return d; }); })
+        .then(function (d) { toast("Imported " + d.rows + " responses: " + d.added + " new, " + d.updated + " updated."); itr.at = 0; render(); },
+              function (err) { toast(err.message, true); });
+    }
   });
 
   // ---- Finance ----
@@ -1271,8 +1418,39 @@
         return '<tr><td><a href="#dept/' + encodeURIComponent(d) + '">' + E(d) + "</a></td><td>" + items.filter(function (t) { return !isDone(t); }).length + "</td><td>" + items.filter(isOverdue).length +
           "</td><td>" + items.filter(isDone).length + "</td><td>" + items.length + "</td></tr>";
       }).join("") + "</tbody></table></div></div>";
+    if (canSeeItRequests()) html += renderItOverview();
     if (showBreakdown()) html += renderBreakdown();
     return html;
+  }
+  // IT requests on the Overview: requests per week (one hue) and open
+  // requests by internal priority. Details live on IT → Requests.
+  function itWeeks() {
+    var monday = function (d) { d = new Date(d); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d; };
+    var start = monday(Date.now()); start.setDate(start.getDate() - 7 * 11);
+    var weeks = [];
+    for (var i = 0; i < 12; i++) { var w = new Date(start); w.setDate(start.getDate() + 7 * i); weeks.push({ from: w, n: 0 }); }
+    (itr.data ? itr.data.requests : []).forEach(function (r) {
+      var d = new Date(String(r.submittedAt).replace(" ", "T"));
+      if (isNaN(d) || d < start) return;
+      var i = Math.floor((monday(d) - start) / (7 * 864e5));
+      if (weeks[i]) weeks[i].n++;
+    });
+    return weeks;
+  }
+  function renderItOverview() {
+    if (!itr.data || Date.now() - itr.at > 120000) loadItRequests();
+    var html = '<div class="section-title"><div><h2>IT requests</h2><span class="small-note">From the IT form. Rate and close them on <a href="#dept/IT">IT → Requests</a>.</span></div></div>';
+    if (itr.error) return html + '<div class="empty">' + E(itr.error) + "</div>";
+    if (!itr.data) return html + '<div class="empty">Loading…</div>';
+    var open = itr.data.requests.filter(function (r) { return r.status !== "done"; });
+    var rows = IT_PRIOS.map(function (p) { return { label: p.label, n: open.filter(function (r) { return r.priority === p.id; }).length }; });
+    rows.push({ label: "Not rated", n: open.filter(function (r) { return !r.priority; }).length });
+    var weeks = itWeeks(), total = weeks.reduce(function (s, w) { return s + w.n; }, 0);
+    return html + '<div class="grid-2"><div class="card"><div class="card-label">Requests per week — last 12 weeks (' + total + ")</div>" +
+      '<div class="chart-wrap"><canvas id="ov-it-weekly" aria-label="IT requests per week"></canvas></div></div>' +
+      '<div class="table-wrap"><table class="plain"><thead><tr><th>Open requests by priority</th><th>Count</th></tr></thead><tbody>' +
+      rows.map(function (r) { return "<tr><td>" + E(r.label) + "</td><td>" + r.n + "</td></tr>"; }).join("") +
+      "<tr><td><b>Total open</b></td><td><b>" + open.length + "</b></td></tr></tbody></table></div></div>";
   }
   function renderBreakdown() {
     var d = breakdown.data;
@@ -1308,6 +1486,18 @@
           ]
         },
         options: chartOptions(true, true)
+      }));
+    }
+    var itEl = $("#ov-it-weekly");
+    if (itEl) {
+      var weeks = itWeeks();
+      charts.push(new Chart(itEl, {
+        type: "bar",
+        data: {
+          labels: weeks.map(function (w) { return w.from.toLocaleDateString(undefined, { month: "short", day: "numeric" }); }),
+          datasets: [{ label: "Requests", data: weeks.map(function (w) { return w.n; }), backgroundColor: "#3f6ba8", borderRadius: 3 }]
+        },
+        options: chartOptions(false)
       }));
     }
     var d = breakdown.data;

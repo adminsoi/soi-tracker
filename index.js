@@ -29,11 +29,13 @@ const {
   withSettings,
   getFinance,
   withFinance,
+  getItRequests,
+  withItRequests,
 } = require("./s3store");
 const { sendMail } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError } = require("./calendar");
 const { hrEvents, cleanFeedUrl, FeedError } = require("./hrcal");
-const { itRequestsConfigured, fetchItRequests, IT_REQUESTS_MAILBOX } = require("./itrequests");
+const { itRequestsConfigured, fetchItRequests, IT_REQUESTS_MAILBOX, parseFormWorkbook, recordFromEmail, FormFileError } = require("./itrequests");
 const { unreadThreads, MailError } = require("./mail");
 const { pentagonQuery } = require("./pentagon");
 const {
@@ -1640,6 +1642,105 @@ renameDepartment("Operations", "Business Development").catch((err) =>
   console.error("Department rename failed (will retry next start):", err.message)
 );
 
+// ---- IT request history (IT page → Requests) ----
+// Everyone with the IT department (or full access) can see it; managers set
+// the internal priority and open / done. A request that became a task takes
+// its open / done from that task, and changes here go to the task too.
+const IT_PRIORITIES = ["P1", "P2", "P3", "P4"];
+const PRIORITY_TO_TASK = { P1: "high", P2: "high", P3: "medium", P4: "low" };
+
+function canSeeItRequests(user) {
+  return user.fullAccess || (user.departments || []).includes("IT");
+}
+
+app.get(
+  "/api/it-requests",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!canSeeItRequests(req.user)) return res.status(403).json({ error: "Only IT can see form requests" });
+    const [list, tasks] = await Promise.all([getItRequests(), getTasks()]);
+    const byId = new Map(tasks.map((t) => [t.id, t]));
+    const requests = list.map((r) => {
+      const task = r.taskId ? byId.get(r.taskId) : null;
+      return Object.assign({}, r, task ? { status: task.status === "done" ? "done" : "open", taskOwner: task.owner || "" } : { taskId: "" });
+    }).sort((a, b) => String(b.submittedAt).localeCompare(String(a.submittedAt)));
+    res.json({ requests, canRate: isManager(req.user), mailboxConnected: itRequestsConfigured });
+  })
+);
+
+app.patch(
+  "/api/it-requests/:id",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!canSeeItRequests(req.user) || !isManager(req.user)) return res.status(403).json({ error: "Only managers can rate or close requests" });
+    const body = req.body || {};
+    const change = {};
+    if ("priority" in body) {
+      if (body.priority !== "" && !IT_PRIORITIES.includes(body.priority)) return res.status(400).json({ error: "Priority must be P1–P4" });
+      change.priority = body.priority;
+    }
+    if ("status" in body) {
+      if (!["open", "done"].includes(body.status)) return res.status(400).json({ error: "Status must be open or done" });
+      change.status = body.status;
+    }
+    const rec = await withItRequests((list) => {
+      const r = list.find((x) => x.id === req.params.id);
+      if (!r) return null;
+      Object.assign(r, change, { updatedAt: Date.now(), updatedBy: req.user.username });
+      return Object.assign({}, r);
+    });
+    if (!rec) return res.status(404).json({ error: "That request isn't here any more" });
+    if (rec.taskId && (change.priority || change.status)) {
+      await withTasks((tasks) => {
+        const t = tasks.find((x) => x.id === rec.taskId);
+        if (!t) return;
+        if (change.priority) t.priority = PRIORITY_TO_TASK[change.priority];
+        if (change.status) t.status = change.status === "done" ? "done" : "todo";
+      });
+    }
+    res.json(rec);
+  })
+);
+
+// One-time (or repeat) import of the Forms "Open results in Excel" file.
+// Re-importing updates the answers but keeps priorities and open / done.
+// Imported requests start as done, since they're from before the tracker.
+app.post(
+  "/api/it-requests/import",
+  authMiddleware,
+  express.raw({ type: "application/octet-stream", limit: "10mb" }),
+  asyncHandler(async (req, res) => {
+    if (!canSeeItRequests(req.user) || !isManager(req.user)) return res.status(403).json({ error: "Only managers can import requests" });
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "Choose the .xlsx file from Microsoft Forms" });
+    let records;
+    try {
+      records = await parseFormWorkbook(req.body);
+    } catch (err) {
+      if (!(err instanceof FormFileError)) console.error("IT request import failed:", err.message);
+      return res.status(400).json({ error: err instanceof FormFileError ? err.message : "That file couldn't be read as an Excel workbook." });
+    }
+    const tasks = await getTasks();
+    const taskByForm = new Map(tasks.filter((t) => t.formResponseId).map((t) => [`form-${t.formResponseId}`, t]));
+    const counts = await withItRequests((list) => {
+      let added = 0, updated = 0;
+      for (const rec of records) {
+        const have = list.find((x) => x.id === rec.id);
+        if (have) {
+          const keep = { priority: have.priority, status: have.status, taskId: have.taskId, addedAt: have.addedAt, source: have.source };
+          Object.assign(have, rec, keep);
+          updated++;
+        } else {
+          const task = taskByForm.get(rec.id);
+          list.push(Object.assign(rec, { priority: "", status: task ? (task.status === "done" ? "done" : "open") : "done", taskId: task ? task.id : "", addedAt: Date.now() }));
+          added++;
+        }
+      }
+      return { added, updated };
+    });
+    res.json(Object.assign({ rows: records.length }, counts));
+  })
+);
+
 // IT requests from the Microsoft Form (see itrequests.js): every few
 // minutes, each new "[IT Request]" email becomes an IT task for the IT
 // default person. Handled ones are remembered in settings, so a task that's
@@ -1673,7 +1774,15 @@ async function syncItRequests() {
       requester: r.requester.slice(0, 120),
       formResponseId: r.responseId || r.messageId,
     }));
-    await withTasks((tasks) => { tasks.unshift(...added.reverse()); });
+    await withTasks((tasks) => { tasks.unshift(...added.slice().reverse()); });
+    // Also into the Requests history, linked to the task.
+    await withItRequests((list) => {
+      fresh.forEach((r, i) => {
+        const rec = recordFromEmail(r);
+        if (list.some((x) => x.id === rec.id)) return;
+        list.push(Object.assign(rec, { priority: "", status: "open", taskId: added[i].id, addedAt: Date.now() }));
+      });
+    });
     await withSettings((s) => {
       s.itRequestsSeen = [...fresh.map((r) => r.responseId || r.messageId), ...(s.itRequestsSeen || [])].slice(0, 1000);
     });
