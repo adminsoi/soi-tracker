@@ -88,6 +88,10 @@ function getFinance() {
 function getSettings() {
   return readJson("settings", {});
 }
+// Attendance check-ins: { "YYYY-MM-DD": { username: { status, in, out } } }.
+function getAttendance() {
+  return readJson("attendance", {});
+}
 // Private IT notebook: ticket write-ups and knowledge base articles.
 function getItNotebook() {
   return readJson("it_notebook", {});
@@ -107,6 +111,7 @@ let settingsQueue = Promise.resolve();
 let financeQueue = Promise.resolve();
 let itRequestsQueue = Promise.resolve();
 let itNotebookQueue = Promise.resolve();
+let attendanceQueue = Promise.resolve();
 
 function withUsers(mutator) {
   usersQueue = usersQueue.then(async () => {
@@ -192,7 +197,19 @@ function withItNotebook(mutator) {
   return itNotebookQueue;
 }
 
+function withAttendance(mutator) {
+  attendanceQueue = attendanceQueue.then(async () => {
+    const att = await getAttendance();
+    const result = await mutator(att);
+    await writeJson("attendance", att);
+    return result;
+  });
+  return attendanceQueue;
+}
+
 module.exports = {
+  getAttendance,
+  withAttendance,
   getItNotebook,
   withItNotebook,
   getItRequests,
