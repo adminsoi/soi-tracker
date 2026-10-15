@@ -235,9 +235,12 @@ created (Procurement) and Sales Orders, Purchase Orders and tasks created
 (Purchasing) on Overview. Pentagon counts cover what each query returns (by
 default the last 14 days).
 
-Anyone in Procurement or Purchasing can open their own department's lists;
-the general Pentagon query tester stays limited to Procurement and full
-access.
+Anyone in Procurement or Purchasing can open their own department's lists.
+The server only runs the dashboards' own Pentagon queries (listed in
+`pentagonViews.js`, plus `dashboards.mine` for Mentions you, which always
+uses the signed-in person's own Pentagon code); there's no free-form query
+page. Each query receives `date_from`, `date_to`, `status` and `account_no`
+(blank when not filtered) and a row limit.
 
 ### Claude
 

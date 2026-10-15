@@ -23,8 +23,6 @@ const {
   getTasks,
   withUsers,
   withTasks,
-  getPentagonPresets,
-  withPentagonPresets,
   getRfqMarks,
   withRfqMarks,
   getSettings,
@@ -579,22 +577,18 @@ app.post(
   })
 );
 
-// ---------- Pentagon (generic query proxy) ----------
-// One route forwards any named query to Pentagon's API, so adding a new
-// query later needs no new backend code — just call this route with that
-// query's name and whatever params/limit it expects. The API key never
-// reaches the browser. Currently restricted to SOI Aviation only.
-
-function canUsePentagon(user, activeCompany) {
-  if (activeCompany !== "SOI Aviation") return false;
-  return user.fullAccess || user.departments.includes("Procurement");
-}
+// ---------- Pentagon queries ----------
+// Only the queries the dashboards use can be run, and only by people in that
+// view's department (or with full access): RFQs, Quotes, Sales Orders,
+// Purchase Orders, Invoices — defined in pentagonViews.js — plus
+// "dashboards.mine" for Mentions you. The API key never reaches the browser.
 
 // Someone in a view's department (or with full access) may run that view's
-// query even without access to the general Pentagon tester. The views
-// themselves are defined in pentagonViews.js.
+// query. The views themselves are defined in pentagonViews.js.
 const VIEW_DEPARTMENTS = Object.fromEntries(allViews().map((v) => [v.id, v.department]));
 const QUERY_DEPARTMENTS = Object.fromEntries(allViews().map((v) => [v.queryName, v.department]));
+const MENTIONS_QUERY = "dashboards.mine";
+const LIST_PARAMS = ["date_from", "date_to", "status", "account_no"];
 
 function inDepartment(user, dept) {
   return !!dept && (user.fullAccess || user.departments.includes(dept));
@@ -611,88 +605,29 @@ app.post(
   authMiddleware,
   asyncHandler(async (req, res) => {
     const { queryName } = req.params;
-    // "Mentions you" is personal data, not departmental — any SOI Aviation
-    // account can run it. Every other Pentagon query stays restricted.
-    const allowed =
-      queryName === "dashboards.mine" ||
-      canUsePentagon(req.user, "SOI Aviation") ||
-      (req.user.companies.includes("SOI Aviation") && inDepartment(req.user, QUERY_DEPARTMENTS[queryName]));
-    if (!allowed) {
+    if (!req.user.companies.includes("SOI Aviation")) {
       return res.status(403).json({ error: "Not available for your account" });
     }
     const body = req.body || {};
+    const limit = Math.min(Math.max(parseInt(body.limit, 10) || 200, 1), 500);
+    let params;
+    if (queryName === MENTIONS_QUERY) {
+      // Always your own Pentagon code, never one sent by the browser.
+      if (!req.user.pentagonCode) return res.status(400).json({ error: "No Pentagon code is set on your login" });
+      params = { code: req.user.pentagonCode };
+    } else if (inDepartment(req.user, QUERY_DEPARTMENTS[queryName])) {
+      // Only the list filters, as text.
+      const sent = body.params && typeof body.params === "object" ? body.params : {};
+      params = Object.fromEntries(LIST_PARAMS.map((k) => [k, String(sent[k] || "").trim().slice(0, 40)]));
+    } else {
+      return res.status(403).json({ error: "Not available for your account" });
+    }
     try {
-      const data = await pentagonQuery(queryName, body);
-      res.json(data);
+      res.json(await pentagonQuery(queryName, { params, limit }));
     } catch (err) {
       console.error(`Pentagon query failed: ${err.message}`);
       res.status(502).json({ error: "Pentagon query failed: " + err.message });
     }
-  })
-);
-
-// Shared saved searches — visible to and editable by anyone who can use
-// the Pentagon tab (same audience as running queries themselves).
-
-app.get(
-  "/api/pentagon-presets",
-  authMiddleware,
-  asyncHandler(async (req, res) => {
-    if (!canUsePentagon(req.user, "SOI Aviation")) {
-      return res.status(403).json({ error: "Not available for your account" });
-    }
-    const presets = await getPentagonPresets();
-    res.json(presets);
-  })
-);
-
-app.post(
-  "/api/pentagon-presets",
-  authMiddleware,
-  asyncHandler(async (req, res) => {
-    if (!canUsePentagon(req.user, "SOI Aviation")) {
-      return res.status(403).json({ error: "Not available for your account" });
-    }
-    const body = req.body || {};
-    const name = String(body.name || "").trim().slice(0, 80);
-    const queryName = String(body.queryName || "").trim();
-    if (!name || !queryName) {
-      return res.status(400).json({ error: "Name and query name are required" });
-    }
-    const preset = {
-      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
-      name,
-      queryName,
-      params: body.params && typeof body.params === "object" ? body.params : {},
-      limit: Number.isFinite(body.limit) ? body.limit : 10,
-      createdBy: req.user.username,
-      createdAt: Date.now(),
-    };
-    await withPentagonPresets((presets) => {
-      presets.push(preset);
-    });
-    res.status(201).json(preset);
-  })
-);
-
-app.delete(
-  "/api/pentagon-presets/:id",
-  authMiddleware,
-  asyncHandler(async (req, res) => {
-    if (!canUsePentagon(req.user, "SOI Aviation")) {
-      return res.status(403).json({ error: "Not available for your account" });
-    }
-    const { id } = req.params;
-    let removed = false;
-    await withPentagonPresets((presets) => {
-      const idx = presets.findIndex((p) => p.id === id);
-      if (idx !== -1) {
-        presets.splice(idx, 1);
-        removed = true;
-      }
-    });
-    if (!removed) return res.status(404).json({ error: "Preset not found" });
-    res.status(204).end();
   })
 );
 
@@ -839,7 +774,7 @@ async function cachedRows(view) {
   if (hit && Date.now() - hit.at < PENTAGON_CACHE_MS) return hit;
   let entry;
   try {
-    const data = await pentagonQuery(view.queryName, { params: {}, limit: 200 });
+    const data = await pentagonQuery(view.queryName, { params: { date_from: "", date_to: "", status: "", account_no: "" }, limit: 200 });
     entry = { at: Date.now(), rows: resultRows(data), error: null };
   } catch (err) {
     console.error(`Pentagon rows for ${view.id} failed: ${err.message}`);
