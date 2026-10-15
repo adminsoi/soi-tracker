@@ -237,6 +237,30 @@ folder; every folder is read) and are left out of the Work inbox. Each
 response is added once and only from the last two weeks; deleting the task
 won't bring it back.
 
+### Requests tab (history, priority, by person)
+
+**IT → Requests** lists every form response: past ones imported once from
+Excel, plus each new one the flow emails. It's visible to anyone with the IT
+department (or full access); only managers change things.
+
+- **Import past answers:** in Microsoft Forms open the form → **Responses →
+  Open results in Excel**, download it, then click **Import from Excel** on
+  the Requests tab. Imported requests start as done. Importing the same file
+  again updates the answers and keeps your ratings.
+- **Internal priority:** managers rate each request **P1 Critical** (drop
+  everything), **P2 High** (today), **P3 Normal** (this week) or **P4 Low**
+  (when there's time). This is separate from the form's own urgency, which
+  most people set to Immediate. On a request that's also an IT task, the
+  rating sets the task's priority too (P1–P2 high, P3 medium, P4 low), and
+  open / done stays in step with the task.
+- **By person:** filter or sort by person, or click a name; the **By
+  person** table shows requests, open, P1/P2 and last request for everyone.
+- **Overview** shows requests per week (last 12 weeks) and open requests
+  by priority, for IT and full-access logins.
+
+The responses (names, emails, phone numbers) are stored in the tracker's S3
+bucket as `it_requests.json`, never in this repo.
+
 ## Finance from Pentagon
 
 For SOI Aviation, the Finance view also fills in from three Pentagon queries

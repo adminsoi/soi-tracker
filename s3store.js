@@ -88,6 +88,10 @@ function getFinance() {
 function getSettings() {
   return readJson("settings", {});
 }
+// IT request form responses (imported from Excel or emailed by the flow).
+function getItRequests() {
+  return readJson("it_requests", []);
+}
 
 // In-process queues so concurrent requests to this same container don't
 // clobber each other's read-modify-write cycle.
@@ -97,6 +101,7 @@ let presetsQueue = Promise.resolve();
 let rfqMarksQueue = Promise.resolve();
 let settingsQueue = Promise.resolve();
 let financeQueue = Promise.resolve();
+let itRequestsQueue = Promise.resolve();
 
 function withUsers(mutator) {
   usersQueue = usersQueue.then(async () => {
@@ -162,7 +167,19 @@ function withSettings(mutator) {
   return settingsQueue;
 }
 
+function withItRequests(mutator) {
+  itRequestsQueue = itRequestsQueue.then(async () => {
+    const list = await getItRequests();
+    const result = await mutator(list);
+    await writeJson("it_requests", list);
+    return result;
+  });
+  return itRequestsQueue;
+}
+
 module.exports = {
+  getItRequests,
+  withItRequests,
   getUsers,
   getTasks,
   withUsers,

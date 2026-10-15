@@ -7,6 +7,7 @@
 // changed.
 
 const { graphConfigured, getAccessToken } = require("./graph");
+const { WINDOWS_TO_IANA } = require("./hrcal");
 
 const MAILBOX = String(process.env.IT_REQUESTS_MAILBOX || "").trim();
 const TAG = "[IT Request]";
@@ -59,13 +60,13 @@ async function fetchItRequests() {
     .filter((m) => isItRequestSubject(m.subject) && Date.parse(m.receivedDateTime) >= since)
     .map((m) => {
       const fields = parseFields(m.body && m.body.content);
-      const urgent = field(fields, "urgent", "urgency", "priority");
+      const urgent = field(fields, "urgent", "urgency", "priority", "what is the urgency of this issue?");
       return {
         messageId: m.id,
         responseId: field(fields, "response id"),
         title: String(m.subject).trim().slice(TAG.length).replace(/^[\s:—-]+/, "").trim() || "IT request",
         requester: field(fields, "requested by", "requester", "name", "email"),
-        urgent: /^(yes|true|urgent|high)/i.test(urgent),
+        urgent: /^(yes|true|urgent|high|immediate)/i.test(urgent),
         fields: fields.filter((f) => !/^response id$/i.test(f.label)),
         receivedAt: m.receivedDateTime,
       };
@@ -73,4 +74,192 @@ async function fetchItRequests() {
     .sort((a, b) => Date.parse(b.receivedAt) - Date.parse(a.receivedAt));
 }
 
-module.exports = { itRequestsConfigured, fetchItRequests, isItRequestSubject, parseFields, IT_REQUESTS_MAILBOX: MAILBOX };
+// ---- Request history (the IT page's Requests tab) ----
+// One record per form response, from the one-time Excel import or from the
+// emails above. Records share an id ("form-<response number>"), so a
+// response is never listed twice.
+
+const OFFICE_IANA = (() => {
+  const tz = process.env.OFFICE_TIMEZONE || "Pacific Standard Time";
+  return WINDOWS_TO_IANA[tz] || tz;
+})();
+
+// "YYYY-MM-DD HH:MM" in office time, the same way the Forms export shows it.
+function officeStamp(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+    timeZone: OFFICE_IANA, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(d).map((x) => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}`;
+}
+
+const clean = (v, n) => String(v == null ? "" : v).replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim().slice(0, n);
+// "Immediate (needs resolution now)" -> "Immediate"
+const shortUrgency = (v) => clean(String(v || "").split("(")[0], 40);
+
+// Which answer is which, by the wording of the question.
+const KINDS = [
+  ["name", (h) => h === "full name" || h === "name" || h === "requested by" || h === "requester"],
+  ["email", (h) => h.startsWith("email")],
+  ["phone", (h) => h.includes("phone")],
+  ["company", (h) => h.includes("company")],
+  ["remote", (h) => h.includes("remote")],
+  ["issue", (h) => h.includes("describe") || h === "details" || h === "issue"],
+  ["startedOn", (h) => h.includes("first start") || h.includes("when did")],
+  ["urgency", (h) => h.includes("urgen") || h === "priority"],
+  ["contact", (h) => h.includes("contacted") || h === "contact"],
+  ["notes", (h) => h.includes("notes") || h.includes("comment")],
+];
+function kindOf(label) {
+  const h = clean(label, 200).toLowerCase().replace(/[?:]+$/, "");
+  const k = KINDS.find(([, test]) => test(h));
+  return k ? k[0] : null;
+}
+
+const LIMITS = { name: 80, email: 120, phone: 40, company: 40, remote: 10, issue: 1000, startedOn: 10, urgency: 40, contact: 60, notes: 1000 };
+function blankRecord() {
+  return { name: "", email: "", phone: "", company: "", remote: "", issue: "", startedOn: "", urgency: "", contact: "", notes: "" };
+}
+
+function setKind(rec, kind, value) {
+  if (!kind || value == null || value === "") return;
+  if (kind === "startedOn") {
+    const d = value instanceof Date ? value : new Date(value);
+    rec.startedOn = isNaN(d) ? clean(value, 10) : d.toISOString().slice(0, 10);
+    return;
+  }
+  let v = clean(value, LIMITS[kind]);
+  if (kind === "urgency") v = shortUrgency(v);
+  // A requester given as an email address fills both.
+  if (kind === "name" && v.includes("@")) { if (!rec.email) rec.email = v; if (rec.name) return; }
+  if (kind === "email" && !v.includes("@")) return; // e.g. "anonymous"
+  if (!rec[kind]) rec[kind] = v;
+}
+
+class FormFileError extends Error {}
+
+// ---- Reading the .xlsx ----
+// Forms exports write their XML with namespace prefixes ("x:row") that
+// common Excel libraries don't read, so this is a small reader for what a
+// Forms export contains: one sheet of text, numbers and dates.
+
+const XML_ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+function xmlText(s) {
+  return String(s).replace(/&(#x?[0-9a-f]+|\w+);/gi, (m, e) => {
+    if (e[0] === "#") return String.fromCodePoint(e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10));
+    return XML_ENTITIES[e] != null ? XML_ENTITIES[e] : m;
+  });
+}
+// Text of every <t> inside a fragment (handles rich-text runs).
+function allText(fragment) {
+  let out = "";
+  for (const m of fragment.matchAll(/<(?:\w+:)?t(?:\s[^>]*)?>([\s\S]*?)<\/(?:\w+:)?t>/g)) out += xmlText(m[1]);
+  return out;
+}
+function colIndex(ref) {
+  let n = 0;
+  for (const ch of String(ref).replace(/\d+$/, "").toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64);
+  return n - 1;
+}
+
+async function readFirstSheet(buffer) {
+  const JSZip = require("jszip");
+  let zip;
+  try { zip = await JSZip.loadAsync(buffer); } catch (e) { throw new FormFileError("That file isn't an Excel (.xlsx) workbook."); }
+  const read = async (path) => { const f = zip.file(path.replace(/^\//, "")); return f ? f.async("string") : ""; };
+
+  // First sheet listed in the workbook, via its relationship.
+  const wbXml = await read("xl/workbook.xml");
+  const rels = await read("xl/_rels/workbook.xml.rels");
+  const firstRid = (wbXml.match(/<(?:\w+:)?sheet\s[^>]*r:id="([^"]+)"/) || [])[1];
+  let sheetPath = "xl/worksheets/sheet1.xml";
+  if (firstRid) {
+    const rel = [...rels.matchAll(/<Relationship\s[^>]*>/g)].map((m) => m[0]).find((r) => r.includes(`Id="${firstRid}"`));
+    const target = rel && (rel.match(/Target="([^"]+)"/) || [])[1];
+    if (target) sheetPath = target.startsWith("/") ? target.slice(1) : "xl/" + target.replace(/^\.\//, "");
+  }
+  const sheet = await read(sheetPath);
+  if (!sheet) throw new FormFileError("That workbook has no sheet to read.");
+
+  const shared = [];
+  const ss = await read("xl/sharedStrings.xml");
+  for (const m of ss.matchAll(/<(?:\w+:)?si>([\s\S]*?)<\/(?:\w+:)?si>/g)) shared.push(allText(m[1]));
+
+  const rows = [];
+  for (const rm of sheet.matchAll(/<(?:\w+:)?row\b[^>]*>([\s\S]*?)<\/(?:\w+:)?row>/g)) {
+    const row = [];
+    for (const cm of rm[1].matchAll(/<(?:\w+:)?c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:\w+:)?c>)/g)) {
+      const attrs = cm[1], inner = cm[2] || "";
+      const ref = (attrs.match(/\br="([A-Z]+\d+)"/) || [])[1];
+      const type = (attrs.match(/\bt="(\w+)"/) || [])[1] || "n";
+      const raw = (inner.match(/<(?:\w+:)?v>([\s\S]*?)<\/(?:\w+:)?v>/) || [])[1];
+      let value = "";
+      if (type === "s") value = raw != null ? shared[parseInt(raw, 10)] || "" : "";
+      else if (type === "inlineStr") value = allText(inner);
+      else if (type === "str" || type === "e") value = raw != null ? xmlText(raw) : "";
+      else if (type === "b") value = raw === "1" ? "TRUE" : "FALSE";
+      else value = raw != null && raw !== "" ? Number(raw) : "";
+      row[ref ? colIndex(ref) : row.length] = value;
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+// Excel date serials (days since 1899-12-30) as "YYYY-MM-DD HH:MM". Forms
+// writes office time with no zone, so this keeps it exactly as shown.
+function serialStamp(v) {
+  if (typeof v === "string") return clean(v, 16).replace("T", " ");
+  if (typeof v !== "number" || !isFinite(v)) return "";
+  const d = new Date(Math.round((v - 25569) * 864e5));
+  return isNaN(d) ? "" : d.toISOString().slice(0, 16).replace("T", " ");
+}
+
+/** Records from the Forms "Open results in Excel" download. */
+async function parseFormWorkbook(buffer) {
+  const rows = await readFirstSheet(buffer);
+  const header = (rows[0] || []).map((v) => clean(v, 200));
+  const col = (name) => header.findIndex((h) => h && h.toLowerCase() === name);
+  const idCol = col("id");
+  const timeCol = col("completion time") >= 0 ? col("completion time") : col("start time");
+  if (idCol < 0) throw new FormFileError("This doesn't look like a Microsoft Forms export (no ID column).");
+  const kinds = header.map((h, i) => (i === idCol || i === timeCol || !h ? null : kindOf(h)));
+  const records = [];
+  for (const row of rows.slice(1)) {
+    const formId = parseInt(row[idCol], 10);
+    if (!formId) continue;
+    const rec = Object.assign(blankRecord(), {
+      id: `form-${formId}`,
+      formId,
+      submittedAt: timeCol >= 0 ? serialStamp(row[timeCol]) : "",
+      source: "import",
+    });
+    kinds.forEach((k, i) => {
+      if (!k) return;
+      const v = row[i];
+      setKind(rec, k, k === "startedOn" && typeof v === "number" ? serialStamp(v).slice(0, 10) : v);
+    });
+    records.push(rec);
+  }
+  return records;
+}
+
+/** A record for a request that came in by email (see fetchItRequests). */
+function recordFromEmail(r) {
+  const formId = parseInt(r.responseId, 10) || null;
+  const rec = Object.assign(blankRecord(), {
+    id: formId ? `form-${formId}` : `mail-${r.messageId}`,
+    formId,
+    submittedAt: officeStamp(r.receivedAt),
+    source: "email",
+  });
+  for (const f of r.fields) setKind(rec, kindOf(f.label), f.value);
+  if (!rec.issue) rec.issue = clean(r.title, LIMITS.issue);
+  return rec;
+}
+
+module.exports = {
+  itRequestsConfigured, fetchItRequests, isItRequestSubject, parseFields, IT_REQUESTS_MAILBOX: MAILBOX,
+  parseFormWorkbook, recordFromEmail, FormFileError,
+};
