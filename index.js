@@ -1954,7 +1954,7 @@ app.get(
       const task = r.taskId ? byId.get(r.taskId) : null;
       return Object.assign({}, r, { status: requestStatus(r, task) }, task ? { taskOwner: task.owner || "" } : { taskId: "" });
     }).sort((a, b) => String(b.submittedAt).localeCompare(String(a.submittedAt)));
-    res.json({ requests, canRate: isManager(req.user), mailboxConnected: itRequestsConfigured });
+    res.json({ requests, canRate: isManager(req.user), mailboxConnected: itRequestsConfigured, sync: itSyncStatus() });
   })
 );
 
@@ -2229,52 +2229,83 @@ app.post(
 // deleted later doesn't come back.
 const IT_REQUESTS_EVERY_MS = 3 * 60 * 1000;
 let itRequestsRunning = false;
+// What the last check found, for the status line on IT → Requests.
+let itSync = { at: 0, ok: null, error: "", matched: 0, added: 0 };
 async function syncItRequests() {
-  if (!itRequestsConfigured || itRequestsRunning) return;
+  if (!itRequestsConfigured) return itSync;
+  if (itRequestsRunning) return itSync;
   itRequestsRunning = true;
   try {
-    const found = await fetchItRequests();
-    if (!found.length) return;
     const settings = await getSettings();
     const seen = new Set(settings.itRequestsSeen || []);
-    const fresh = found.filter((r) => !seen.has(r.responseId || r.messageId));
-    if (!fresh.length) return;
-    const owner = (settings.departmentDefaults || {}).IT || "";
-    const added = fresh.map((r, i) => ({
-      id: Date.now().toString(36) + i + Math.random().toString(36).slice(2, 6),
-      title: r.title.slice(0, 140),
-      company: "SOI Aviation",
-      department: "IT",
-      status: "todo",
-      priority: r.urgent ? "high" : "medium",
-      owner,
-      dueDate: "",
-      notes: r.fields.map((f) => `${f.label}: ${f.value}`).join("\n").slice(0, 500),
-      createdAt: Date.parse(r.receivedAt) || Date.now(),
-      createdBy: "IT request form",
-      source: "form",
-      requester: r.requester.slice(0, 120),
-      formResponseId: r.responseId || r.messageId,
-    }));
-    await withTasks((tasks) => { tasks.unshift(...added.slice().reverse()); });
-    // Also into the Requests history, linked to the task.
-    await withItRequests((list) => {
-      fresh.forEach((r, i) => {
-        const rec = recordFromEmail(r);
-        if (list.some((x) => x.id === rec.id)) return;
-        list.push(Object.assign(rec, { priority: "", status: "new", taskId: added[i].id, addedAt: Date.now() }));
+    const seenMessages = new Set(settings.itRequestsSeenMessages || []);
+    const { matched, items, checked } = await fetchItRequests(seenMessages);
+    const fresh = items.filter((r) => !seen.has(r.responseId || r.messageId));
+    let added = [];
+    if (fresh.length) {
+      const owner = (settings.departmentDefaults || {}).IT || "";
+      added = fresh.map((r, i) => ({
+        id: Date.now().toString(36) + i + Math.random().toString(36).slice(2, 6),
+        title: r.title.slice(0, 140),
+        company: "SOI Aviation",
+        department: "IT",
+        status: "todo",
+        priority: r.urgent ? "high" : "medium",
+        owner,
+        dueDate: "",
+        notes: r.fields.map((f) => `${f.label}: ${f.value}`).join("\n").slice(0, 500),
+        createdAt: Date.parse(r.receivedAt) || Date.now(),
+        createdBy: "IT request form",
+        source: "form",
+        requester: r.requester.slice(0, 120),
+        formResponseId: r.responseId || r.messageId,
+      }));
+      await withTasks((tasks) => { tasks.unshift(...added.slice().reverse()); });
+      // Also into the Requests history, linked to the task.
+      await withItRequests((list) => {
+        fresh.forEach((r, i) => {
+          const rec = recordFromEmail(r);
+          const have = list.find((x) => x.id === rec.id);
+          if (have) { if (!have.taskId) have.taskId = added[i].id; return; }
+          list.push(Object.assign(rec, { priority: "", status: "new", taskId: added[i].id, addedAt: Date.now() }));
+        });
       });
-    });
-    await withSettings((s) => {
-      s.itRequestsSeen = [...fresh.map((r) => r.responseId || r.messageId), ...(s.itRequestsSeen || [])].slice(0, 1000);
-    });
-    console.log(`IT requests: added ${added.length} task(s) from ${IT_REQUESTS_MAILBOX}.`);
+    }
+    // Remember responses and messages already handled (messages so their
+    // bodies aren't re-read every few minutes).
+    if (fresh.length || checked.length) {
+      await withSettings((s) => {
+        s.itRequestsSeen = [...fresh.map((r) => r.responseId || r.messageId), ...(s.itRequestsSeen || [])].slice(0, 2000);
+        s.itRequestsSeenMessages = [...checked, ...(s.itRequestsSeenMessages || [])].slice(0, 2000);
+      });
+    }
+    itSync = { at: Date.now(), ok: true, error: "", matched, added: added.length };
+    if (added.length) console.log(`IT requests: added ${added.length} task(s) from ${IT_REQUESTS_MAILBOX}.`);
   } catch (err) {
+    itSync = { at: Date.now(), ok: false, error: err.message, matched: 0, added: 0 };
     console.error("IT request sync failed (will retry):", err.message);
   } finally {
     itRequestsRunning = false;
   }
+  return itSync;
 }
+
+// Status for IT → Requests, and "Check now" for managers.
+function itSyncStatus() {
+  return Object.assign({ configured: itRequestsConfigured, mailbox: IT_REQUESTS_MAILBOX, everyMinutes: IT_REQUESTS_EVERY_MS / 60000 }, itSync);
+}
+app.post(
+  "/api/it-requests/check-now",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!canSeeItRequests(req.user) || !isManager(req.user)) return res.status(403).json({ error: "Only managers can do this" });
+    if (!itRequestsConfigured) return res.json(itSyncStatus());
+    while (itRequestsRunning) await new Promise((r) => setTimeout(r, 300));
+    await syncItRequests();
+    res.json(itSyncStatus());
+  })
+);
+
 if (itRequestsConfigured) {
   setTimeout(syncItRequests, 15 * 1000);
   setInterval(syncItRequests, IT_REQUESTS_EVERY_MS);

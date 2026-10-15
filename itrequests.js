@@ -15,8 +15,10 @@ const LOOKBACK_DAYS = 14;
 
 const itRequestsConfigured = graphConfigured && !!MAILBOX;
 
+// "[IT Request] ...", also without the brackets; never replies or forwards.
+const SUBJECT_RE = /^\s*\[?\s*it\s+request\s*\]?\s*[:\-—]?\s*/i;
 function isItRequestSubject(subject) {
-  return String(subject || "").trim().toLowerCase().startsWith(TAG.toLowerCase());
+  return SUBJECT_RE.test(String(subject || ""));
 }
 
 // "Label: value" lines from the email body (plain text). Lines without a
@@ -38,40 +40,77 @@ function field(fields, ...names) {
   return f ? f.value : "";
 }
 
-/** Form emails from the last two weeks, newest first, parsed. */
-async function fetchItRequests() {
-  if (!itRequestsConfigured) return [];
-  const token = await getAccessToken();
-  const url = new URL(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(MAILBOX)}/messages`);
-  // Search every folder, so an Outlook rule that files these away is fine.
-  url.searchParams.set("$search", '"subject:IT Request"');
-  url.searchParams.set("$select", "id,subject,body,receivedDateTime,webLink");
-  url.searchParams.set("$top", "50");
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.body-content-type="text"' },
-  });
+async function graphJson(url, token, extraHeaders) {
+  const res = await fetch(url, { headers: Object.assign({ Authorization: `Bearer ${token}` }, extraHeaders || {}) });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Graph returned ${res.status}: ${text.slice(0, 200)}`);
+    let msg = text.slice(0, 200);
+    try { msg = JSON.parse(text).error.message || msg; } catch (e) { /* not JSON */ }
+    const err = new Error(res.status === 401 || res.status === 403
+      ? `Not allowed to read ${MAILBOX} (Microsoft said ${res.status}). Check that Mail.Read has admin consent and, if it's limited to certain mailboxes, that this one is included.`
+      : res.status === 404 ? `There's no Microsoft 365 mailbox called ${MAILBOX}. Check IT_REQUESTS_MAILBOX.` : `Microsoft 365 returned ${res.status}: ${msg}`);
+    err.status = res.status;
+    throw err;
   }
-  const data = await res.json();
-  const since = Date.now() - LOOKBACK_DAYS * 24 * 3600 * 1000;
-  return (data.value || [])
-    .filter((m) => isItRequestSubject(m.subject) && Date.parse(m.receivedDateTime) >= since)
-    .map((m) => {
-      const fields = parseFields(m.body && m.body.content);
-      const urgent = field(fields, "urgent", "urgency", "priority", "what is the urgency of this issue?");
-      return {
-        messageId: m.id,
-        responseId: field(fields, "response id"),
-        title: String(m.subject).trim().slice(TAG.length).replace(/^[\s:—-]+/, "").trim() || "IT request",
-        requester: field(fields, "requested by", "requester", "name", "email"),
-        urgent: /^(yes|true|urgent|high|immediate)/i.test(urgent),
-        fields: fields.filter((f) => !/^response id$/i.test(f.label)),
-        receivedAt: m.receivedDateTime,
-      };
-    })
-    .sort((a, b) => Date.parse(b.receivedAt) - Date.parse(a.receivedAt));
+  return res.json();
+}
+
+/**
+ * Form emails from the last two weeks, newest first, parsed. Lists mail by
+ * date (every folder except Sent Items, so an Outlook rule that files them
+ * away is fine) and matches the subject here — Outlook's search ignores
+ * common words like "it" and can lag, so it isn't used. Only messages not in
+ * `skipIds` are opened to read the body. Returns { matched, items }.
+ */
+async function fetchItRequests(skipIds) {
+  if (!itRequestsConfigured) return { matched: 0, items: [] };
+  const skip = skipIds || new Set();
+  const token = await getAccessToken();
+  const base = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(MAILBOX)}`;
+  let sentId = "";
+  try { sentId = (await graphJson(`${base}/mailFolders/sentitems?$select=id`, token)).id || ""; } catch (e) { if (e.status === 401 || e.status === 403 || e.status === 404) throw e; }
+
+  const since = new Date(Date.now() - LOOKBACK_DAYS * 24 * 3600 * 1000).toISOString();
+  const list = new URL(`${base}/messages`);
+  list.searchParams.set("$filter", `receivedDateTime ge ${since}`);
+  list.searchParams.set("$orderby", "receivedDateTime desc");
+  list.searchParams.set("$select", "id,subject,receivedDateTime,parentFolderId");
+  list.searchParams.set("$top", "100");
+  const matches = [];
+  let next = list.toString(), pages = 0;
+  while (next && pages < 10) {
+    const page = await graphJson(next, token);
+    for (const m of page.value || []) {
+      if (m.parentFolderId && m.parentFolderId === sentId) continue;
+      if (isItRequestSubject(m.subject)) matches.push(m);
+    }
+    next = page["@odata.nextLink"] || null;
+    pages++;
+  }
+
+  const items = [];
+  const checked = [];
+  for (const m of matches) {
+    if (skip.has(m.id)) continue;
+    checked.push(m.id);
+    const full = await graphJson(`${base}/messages/${encodeURIComponent(m.id)}?$select=id,subject,body,receivedDateTime`, token, { Prefer: 'outlook.body-content-type="text"' });
+    const fields = parseFields(full.body && full.body.content);
+    const urgent = field(fields, "urgent", "urgency", "priority", "what is the urgency of this issue?");
+    // Without the [IT Request] brackets, only the flow's emails count (they
+    // carry a Response ID line), not someone's email titled "IT request ...".
+    if (!/^\s*\[\s*it\s+request\s*\]/i.test(full.subject || "") && !field(fields, "response id")) continue;
+    items.push({
+      messageId: m.id,
+      responseId: field(fields, "response id"),
+      title: String(full.subject || "").replace(SUBJECT_RE, "").trim() || "IT request",
+      requester: field(fields, "requested by", "requester", "name", "full name", "email"),
+      urgent: /^(yes|true|urgent|high|immediate)/i.test(urgent),
+      fields: fields.filter((f) => !/^response id$/i.test(f.label)),
+      receivedAt: full.receivedDateTime || m.receivedDateTime,
+    });
+  }
+  items.sort((a, b) => Date.parse(b.receivedAt) - Date.parse(a.receivedAt));
+  return { matched: matches.length, items, checked };
 }
 
 // ---- Request history (the IT page's Requests tab) ----
