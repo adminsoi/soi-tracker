@@ -150,8 +150,7 @@
   .pill { display: inline-block; white-space: nowrap; border-radius: 4px; font-size: 10px; background: #eef0e8; color: #697957; padding: 3px 7px; }
   .pill.rose { background: #f6e1e8; color: #a96b82; }
 
-  /* Filter bars, forms */
-  .filter-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin: 18px 0 14px; }
+  /* Forms */
   .field label { display: block; font-size: 10px; font-weight: 600; color: var(--muted); margin-bottom: 5px; letter-spacing: .5px; }
   .field input, .field select, .field textarea { width: 100%; padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; background: #fff; font-size: 13px; }
   .field { min-width: 130px; }
@@ -1053,17 +1052,10 @@
   }
 
   // ---- Pentagon lists (RFQs, Quotes, SOs, POs, Invoices) ----
-  var docState = { view: null, rows: null, marks: {}, showAll: false, filters: {} };
+  var docState = { view: null, rows: null, marks: {}, showAll: false };
   function renderPentagonListShell(view) {
-    var f = docState.filters[view.id] || { from: "", to: "", status: "", account: "" };
     setTimeout(function () { runPentagonList(view); }, 0);
-    return '<div class="filter-bar">' +
-      '<div class="field"><label for="plv-from">From</label><input type="date" id="plv-from" value="' + E(f.from) + '"></div>' +
-      '<div class="field"><label for="plv-to">To</label><input type="date" id="plv-to" value="' + E(f.to) + '"></div>' +
-      '<div class="field"><label for="plv-status">Status</label><input id="plv-status" placeholder="Any" value="' + E(f.status) + '"></div>' +
-      '<div class="field"><label for="plv-account">Account #</label><input id="plv-account" placeholder="Any" value="' + E(f.account) + '"></div>' +
-      '<button type="button" class="primary" id="plv-search">Search</button><span class="small-note" id="plv-msg"></span></div>' +
-      '<div id="plv-toolbar" class="table-toolbar" style="display:none;"></div>' +
+    return '<div id="plv-toolbar" class="table-toolbar" style="display:none;"></div>' +
       '<div class="table-wrap"><table class="wide" id="plv-table" style="display:none;"></table><div class="empty" id="plv-empty">Loading…</div></div>';
   }
   function findField(row, exact, subs) {
@@ -1094,19 +1086,13 @@
       rows.map(function (r) { return "<tr>" + cols.map(function (c) { return '<td style="padding:10px 12px;">' + E(cellText(r[c])) + "</td>"; }).join("") + "</tr>"; }).join("") + "</tbody>";
   }
   function runPentagonList(view) {
-    var btn = $("#plv-search");
-    if (!btn) return;
-    btn.onclick = function () { runPentagonList(view); };
-    var f = docState.filters[view.id] = {
-      from: $("#plv-from").value, to: $("#plv-to").value, status: $("#plv-status").value.trim(), account: $("#plv-account").value.trim()
-    };
-    $("#plv-msg").textContent = "Searching…";
+    if (!$("#plv-table")) return;
+    // Loads the latest rows straight away; there are no filters to set.
     api("/api/pentagon/" + encodeURIComponent(view.queryName), {
       method: "POST",
-      body: JSON.stringify({ params: { date_from: f.from, date_to: f.to, status: f.status, account_no: f.account }, limit: 200 })
+      body: JSON.stringify({ params: {}, limit: 200 })
     }).then(function (data) {
       if (!$("#plv-table")) return;
-      $("#plv-msg").textContent = "";
       var rows = findResultRows(data);
       if (view.layout === "doc" && rows && rows.length) {
         docState.view = view;
@@ -1121,7 +1107,7 @@
       if (!html) {
         $("#plv-table").style.display = "none";
         $("#plv-empty").style.display = "block";
-        $("#plv-empty").textContent = rows && rows.length === 0 ? "No results for those filters." : "No table-shaped data came back.";
+        $("#plv-empty").textContent = rows && rows.length === 0 ? "Nothing in Pentagon yet." : "No table-shaped data came back.";
         return;
       }
       $("#plv-table").innerHTML = html;
@@ -1129,10 +1115,9 @@
       $("#plv-empty").style.display = "none";
     }).catch(function (err) {
       if (!$("#plv-table")) return;
-      $("#plv-msg").textContent = "";
       $("#plv-table").style.display = "none";
       $("#plv-empty").style.display = "block";
-      $("#plv-empty").textContent = err.message || "Search failed.";
+      $("#plv-empty").textContent = err.message || "Couldn't load from Pentagon.";
     });
   }
   function drawDocTable() {
