@@ -187,6 +187,7 @@ app.post(
       manager: isManager(user),
       leadership: user.leadership,
       pentagonCode: user.pentagonCode,
+      pentagonMentions: getsPentagonMentions(user),
     });
   })
 );
@@ -200,6 +201,7 @@ app.get("/api/me", authMiddleware, (req, res) => {
     manager: isManager(req.user),
     leadership: req.user.leadership,
     pentagonCode: req.user.pentagonCode,
+    pentagonMentions: getsPentagonMentions(req.user),
   });
 });
 
@@ -728,6 +730,15 @@ const QUERY_DEPARTMENTS = Object.fromEntries(allViews().map((v) => [v.queryName,
 const MENTIONS_QUERY = "dashboards.mine";
 const LIST_PARAMS = ["date_from", "date_to", "status", "account_no"];
 
+// Pentagon documents (RFQs, quotes, orders, invoices) only show in Mentions
+// you for people with one of these departments ticked on their login.
+// Full access and leadership don't count on their own.
+const PENTAGON_MENTION_DEPARTMENTS = ["Procurement", "Purchasing", "Warehouse", "US Government"];
+function getsPentagonMentions(user) {
+  return (user.companies || []).includes("SOI Aviation") &&
+    (user.departments || []).some((d) => PENTAGON_MENTION_DEPARTMENTS.includes(d));
+}
+
 function inDepartment(user, dept) {
   return !!dept && (user.fullAccess || user.departments.includes(dept));
 }
@@ -750,6 +761,7 @@ app.post(
     const limit = Math.min(Math.max(parseInt(body.limit, 10) || 200, 1), 500);
     let params;
     if (queryName === MENTIONS_QUERY) {
+      if (!getsPentagonMentions(req.user)) return res.json({ rows: [] });
       // Always your own Pentagon code, never one sent by the browser.
       if (!req.user.pentagonCode) return res.status(400).json({ error: "No Pentagon code is set on your login" });
       params = { code: req.user.pentagonCode };
@@ -793,6 +805,7 @@ app.get(
   "/api/rfq-marks/mine",
   authMiddleware,
   asyncHandler(async (req, res) => {
+    if (!getsPentagonMentions(req.user)) return res.json([]);
     const marks = await getRfqMarks();
     const mine = Object.entries(marks)
       .filter(([, m]) => m.assignee && sameUser(m.assignee, req.user.username))
