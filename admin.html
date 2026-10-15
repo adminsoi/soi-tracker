@@ -125,6 +125,12 @@
         <div class="hint" style="margin-top:-10px;">Use their Microsoft 365 address — it's how the tracker finds their Outlook calendar and emails them assignments.</div>
 
         <div class="field">
+          <label for="u-mailboxes">Extra inboxes (optional)</label>
+          <input id="u-mailboxes" type="text" placeholder="it@soiaviation.com, info@soiaviation.com" autocomplete="off" />
+        </div>
+        <div class="hint" style="margin-top:-10px;">Shared mailboxes this person also sees on Work inbox, separated by commas. Same domain as their email. Only add mailboxes they're allowed to read — the tracker shows them unread mail from these.</div>
+
+        <div class="field">
           <label for="u-pentagon">Pentagon code (optional)</label>
           <input id="u-pentagon" placeholder="e.g. their OURCONTACT code in Pentagon" />
         </div>
@@ -405,7 +411,8 @@
           (u.breakdown ? ' <span class="tag">In breakdown</span>' : "") +
           (u.leadership ? ' <span class="tag">Leadership</span>' : "") +
           (u.itNotebook ? ' <span class="tag">IT notebook</span>' : "") +
-          (u.attendance === false ? ' <span class="tag">No check-in</span>' : "");
+          (u.attendance === false ? ' <span class="tag">No check-in</span>' : "") +
+          ((u.extraMailboxes || []).length ? ' <span class="tag" title="' + escapeHtml(u.extraMailboxes.join(", ")) + '">+' + u.extraMailboxes.length + (u.extraMailboxes.length === 1 ? " inbox" : " inboxes") + "</span>" : "");
         tr.innerHTML =
           "<td>" + escapeHtml(u.username) + "</td>" +
           "<td>" + escapeHtml(u.email || "") + "</td>" +
@@ -460,6 +467,7 @@
     document.getElementById("u-pass").value = "";
     document.getElementById("u-pass").required = false;
     document.getElementById("u-email").value = user.email || "";
+    document.getElementById("u-mailboxes").value = (user.extraMailboxes || []).join(", ");
     document.getElementById("u-pentagon").value = user.pentagonCode || "";
 
     setCheckedValues('#companyChecks input[type="checkbox"]', user.companies || []);
@@ -523,6 +531,7 @@
       username: document.getElementById("u-name").value.trim(),
       password: password,
       email: document.getElementById("u-email").value.trim(),
+      extraMailboxes: document.getElementById("u-mailboxes").value,
       pentagonCode: document.getElementById("u-pentagon").value.trim(),
       companies: companies,
       fullAccess: fullAccess,

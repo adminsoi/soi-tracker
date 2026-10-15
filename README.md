@@ -227,6 +227,14 @@ arrives. It's read-only — replying happens in Outlook via **Open in Outlook**.
 The mailbox is the email on the person's login; nothing is stored (results
 are cached in memory for a minute).
 
+**Shared inboxes:** in `/admin.html`, a login's **Extra inboxes** field
+adds shared mailboxes (for example `it@` or `info@`), separated by commas and
+on the same domain as their own email. Only an admin can set these. Work
+inbox then shows tabs for **All inboxes**, **Mine** and each shared one, and
+each card says which inbox it came from. If Mail.Read is limited to certain
+mailboxes, add the shared ones to that policy too, or the page says it
+can't read them.
+
 One-time Microsoft 365 setup: add **Microsoft Graph → Application permission
 → `Mail.Read`** to the same app registration as the calendar, grant admin
 consent, and (strongly recommended) limit it to SOI staff mailboxes with

@@ -83,6 +83,7 @@ function normalizeUser(u) {
     leadership: !!u.leadership,
     itNotebook: !!u.itNotebook,
     attendance: u.attendance !== false,
+    extraMailboxes: Array.isArray(u.extraMailboxes) ? u.extraMailboxes : [],
     calendarNames: Array.isArray(u.calendarNames) ? u.calendarNames : [],
     pentagonCode: u.pentagonCode || "",
   };
@@ -1096,18 +1097,38 @@ app.get(
   })
 );
 
-// Work inbox: the signed-in person's own unread Outlook mail (last 1–14
-// days), one card per conversation, Outlook's preview text, no AI. The
-// mailbox is the email on their login — never one from the browser.
+// Work inbox: unread Outlook mail (last 1–14 days), one card per
+// conversation, Outlook's preview text, no AI. Always the email on the
+// person's login, plus any shared mailboxes an admin added to it ("Extra
+// inboxes" in /admin.html) — never a mailbox named by the browser. Each item
+// says which mailbox it's from; items from extra mailboxes get ids prefixed
+// with the mailbox so "Done" ticks don't collide.
 app.get(
   "/api/inbox",
   authMiddleware,
   asyncHandler(async (req, res) => {
     const days = Math.min(Math.max(parseInt(req.query.days, 10) || 3, 1), 14);
-    const users = await getUsers();
-    const u = users.find((x) => sameUser(x.username, req.user.username));
+    const u = (await getUsers()).map(normalizeUser).find((x) => sameUser(x.username, req.user.username));
+    const own = u && u.email ? u.email.toLowerCase() : "";
     try {
-      res.json(await unreadThreads(u && u.email, days));
+      const mine = await unreadThreads(own, days); // problems with your own mailbox stop here
+      const items = mine.items.map((t) => Object.assign({}, t, { mailbox: own }));
+      const errors = [];
+      const extras = (u.extraMailboxes || []).filter((m) => m.split("@")[1] === own.split("@")[1]);
+      const results = await Promise.allSettled(extras.map((m) => unreadThreads(m, days)));
+      results.forEach((r, i) => {
+        const box = extras[i];
+        if (r.status === "fulfilled") r.value.items.forEach((t) => items.push(Object.assign({}, t, { id: `${box}|${t.id}`, mailbox: box })));
+        else {
+          const code = r.reason instanceof MailError ? r.reason.code : "";
+          const why = code === "not_found" ? `There's no Microsoft 365 mailbox called ${box}.`
+            : code === "no_permission" ? `The tracker isn't allowed to read ${box}. If Mail.Read is limited to certain mailboxes, add this one to that access policy.`
+            : "Couldn't read this mailbox right now.";
+          errors.push({ mailbox: box, error: why });
+        }
+      });
+      items.sort((a, b) => String(b.receivedAt).localeCompare(String(a.receivedAt)));
+      res.json({ mailbox: own, mailboxes: [own, ...extras], days, since: mine.since, items, errors });
     } catch (err) {
       if (err instanceof MailError) return res.status(409).json({ error: err.message, code: err.code });
       throw err;
@@ -1670,6 +1691,7 @@ app.get(
         leadership: u.leadership,
         itNotebook: u.itNotebook,
         attendance: u.attendance,
+        extraMailboxes: u.extraMailboxes,
         calendarNames: u.calendarNames,
         pentagonCode: u.pentagonCode || "",
       }))
@@ -1707,7 +1729,7 @@ app.post(
   "/api/admin/users",
   adminMiddleware,
   asyncHandler(async (req, res) => {
-    const { username, password, email, companies, departments, fullAccess, manager, breakdown, leadership, itNotebook, attendance, calendarNames, pentagonCode } = req.body || {};
+    const { username, password, email, companies, departments, fullAccess, manager, breakdown, leadership, itNotebook, attendance, extraMailboxes, calendarNames, pentagonCode } = req.body || {};
     if (!username || !email) {
       return res.status(400).json({ error: "Username and email are required" });
     }
@@ -1723,6 +1745,16 @@ app.post(
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: "Invalid email address" });
     }
+    // Shared mailboxes this person can read on Work inbox, same domain as
+    // their own email (e.g. it@ for IT). Only an admin can set these.
+    const ownDomain = String(email).split("@")[1].toLowerCase();
+    const extras = [...new Set((Array.isArray(extraMailboxes) ? extraMailboxes : String(extraMailboxes || "").split(/[\s,;]+/))
+      .map((m) => String(m).trim().toLowerCase()).filter(Boolean))].filter((m) => m !== String(email).toLowerCase());
+    for (const m of extras) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(m)) return res.status(400).json({ error: `"${m}" isn't an email address` });
+      if (m.split("@")[1] !== ownDomain) return res.status(400).json({ error: `Extra inboxes must be @${ownDomain} addresses, like their own email ("${m}" isn't)` });
+    }
+    if (extras.length > 10) return res.status(400).json({ error: "Up to 10 extra inboxes" });
     const deptList = Array.isArray(departments) ? departments : [];
     if (!fullAccess) {
       if (deptList.length === 0) {
@@ -1751,6 +1783,7 @@ app.post(
       leadership: !!leadership,
       itNotebook: !!itNotebook,
       attendance: attendance !== false,
+      extraMailboxes: extras,
       calendarNames: (Array.isArray(calendarNames) ? calendarNames : String(calendarNames || "").split(","))
         .map((n) => String(n).trim().slice(0, 40)).filter(Boolean).slice(0, 5),
       departments: deptList,

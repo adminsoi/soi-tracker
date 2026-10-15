@@ -2479,6 +2479,8 @@
   // conversation comes back if a newer message arrives. Read-only: replying
   // happens in Outlook.
   var inboxDays = 3, inboxData = null, inboxError = null, inboxNeeds = 0, inboxSig = "";
+  var inboxBox = "all"; // "all", or one mailbox address (tabs when there's more than one)
+  function boxLabel(m) { return inboxData && m === inboxData.mailbox ? "Mine" : String(m).split("@")[0] + "@"; }
   function inboxDoneKey() { return "soi_tracker_inbox_done_" + (me ? me.username.toLowerCase() : ""); }
   function inboxDone() { try { return JSON.parse(localStorage.getItem(inboxDoneKey()) || "{}"); } catch (e) { return {}; } }
   function setInboxDone(id, receivedAt, done) {
@@ -2494,13 +2496,14 @@
   function renderInbox() {
     setBreadcrumb(["You", "Work inbox"]);
     setTimeout(function () { loadInbox(false); }, 0);
-    return '<div class="intro"><div><div class="eyebrow">Outlook' + (inboxData ? " · " + E(inboxData.mailbox) : "") + '</div><h1>Work inbox</h1>' +
-      "<p>Your unread Outlook mail, newest first. Reply in Outlook when you're ready — nothing here sends or changes your mail.</p>" +
+    var several = inboxData && inboxData.mailboxes && inboxData.mailboxes.length > 1;
+    return '<div class="intro"><div><div class="eyebrow">Outlook' + (inboxData ? " · " + E(several ? inboxData.mailboxes.length + " inboxes" : inboxData.mailbox) : "") + '</div><h1>Work inbox</h1>' +
+      "<p>Your unread Outlook mail" + (several ? " and your shared inboxes" : "") + ", newest first. Reply in Outlook when you're ready — nothing here sends or changes your mail.</p>" +
       '<p class="small-note" id="inbox-note"></p></div>' +
       '<div class="co-wrap"><div class="eyebrow">Received in the last</div><div class="cos">' + [[1, "Day"], [3, "3 days"], [7, "Week"]].map(function (d) {
         return '<button type="button" class="co ' + (d[0] === inboxDays ? "active" : "") + '" data-inbox-days="' + d[0] + '">' + d[1] + "</button>";
       }).join("") + '</div><a class="links-a" href="https://outlook.office.com/mail/" target="_blank" rel="noopener noreferrer">Open Outlook ↗</a></div></div>' +
-      '<div id="inbox-body"><div class="empty">Loading…</div></div>';
+      '<div id="inbox-tabs"></div><div id="inbox-body"><div class="empty">Loading…</div></div>';
   }
 
   function loadInbox(quiet) {
@@ -2531,7 +2534,19 @@
     var box = $("#inbox-body");
     if (!box || !inboxData) return;
     var done = inboxDone();
-    var items = inboxData.items;
+    var boxes = inboxData.mailboxes || [inboxData.mailbox];
+    if (inboxBox !== "all" && boxes.indexOf(inboxBox) === -1) inboxBox = "all";
+    var tabs = $("#inbox-tabs");
+    if (tabs) {
+      var open = function (m) { return inboxData.items.filter(function (t) { return (m === "all" || t.mailbox === m) && t.needsYou && !isInboxDone(t, done); }).length; };
+      tabs.innerHTML = boxes.length > 1 ? '<div class="tabs" role="tablist" style="margin-top:6px;">' + ["all"].concat(boxes).map(function (m) {
+        var n = open(m);
+        return '<button type="button" role="tab" class="tab ' + (m === inboxBox ? "active" : "") + '" aria-selected="' + (m === inboxBox) + '" data-inbox-box="' + E(m) + '" title="' + E(m === "all" ? "Every inbox together" : m) + '">' +
+          E(m === "all" ? "All inboxes" : boxLabel(m)) + (n ? '<span class="badge">' + n + "</span>" : "") + "</button>";
+      }).join("") + "</div>" : "";
+    }
+    var problems = (inboxData.errors || []).filter(function (x) { return inboxBox === "all" || x.mailbox === inboxBox; });
+    var items = inboxData.items.filter(function (t) { return inboxBox === "all" || t.mailbox === inboxBox; });
     var needs = items.filter(function (t) { return t.needsYou && !isInboxDone(t, done); });
     var fyi = items.filter(function (t) { return !t.needsYou && !isInboxDone(t, done); });
     var finished = items.filter(function (t) { return isInboxDone(t, done); });
@@ -2541,9 +2556,9 @@
       return '<details class="mn-group" id="inbox-' + id + '"' + (open ? " open" : "") + '><summary><span class="mn-title">' + title + '</span><span class="badge">' + list.length + "</span></summary>" +
         (list.length ? list.map(mailCard).join("") : '<div class="small-note" style="padding:6px 2px 14px;">Nothing here.</div>') + "</details>";
     };
-    box.innerHTML = items.length
+    box.innerHTML = problems.map(function (x) { return '<div class="banner">' + E(boxLabel(x.mailbox)) + " (" + E(x.mailbox) + "): " + E(x.error) + "</div>"; }).join("") + (items.length
       ? section("needs", "Needs you", needs, true) + section("fyi", "FYI", fyi, needs.length === 0) + (finished.length ? section("done", "Done", finished, false) : "")
-      : '<div class="card empty">No unread mail in the last ' + (inboxDays === 1 ? "day" : inboxDays === 7 ? "week" : inboxDays + " days") + ". 🎉</div>";
+      : '<div class="card empty">No unread mail in the last ' + (inboxDays === 1 ? "day" : inboxDays === 7 ? "week" : inboxDays + " days") + ". 🎉</div>");
     function mailCard(t) {
       var isDone = isInboxDone(t, done);
       var when = new Date(t.receivedAt).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
@@ -2553,7 +2568,7 @@
         '<div class="mail-head"><div class="mail-from">' + E(t.from.name || t.from.email) + (t.from.email && t.from.name ? " &lt;" + E(t.from.email) + "&gt;" : "") + " · " + E(when) + "</div>" +
         '<label class="mail-done"><input type="checkbox" class="check" data-inbox-done="' + E(t.id) + '" data-received="' + E(t.receivedAt) + '"' + (isDone ? " checked" : "") + "> Done</label></div>" +
         '<h3 class="mail-subject">' + E(t.subject) + "</h3>" +
-        '<div class="mail-tags">' + (t.unread > 1 ? '<span class="pill">' + t.unread + " unread in thread</span>" : "") +
+        '<div class="mail-tags">' + (boxes.length > 1 && inboxBox === "all" ? '<span class="pill" title="' + E(t.mailbox) + '">' + E(t.mailbox === inboxData.mailbox ? "Your inbox" : t.mailbox) + "</span>" : "") + (t.unread > 1 ? '<span class="pill">' + t.unread + " unread in thread</span>" : "") +
         (t.needsYou ? '<span class="pill rose">' + E(t.reason) + "</span>" : '<span class="pill">' + E(t.reason) + "</span>") +
         (t.attachments ? '<span class="pill">Attachments</span>' : "") + "</div>" +
         (t.preview ? '<p class="mail-preview">' + E(t.preview) + (t.preview.length >= 400 ? "…" : "") + "</p>" : "") +
@@ -2574,6 +2589,8 @@
     drawInbox();
   });
   document.addEventListener("click", function (e) {
+    var tb = e.target.closest && e.target.closest("[data-inbox-box]");
+    if (tb) { inboxBox = tb.dataset.inboxBox; drawInbox(); return; }
     var b = e.target.closest && e.target.closest("[data-inbox-days]");
     if (!b || page !== "inbox") return;
     inboxDays = +b.dataset.inboxDays;
