@@ -867,7 +867,7 @@
     var cls = "project " + (isDone(p) ? "done " : "") + (isOverdue(p) ? "overdue " : "") + (p.draft ? "draft" : "");
     var tools = (!p.draft && ed ? '<button type="button" class="text-button" data-add-sub="' + E(p.id) + '">+ Sub-task</button>' : "") + delButton(p);
     return '<tr class="' + cls + '"><td>' + input(p, "title", p.title, "text", "Project name", ed) +
-      '<span class="co-note">' + (subs.length ? doneSubs + "/" + subs.length + " sub-tasks done" : "No sub-tasks yet") + (activeCompany === ALL && p.company ? " · " + E(shortCo(p.company)) : "") + "</span></td>" +
+      '<span class="co-note">' + (p.source === "form" ? "From the IT form" + (p.requester ? " · " + E(p.requester) : "") + " · " : "") + (subs.length ? doneSubs + "/" + subs.length + " sub-tasks done" : "No sub-tasks yet") + (activeCompany === ALL && p.company ? " · " + E(shortCo(p.company)) : "") + "</span></td>" +
       "<td>" + responsibleCell(p) + "</td><td>" + input(p, "dueDate", p.dueDate, "date", "", ed) + "</td>" +
       '<td class="center">' + doneToggle(p) + '</td><td class="notes-cell">' + input(p, "notes", p.notes, "textarea", "", ed) + "</td>" +
       '<td class="row-tools">' + tools + "</td></tr>";

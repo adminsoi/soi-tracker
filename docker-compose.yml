@@ -26,6 +26,9 @@ services:
       MS_CLIENT_ID: ${MS_CLIENT_ID:-}
       MS_CLIENT_SECRET: ${MS_CLIENT_SECRET:-}
       MS_FROM_EMAIL: ${MS_FROM_EMAIL:-}
+      # Mailbox the IT request form's Power Automate flow emails ("[IT Request]"
+      # subjects); each new one becomes an IT task. Needs Mail.Read.
+      IT_REQUESTS_MAILBOX: ${IT_REQUESTS_MAILBOX:-}
       # Office time zone for the "Who's in office" board (Windows or IANA name).
       OFFICE_TIMEZONE: ${OFFICE_TIMEZONE:-Pacific Standard Time}
       # Pentagon query API

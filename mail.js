@@ -9,6 +9,7 @@
 // cached in memory for a minute so refreshing doesn't re-read the mailbox.
 
 const { graphConfigured, getAccessToken } = require("./graph");
+const { isItRequestSubject } = require("./itrequests");
 
 const CACHE_MS = 60 * 1000;
 const cache = new Map(); // key -> { at, value }
@@ -79,6 +80,8 @@ async function unreadThreads(email, days) {
 
   const threads = new Map();
   for (const m of messages) {
+    // IT form emails become IT tasks instead (itrequests.js).
+    if (isItRequestSubject(m.subject)) continue;
     const id = m.conversationId || m.id;
     const t = threads.get(id);
     if (t) {
