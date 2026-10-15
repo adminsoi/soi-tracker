@@ -159,8 +159,6 @@
   .banner { background: var(--side); border-radius: 10px; padding: 14px 18px; font-size: 12px; line-height: 1.7; margin-bottom: 18px; }
   .banner b { color: var(--ink); }
   details summary { cursor: pointer; }
-  pre.raw { white-space: pre-wrap; word-break: break-word; font-size: 11px; max-height: 40vh; overflow: auto; background: var(--paper); padding: 12px; border-radius: 7px; border: 1px solid var(--line); }
-  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
   .cal-event { padding: 11px 12px 11px 16px; border-left: 2px solid #bbc6ad; background: #f1f3ed; margin: 7px 0; line-height: 1.6; font-size: 12px; border-radius: 0 6px 6px 0; }
   .cal-event.all-day { border-color: #d1a1b3; background: #fcf0f4; }
   .cal-time { display: block; font-size: 10px; font-weight: 600; color: #8e7d6d; }
@@ -184,8 +182,6 @@
   th.who-today, td.who-today { background: #fbf5e9; }
   #cal-who td:first-child { width: 200px; max-width: 200px; }
   @media (max-width: 700px) { .mg-cell { min-height: 70px; } .mg-ev { font-size: 9px; } }
-  .chip { border: 1px solid var(--line); background: var(--card); border-radius: 100px; padding: 6px 12px; font-size: 12px; }
-  .chip .x { border: 0; padding: 0 0 0 6px; color: var(--muted); }
 
   /* Login */
   .login-screen { position: fixed; inset: 0; background: var(--paper); display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 60; }
@@ -326,7 +322,7 @@
   var me = null;
   var DEPARTMENTS = [];
   var activeCompany = null;
-  var page = "departments";        // departments | overview | mentions | calendar | global | pentagon
+  var page = "departments";        // departments | overview | mentions | calendar | global
   var activeDept = null;
   var subView = {};                // dept -> "tasks" | "finance" | Pentagon view id
   var tasks = [];                  // tasks made in the tracker
@@ -577,7 +573,6 @@
     var tools = [];
     tools.push({ id: "calendar", ic: "▦", label: "Calendar" });
     if (canUseAll()) tools.push({ id: "global", ic: "◎", label: "Global" });
-    if (hasSOI() && (me.fullAccess || me.departments.indexOf("Procurement") !== -1)) tools.push({ id: "pentagon", ic: "⌕", label: "Pentagon" });
     if (tools.length) { tools[0].group = "TOOLS"; items = items.concat(tools); }
     return items;
   }
@@ -613,7 +608,6 @@
       else if (page === "mentions") html = renderMentionsShell();
       else if (page === "calendar") html = renderCalendar();
       else if (page === "global") html = renderGlobalShell();
-      else if (page === "pentagon") html = renderPentagonShell();
       else html = renderDepartment();
     } catch (e) {
       console.error(e);
@@ -1575,84 +1569,9 @@
     return '<div class="intro"><div><div class="eyebrow">Tools</div><h1>Global — every company</h1><p id="globalSub"></p></div></div><div id="globalBody"><div class="empty">Loading…</div></div>';
   }
 
-  // ---------- Pentagon query tester ----------
-  var pq = { name: "claude.account_search", limit: 10, params: '{\n  "name": ""\n}' };
-  function renderPentagonShell() {
-    setBreadcrumb(["Tools", "Pentagon"]);
-    setTimeout(loadPresets, 0);
-    return '<div class="intro"><div><div class="eyebrow">Tools</div><h1>Pentagon query tester</h1><p>Run any named Pentagon query. The API key never reaches your browser.</p></div></div>' +
-      '<div class="card"><div class="card-label">Saved searches</div><div class="chips" id="pq-presets" style="margin-top:12px;"></div><div class="small-note" id="pq-presets-empty" style="display:none;">No saved searches yet — run something below, then "Save as search."</div></div>' +
-      '<div class="card"><div style="display:flex;gap:10px;flex-wrap:wrap;"><div class="field" style="flex:1;"><label for="pq-name">Query name</label><input id="pq-name" value="' + E(pq.name) + '"></div>' +
-      '<div class="field" style="width:110px;min-width:0;"><label for="pq-limit">Limit</label><input id="pq-limit" type="number" value="' + E(pq.limit) + '"></div></div>' +
-      '<div class="field" style="margin:10px 0;"><label for="pq-params">Params (JSON)</label><textarea id="pq-params" rows="3" style="font-family:monospace;">' + E(pq.params) + "</textarea></div>" +
-      '<button type="button" class="primary" id="pq-run">Run query</button> <button type="button" id="pq-save">Save as search</button> <span class="small-note" id="pq-status"></span></div>' +
-      '<div class="card"><div class="card-label">Result</div><div style="overflow:auto;max-height:60vh;margin-top:12px;"><table class="wide" id="pq-table" style="display:none;"></table></div>' +
-      '<div class="small-note" id="pq-empty">Run a query to see results here.</div><details style="margin-top:12px;"><summary class="small-note">Raw response</summary><pre class="raw" id="pq-result"></pre></details></div>';
-  }
-  function readPq() {
-    pq.name = $("#pq-name").value.trim();
-    pq.limit = parseInt($("#pq-limit").value, 10) || 10;
-    pq.params = $("#pq-params").value;
-    var raw = pq.params.trim();
-    return raw ? JSON.parse(raw) : {};
-  }
-  function runPq(name, params, limit) {
-    $("#pq-name").value = name; $("#pq-params").value = JSON.stringify(params || {}, null, 2); $("#pq-limit").value = limit || 10;
-    $("#pq-status").textContent = "Running…";
-    api("/api/pentagon/" + encodeURIComponent(name), { method: "POST", body: JSON.stringify({ params: params || {}, limit: limit || 10 }) }).then(function (data) {
-      $("#pq-status").textContent = "Done.";
-      $("#pq-result").textContent = JSON.stringify(data, null, 2);
-      var rows = findResultRows(data), html = autoTable(rows);
-      if (!html) { $("#pq-table").style.display = "none"; $("#pq-empty").style.display = "block"; $("#pq-empty").textContent = rows && !rows.length ? "Query ran fine — no rows came back." : "No table-shaped data in this response — see raw response below."; return; }
-      $("#pq-table").innerHTML = html; $("#pq-table").style.display = "table"; $("#pq-empty").style.display = "none";
-    }).catch(function (err) {
-      $("#pq-status").textContent = "Error.";
-      $("#pq-table").style.display = "none"; $("#pq-empty").style.display = "block";
-      $("#pq-empty").textContent = err.message || "Query failed."; $("#pq-result").textContent = err.message || "Query failed.";
-    });
-  }
-  function loadPresets() {
-    api("/api/pentagon-presets").then(function (presets) {
-      var wrap = $("#pq-presets");
-      if (!wrap) return;
-      $("#pq-presets-empty").style.display = presets.length ? "none" : "block";
-      wrap.innerHTML = presets.map(function (p) {
-        return '<span class="chip"><button type="button" class="text-button" style="color:var(--ink);text-decoration:none;font-size:12px;" data-preset="' + E(p.id) + '">' + E(p.name) +
-          '</button><button type="button" class="x" data-preset-del="' + E(p.id) + '" title="Remove" aria-label="Remove saved search">×</button></span>';
-      }).join("");
-      wrap.querySelectorAll("[data-preset]").forEach(function (b) {
-        b.onclick = function () { var p = presets.filter(function (x) { return x.id === b.dataset.preset; })[0]; if (p) runPq(p.queryName, p.params, p.limit); };
-      });
-      wrap.querySelectorAll("[data-preset-del]").forEach(function (b) {
-        b.onclick = function () {
-          var p = presets.filter(function (x) { return x.id === b.dataset.presetDel; })[0];
-          if (!p || !confirm('Remove saved search "' + p.name + '"?')) return;
-          api("/api/pentagon-presets/" + encodeURIComponent(p.id), { method: "DELETE" }).then(loadPresets).catch(function (err) { toast(err.message, true); });
-        };
-      });
-    }).catch(function () { toast("Couldn't load saved searches.", true); });
-  }
-
-  // ---------- After each render: charts, focus, Pentagon tester buttons ----------
+  // ---------- After each render: charts and focus ----------
   function afterRender() {
     if (page === "overview") drawOverviewCharts();
-    if (page === "pentagon") {
-      $("#pq-run").onclick = function () {
-        var params;
-        try { params = readPq(); } catch (e) { $("#pq-status").textContent = "Params isn't valid JSON: " + e.message; return; }
-        if (!pq.name) { $("#pq-status").textContent = "Enter a query name."; return; }
-        runPq(pq.name, params, pq.limit);
-      };
-      $("#pq-save").onclick = function () {
-        var params;
-        try { params = readPq(); } catch (e) { toast("Params isn't valid JSON.", true); return; }
-        if (!pq.name) { toast("Enter a query name first.", true); return; }
-        var name = prompt("Name this saved search:", pq.name);
-        if (!name) return;
-        api("/api/pentagon-presets", { method: "POST", body: JSON.stringify({ name: name, queryName: pq.name, params: params, limit: pq.limit }) })
-          .then(function () { toast("Saved."); loadPresets(); }).catch(function (err) { toast(err.message || "Couldn't save.", true); });
-      };
-    }
     if (focusAfter) {
       var el = document.querySelector('#view [data-id="' + focusAfter.id + '"][data-key="' + focusAfter.key + '"]');
       if (el) el.focus();
