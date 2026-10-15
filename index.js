@@ -34,6 +34,7 @@ const {
 } = require("./s3store");
 const { sendMail } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError } = require("./calendar");
+const { hrEvents, cleanFeedUrl, FeedError } = require("./hrcal");
 const { pentagonQuery } = require("./pentagon");
 const {
   PENTAGON_VIEWS,
@@ -1018,9 +1019,36 @@ app.get(
     const settings = await getSettings();
     const shared = settings.sharedCalendar || {};
     try {
-      res.json(await whosIn(people, shared.mailbox ? { mailbox: shared.mailbox, calendarName: shared.calendarName || "" } : null, date));
+      res.json(await whosIn(people, shared.ics || "", date));
     } catch (err) {
       if (err instanceof CalendarError) return res.status(409).json({ error: err.message, code: err.code });
+      throw err;
+    }
+  })
+);
+
+// The HR calendar's entries from its ICS feed, for the HR tab's List / Month
+// views. Leadership only; the feed link itself never reaches the browser.
+app.get(
+  "/api/calendar/hr",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const users = await getUsers();
+    const u = users.find((x) => sameUser(x.username, req.user.username));
+    if (!u || !u.leadership) {
+      return res.status(403).json({ error: "The HR calendar is for leadership logins only" });
+    }
+    const shared = (await getSettings()).sharedCalendar || {};
+    if (!shared.ics) return res.status(409).json({ error: "No HR calendar feed is set yet.", code: "no_feed" });
+    const days = Math.min(Math.max(parseInt(req.query.days, 10) || 14, 1), 45);
+    const start = /^\d{4}-\d{2}-\d{2}$/.test(req.query.start || "") ? req.query.start : new Date().toISOString().slice(0, 10);
+    // A day of slack either side so local-time days at the edges are complete.
+    const from = new Date(Date.parse(`${start}T00:00:00Z`) - 24 * 3600 * 1000);
+    const to = new Date(from.getTime() + (days + 2) * 24 * 3600 * 1000);
+    try {
+      res.json({ events: await hrEvents(shared.ics, from, to) });
+    } catch (err) {
+      if (err instanceof FeedError) return res.status(409).json({ error: err.message, code: err.code });
       throw err;
     }
   })
@@ -1059,7 +1087,8 @@ app.get(
     }
     const settings = await getSettings();
     const shared = settings.sharedCalendar || {};
-    res.json({ name: shared.name || "", url: shared.url || "" });
+    // Never the ICS link — only whether there is one.
+    res.json({ name: shared.name || "", url: shared.url || "", hasFeed: !!shared.ics });
   })
 );
 
@@ -1084,12 +1113,13 @@ app.put(
     }
     const body = req.body || {};
     const name = String(body.name || "").trim().slice(0, 60) || "HR global calendar";
-    const mailbox = String(body.mailbox || "").trim();
-    if (mailbox && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mailbox)) {
-      return res.status(400).json({ error: "The HR calendar mailbox must be an email address" });
+    let ics;
+    try {
+      ics = cleanFeedUrl(body.ics);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
     }
-    const calendarName = String(body.calendarName || "").trim().slice(0, 80);
-    const shared = { name, url, mailbox, calendarName };
+    const shared = { name, url, ics };
     await withSettings((settings) => {
       settings.sharedCalendar = shared;
     });

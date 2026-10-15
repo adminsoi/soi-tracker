@@ -7,13 +7,25 @@
 //   never one sent by the browser — so people only see their own calendar.
 // - whosIn(): Leadership's "Who's in office" board. For each person it reads
 //   only Out of office / Working elsewhere time from their own calendar, plus
-//   matching entries on the HR calendar mailbox, and returns a status per
-//   weekday. Event titles and details never leave the server.
+//   matching entries on the HR calendar's ICS feed (hrcal.js), and returns a
+//   status per weekday. Event titles and details never leave the server.
 
 const { graphConfigured, getAccessToken } = require("./graph");
+const { hrEvents, FeedError, WINDOWS_TO_IANA } = require("./hrcal");
 
 // Office time zone for "which day is this", in Windows or IANA form.
 const OFFICE_TZ = process.env.OFFICE_TIMEZONE || "Pacific Standard Time";
+const OFFICE_IANA = WINDOWS_TO_IANA[OFFICE_TZ] || OFFICE_TZ;
+
+/** An instant as office-local "YYYY-MM-DDTHH:MM:SS". */
+const officeFmt = new Intl.DateTimeFormat("en-CA", {
+  timeZone: OFFICE_IANA, year: "numeric", month: "2-digit", day: "2-digit",
+  hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+});
+function officeLocal(iso) {
+  const p = Object.fromEntries(officeFmt.formatToParts(new Date(iso)).map((x) => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}`;
+}
 
 const CACHE_MS = 2 * 60 * 1000;
 const WHOS_IN_CACHE_MS = 5 * 60 * 1000;
@@ -195,16 +207,6 @@ function dayStatus(marks) {
   return { status: kind, partial: true, note: parts.join(", "), sources };
 }
 
-async function hrCalendarId(mailbox, name) {
-  if (!name) return null;
-  return cached(`hrcal|${mailbox.toLowerCase()}|${name.toLowerCase()}`, 60 * 60 * 1000, async () => {
-    const data = await graphGet(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox)}/calendars?$select=id,name&$top=100`);
-    const hit = (data.value || []).find((c) => String(c.name).toLowerCase() === name.toLowerCase());
-    if (!hit) throw new CalendarError("not_found", `No calendar called "${name}" in ${mailbox}.`);
-    return hit.id;
-  });
-}
-
 /** Run `fn` over `items`, at most `limit` at a time. */
 async function pool(items, limit, fn) {
   const out = new Array(items.length);
@@ -222,9 +224,9 @@ async function pool(items, limit, fn) {
 /**
  * Status per person per weekday (Mon–Fri) for the week containing `date`.
  * people: [{ username, email, calendarNames: [] }]
- * hr: { mailbox, calendarName } or null
+ * hrFeed: the HR calendar's ICS link, or ""
  */
-async function whosIn(people, hr, date) {
+async function whosIn(people, hrFeed, date) {
   requireGraph();
   const monday = mondayOf(date);
   const days = [0, 1, 2, 3, 4].map((n) => addDays(monday, n));
@@ -265,13 +267,17 @@ async function whosIn(people, hr, date) {
     }
   });
 
-  // 2. The HR calendar: entries whose title names a person and says they're out or remote.
+  // 2. The HR calendar feed: entries whose title names a person and says they're out or remote.
   let hrError = null;
-  if (hr && hr.mailbox) {
+  if (hrFeed) {
     try {
-      const calendarId = await hrCalendarId(hr.mailbox, hr.calendarName);
-      const events = await cached(`hr|${hr.mailbox.toLowerCase()}|${calendarId || ""}|${monday}`, WHOS_IN_CACHE_MS,
-        () => calendarView(hr.mailbox, startIso, endIso, Object.assign({ calendarId }, opts)));
+      const entries = await hrEvents(hrFeed, new Date(startIso), new Date(endIso));
+      const events = entries.map((e) => ({
+        subject: e.subject,
+        isAllDay: e.allDay,
+        start: { dateTime: e.allDay ? `${e.start}T00:00:00` : officeLocal(e.start) },
+        end: { dateTime: e.allDay ? `${e.end}T00:00:00` : officeLocal(e.end) },
+      }));
       const matchers = people.map((p) => {
         const names = [p.username, p.email ? p.email.split("@")[0] : "", ...(p.calendarNames || [])]
           .map((n) => String(n || "").trim()).filter((n) => n.length >= 2);
@@ -290,7 +296,7 @@ async function whosIn(people, hr, date) {
         }
       }
     } catch (err) {
-      hrError = err instanceof CalendarError ? `HR calendar: ${err.message}` : "Couldn't read the HR calendar";
+      hrError = err instanceof FeedError ? err.message : "Couldn't read the HR calendar feed";
     }
   }
 
@@ -298,7 +304,7 @@ async function whosIn(people, hr, date) {
     week: monday,
     days,
     timeZone: OFFICE_TZ,
-    hrConnected: !!(hr && hr.mailbox) && !hrError,
+    hrConnected: !!hrFeed && !hrError,
     hrError,
     people: people.map((p) => ({
       username: p.username,

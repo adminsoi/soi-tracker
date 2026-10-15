@@ -194,7 +194,7 @@
 
     <div class="card">
       <h2>HR global calendar</h2>
-      <div class="hint" style="margin-bottom:12px;">Shown as its own tab on the Calendar page, to Leadership logins only. In Outlook on the web: Settings → Calendar → Shared calendars → Publish a calendar → pick the calendar → copy the <b>HTML</b> link (not the ICS one). Anyone with that link can view the calendar, so only publish one that's fine to share. Leave blank for none.</div>
+      <div class="hint" style="margin-bottom:12px;">Shown as its own tab on the Calendar page (List or Month), and used to fill in "Who's in office" from entries like "Greg – PTO" or "Alexis WFH". Leadership logins only. In Outlook on the web: Settings → Calendar → Shared calendars → Publish a calendar → pick the calendar → choose <b>"Can view titles and locations"</b> (or all details — "busy only" has no names) → Publish → copy the <b>ICS</b> link. The link is kept on the server and never shown to other users, but anyone who has it can read the calendar, so don't share it elsewhere.</div>
       <form id="calendarForm">
         <div class="field-row">
           <div class="field" style="flex:0 0 200px;">
@@ -202,21 +202,15 @@
             <input id="cal-name" maxlength="60" placeholder="HR global calendar" />
           </div>
           <div class="field">
-            <label for="cal-url">Outlook "Publish to web" HTML link</label>
-            <input id="cal-url" type="url" placeholder="https://outlook.office365.com/owa/calendar/..." />
+            <label for="cal-ics">Outlook "Publish to web" ICS link</label>
+            <input id="cal-ics" type="password" autocomplete="off" placeholder="https://outlook.office365.com/owa/calendar/…/calendar.ics" />
           </div>
         </div>
-        <div class="field-row">
-          <div class="field">
-            <label for="cal-mailbox">Mailbox it lives in (for "Who's in office")</label>
-            <input id="cal-mailbox" type="email" placeholder="hr@soiaviation.com" />
-          </div>
-          <div class="field" style="flex:0 0 220px;">
-            <label for="cal-calname">Calendar name (optional)</label>
-            <input id="cal-calname" maxlength="80" placeholder="Leave blank for its main calendar" />
-          </div>
+        <div class="hint" id="cal-ics-state"></div>
+        <div class="field">
+          <label for="cal-url">HTML link (optional — only used if there's no ICS link)</label>
+          <input id="cal-url" type="url" placeholder="https://outlook.office365.com/owa/calendar/…/calendar.html" />
         </div>
-        <div class="hint">Lets "Who's in office" read entries like "Greg – PTO" or "Alexis WFH" from this calendar. The tracker needs Calendars.Read access to this mailbox. Leave blank to use only people's own Outlook (Out of office / Working elsewhere).</div>
         <button type="submit">Save HR calendar</button>
         <div class="msg" id="calendarMsg"></div>
       </form>
@@ -556,8 +550,9 @@
     return api("/api/admin/calendar").then(function (cal) {
       document.getElementById("cal-name").value = cal.name || "";
       document.getElementById("cal-url").value = cal.url || "";
-      document.getElementById("cal-mailbox").value = cal.mailbox || "";
-      document.getElementById("cal-calname").value = cal.calendarName || "";
+      // The ICS link is a secret: show whether one is saved, keep it in a hidden field.
+      document.getElementById("cal-ics").value = cal.ics || "";
+      document.getElementById("cal-ics-state").textContent = cal.ics ? "An ICS link is saved. Leave it as is, paste a new one, or clear it to remove." : "No ICS link saved yet.";
     }).catch(function (err) { document.getElementById("calendarMsg").textContent = err.message; });
   }
 
@@ -571,12 +566,12 @@
       body: JSON.stringify({
         name: document.getElementById("cal-name").value.trim(),
         url: document.getElementById("cal-url").value.trim(),
-        mailbox: document.getElementById("cal-mailbox").value.trim(),
-        calendarName: document.getElementById("cal-calname").value.trim()
+        ics: document.getElementById("cal-ics").value.trim()
       })
     }).then(function () {
       msg.textContent = "Saved.";
       msg.className = "msg ok";
+      loadSharedCalendar();
     }).catch(function (err) { msg.textContent = err.message; });
   });
 
