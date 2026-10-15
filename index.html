@@ -1269,21 +1269,42 @@
     setTimeout(loadMentions, 0);
     var html = '<div class="intro"><div><div class="eyebrow">You</div><h1>Mentions you</h1><p>Everything assigned to you' +
       (hasSOI() ? ", and Pentagon documents tied to your Pentagon code" : "") + ".</p></div></div>" +
-      '<div class="section-title"><div><h2>Assigned to you</h2><span class="small-note">Tasks and Pentagon rows, across all your companies and departments.</span></div></div>' +
+      '<div class="section-title"><div><h2>Assigned to you</h2><span class="small-note">Tasks assigned to you, and every Pentagon document where you\'re the contact — across all your companies and departments.</span></div></div>' +
       '<div class="table-wrap"><table class="plain wide" id="mn-assigned" style="display:none;"></table><div class="empty" id="mn-assigned-empty">Loading…</div></div>';
     if (!hasSOI()) return html;
     return html +
-      '<div class="section-title"><div><h2>Your Pentagon documents</h2><span class="small-note" id="mn-msg"></span></div></div>' +
+      '<div class="section-title"><div><h2>All your Pentagon documents</h2><span class="small-note" id="mn-msg"></span></div></div>' +
       (me.pentagonCode ? "" : '<div class="banner">No Pentagon code is set on your login yet — ask an admin to add one at <b>/admin.html</b> so this can find RFQs, Quotes, Sales Orders, Purchase Orders and Invoices tied to you.</div>') +
       '<div class="grid-2" id="mn-charts" style="display:none;margin-bottom:18px;"><div class="card"><div class="card-label" id="mn-line-title">Total value over time</div><div class="chart-wrap"><canvas id="mn-line"></canvas></div></div>' +
       '<div class="card"><div class="card-label" id="mn-pie-title">By status</div><div class="chart-wrap"><canvas id="mn-pie"></canvas></div></div></div>' +
       (me.pentagonCode ? '<div class="table-wrap"><table class="wide" id="mn-table" style="display:none;"></table><div class="empty" id="mn-empty">Loading…</div></div>' : "");
   }
+  // Pentagon document kinds (dashboards.mine's DOC_KIND) -> tracker view.
+  function kindToView(kind) {
+    var k = String(kind || "").toLowerCase();
+    if (k.indexOf("rfq") !== -1 || k.indexOf("request") !== -1) return { id: "rfqs", label: "RFQ", dept: "Procurement" };
+    if (k.indexOf("quote") !== -1) return { id: "quotes", label: "Quote", dept: "Procurement" };
+    if (k.indexOf("sales") !== -1) return { id: "sales_orders", label: "SO", dept: "Purchasing" };
+    if (k.indexOf("purchase") !== -1) return { id: "purchase_orders", label: "PO", dept: "Purchasing" };
+    if (k.indexOf("invoice") !== -1) return { id: null, label: "Invoice", dept: "Accounting & Finance" };
+    return { id: null, label: kind || "Document", dept: "Procurement" };
+  }
+
   function loadMentions() {
-    loadMineCount().then(function (r) {
+    // Pentagon documents with your code as the contact, and the ticks /
+    // notes / assignments kept on them (if your login can see those).
+    var wantPentagon = hasSOI() && !!me.pentagonCode;
+    var mine = wantPentagon
+      ? api("/api/pentagon/dashboards.mine", { method: "POST", body: JSON.stringify({ params: {}, limit: 200 }) })
+          .then(function (d) { return { rows: findResultRows(d) || [] }; }, function (err) { return { rows: [], error: err }; })
+      : Promise.resolve({ rows: [] });
+    var marks = wantPentagon ? api("/api/rfq-marks").catch(function () { return {}; }) : Promise.resolve({});
+
+    Promise.all([loadMineCount(), mine, marks]).then(function (r) {
+      var tasksMine = r[0][0], assignedMarks = r[0][1], pent = r[1], allMarks = r[2] || {};
       var t = $("#mn-assigned"), e = $("#mn-assigned-empty");
       if (!t) return;
-      var rows = r[0].map(function (task) {
+      var rows = tasksMine.map(function (task) {
         return {
           done: isDone(task), due: task.dueDate || "",
           what: task.title || task.part || "Untitled task",
@@ -1292,39 +1313,70 @@
           link: "dept/" + encodeURIComponent(task.department), company: task.company || "SOI Aviation",
           notes: task.notes || "", by: task.createdBy || ""
         };
-      }).concat(r[1].map(function (m) {
+      });
+      var seen = {};
+      assignedMarks.forEach(function (m) {
+        seen[m.key] = true;
         var dept = { rfqs: "Procurement", quotes: "Procurement", sales_orders: "Purchasing", purchase_orders: "Purchasing" }[m.view] || "Procurement";
-        return {
+        rows.push({
           done: !!m.done, due: m.dueDate || "",
-          what: (m.label || "") + " " + (m.docNo || m.key), sub: [m.party, m.pentagonUser ? "Pentagon user " + m.pentagonUser : ""].filter(Boolean).join(" · "),
+          what: (m.label || "") + " " + (m.docNo || m.key), sub: [m.party, m.pentagonUser ? "Pentagon contact " + m.pentagonUser : ""].filter(Boolean).join(" · "),
           where: "SOI · " + dept, link: "dept/" + encodeURIComponent(dept), company: "SOI Aviation",
           notes: m.notes || "", by: m.assignedBy || "", pentagon: true
-        };
-      }));
-      if (!rows.length) { e.textContent = "Nothing is assigned to you right now."; t.style.display = "none"; e.style.display = "block"; return; }
-      rows.sort(function (a, b) { return Number(a.done) - Number(b.done) || String(a.due || "9999").localeCompare(String(b.due || "9999")); });
-      t.innerHTML = "<thead><tr><th>What</th><th>Where</th><th>Due date</th><th>Done</th><th>Notes</th><th>Assigned by</th></tr></thead><tbody>" +
-        rows.map(function (x) {
-          var late = x.due && !x.done && x.due < today;
-          return '<tr class="' + (x.done ? "done" : "") + '"><td><a href="#' + x.link + '" data-mine-co="' + E(x.company) + '"><strong>' + E(x.what) + "</strong></a>" +
-            (x.pentagon ? '<span class="src">PENTAGON</span>' : "") + (x.sub ? '<span class="co-note" style="padding:0">' + E(x.sub) + "</span>" : "") + "</td>" +
-            "<td>" + E(x.where) + '</td><td style="' + (late ? "color:var(--danger);font-weight:600" : "") + '">' + E(fmtDate(x.due) || "—") + "</td>" +
-            '<td><span class="pill ' + (x.done ? "" : "rose") + '">' + (x.done ? "✓ Done" : "✗ Open") + "</span></td><td>" + E(x.notes) + "</td><td>" + E(x.by) + "</td></tr>";
-        }).join("") + "</tbody>";
-      t.style.display = "table"; e.style.display = "none";
-    }).catch(function (err) { var e = $("#mn-assigned-empty"); if (e) e.textContent = err.message; });
-    if (!hasSOI() || !me.pentagonCode) return;
-    $("#mn-msg").textContent = "Loading…";
-    api("/api/pentagon/dashboards.mine", { method: "POST", body: JSON.stringify({ params: { code: me.pentagonCode }, limit: 200 }) }).then(function (data) {
-      var t = $("#mn-table"), e = $("#mn-empty");
-      if (!t) return;
+        });
+      });
+      // Everything in Pentagon with your code as the contact.
+      var prow = pent.rows[0];
+      if (prow) {
+        var fNo = findField(prow, ["DOC_NO", "RFQ_NO", "QUOTE_NO", "SO_NO", "PO_NO"], ["_NO"]);
+        var fKind = findField(prow, ["DOC_KIND", "DOC_TYPE"], ["KIND", "TYPE"]);
+        var fParty = findField(prow, ["ACCOUNT_NAME", "CUSTOMER", "VENDOR"], ["NAME"]) || findField(prow, ["ACCTNO"], ["ACCT"]);
+        var fDue = findField(prow, ["DUE_DATE"], ["DUE"]);
+        var fDate = findField(prow, ["DOC_DATE_ANY", "ENTER_DATE", "DOC_DATE"], ["DATE"]);
+        pent.rows.forEach(function (row) {
+          var docNo = fNo ? cellText(row[fNo]) : "";
+          var v = kindToView(fKind ? row[fKind] : "");
+          var key = v.id && docNo ? (v.id === "rfqs" ? docNo : v.id + ":" + docNo) : "";
+          if (key && seen[key]) return; // already listed as assigned
+          var m = key ? allMarks[key] || {} : {};
+          var dated = fDate ? fmtDate(cellText(row[fDate])) : "";
+          rows.push({
+            done: !!m.done, due: fDue ? cellText(row[fDue]).slice(0, 10) : "",
+            what: v.label + " " + docNo,
+            sub: [fParty ? cellText(row[fParty]) : "", dated ? "Dated " + dated : "", "You're the Pentagon contact"].filter(Boolean).join(" · "),
+            where: "SOI · " + v.dept, link: "dept/" + encodeURIComponent(v.dept), company: "SOI Aviation",
+            notes: m.notes || "", by: m.assignee ? "Assigned to " + m.assignee : "Pentagon", pentagon: true
+          });
+        });
+      }
+      if (!rows.length) {
+        e.textContent = pent.error ? "Couldn't load your Pentagon documents: " + pent.error.message : "Nothing is assigned to you right now.";
+        t.style.display = "none"; e.style.display = "block";
+      } else {
+        rows.sort(function (a, b) { return Number(a.done) - Number(b.done) || String(a.due || "9999").localeCompare(String(b.due || "9999")); });
+        t.innerHTML = "<thead><tr><th>What</th><th>Where</th><th>Due date</th><th>Done</th><th>Notes</th><th>From</th></tr></thead><tbody>" +
+          rows.map(function (x) {
+            var late = x.due && !x.done && x.due < today;
+            return '<tr class="' + (x.done ? "done" : "") + '"><td><a href="#' + x.link + '" data-mine-co="' + E(x.company) + '"><strong>' + E(x.what) + "</strong></a>" +
+              (x.pentagon ? '<span class="src">PENTAGON</span>' : "") + (x.sub ? '<span class="co-note" style="padding:0">' + E(x.sub) + "</span>" : "") + "</td>" +
+              "<td>" + E(x.where) + '</td><td style="' + (late ? "color:var(--danger);font-weight:600" : "") + '">' + E(fmtDate(x.due) || "—") + "</td>" +
+              '<td><span class="pill ' + (x.done ? "" : "rose") + '">' + (x.done ? "✓ Done" : "✗ Open") + "</span></td><td>" + E(x.notes) + "</td><td>" + E(x.by) + "</td></tr>";
+          }).join("") + "</tbody>";
+        t.style.display = "table"; e.style.display = "none";
+      }
+
+      // The full Pentagon list, with its charts, below.
+      if (!wantPentagon) return;
+      var pt = $("#mn-table"), pe = $("#mn-empty");
+      if (!pt) return;
       $("#mn-msg").textContent = "";
-      var rows = findResultRows(data);
-      try { pentagonCharts("mn", rows); } catch (x) { console.error(x); }
-      var html = autoTable(rows);
-      if (!html) { e.textContent = rows && rows.length === 0 ? "Nothing found for your Pentagon code." : "No table-shaped data came back."; return; }
-      t.innerHTML = html; t.style.display = "table"; e.style.display = "none";
-    }).catch(function (err) { var e = $("#mn-empty"); if (e) { $("#mn-msg").textContent = ""; e.textContent = err.message; } });
+      if (pent.error) { pe.textContent = pent.error.message; return; }
+      try { pentagonCharts("mn", pent.rows); } catch (x) { console.error(x); }
+      var html = autoTable(pent.rows);
+      if (!html) { pe.textContent = "Nothing found for your Pentagon code."; return; }
+      pt.innerHTML = html; pt.style.display = "table"; pe.style.display = "none";
+    }).catch(function (err) { var e = $("#mn-assigned-empty"); if (e) e.textContent = err.message; });
+    if (wantPentagon && $("#mn-msg")) $("#mn-msg").textContent = "Loading…";
   }
 
   // ---------- Calendar ----------
