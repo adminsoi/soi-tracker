@@ -33,7 +33,7 @@ const {
   withFinance,
 } = require("./s3store");
 const { sendMail } = require("./mailer");
-const { upcomingEvents, CalendarError } = require("./calendar");
+const { eventsBetween, whosIn, CalendarError } = require("./calendar");
 const { pentagonQuery } = require("./pentagon");
 const {
   PENTAGON_VIEWS,
@@ -72,6 +72,7 @@ function normalizeUser(u) {
     manager: !!u.manager,
     breakdown: !!u.breakdown,
     leadership: !!u.leadership,
+    calendarNames: Array.isArray(u.calendarNames) ? u.calendarNames : [],
     pentagonCode: u.pentagonCode || "",
   };
 }
@@ -984,11 +985,40 @@ app.get(
   "/api/calendar/me",
   authMiddleware,
   asyncHandler(async (req, res) => {
-    const days = Math.min(Math.max(parseInt(req.query.days, 10) || 14, 1), 42);
+    const days = Math.min(Math.max(parseInt(req.query.days, 10) || 14, 1), 45);
+    const start = /^\d{4}-\d{2}-\d{2}$/.test(req.query.start || "") ? req.query.start : null;
     const users = await getUsers();
     const u = users.find((x) => sameUser(x.username, req.user.username));
     try {
-      res.json(await upcomingEvents(u && u.email, days));
+      res.json(await eventsBetween(u && u.email, start, days));
+    } catch (err) {
+      if (err instanceof CalendarError) return res.status(409).json({ error: err.message, code: err.code });
+      throw err;
+    }
+  })
+);
+
+// Who's in office this week, for Leadership. Status only (in / out / remote,
+// with times for part of a day) — never event titles or details. Covers
+// every login with an email in the companies the viewer can see.
+app.get(
+  "/api/calendar/whos-in",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const users = (await getUsers()).map(normalizeUser);
+    const viewer = users.find((x) => sameUser(x.username, req.user.username));
+    if (!viewer || !viewer.leadership) {
+      return res.status(403).json({ error: "Who's in office is for leadership logins only" });
+    }
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.week || "") ? req.query.week : new Date().toISOString().slice(0, 10);
+    const people = users
+      .filter((u) => u.companies.some((c) => req.user.companies.includes(c)))
+      .sort((a, b) => a.username.toLowerCase().localeCompare(b.username.toLowerCase()))
+      .map((u) => ({ username: u.username, email: u.email || "", calendarNames: u.calendarNames || [] }));
+    const settings = await getSettings();
+    const shared = settings.sharedCalendar || {};
+    try {
+      res.json(await whosIn(people, shared.mailbox ? { mailbox: shared.mailbox, calendarName: shared.calendarName || "" } : null, date));
     } catch (err) {
       if (err instanceof CalendarError) return res.status(409).json({ error: err.message, code: err.code });
       throw err;
@@ -1028,7 +1058,8 @@ app.get(
       return res.status(403).json({ error: "The HR calendar is for leadership logins only" });
     }
     const settings = await getSettings();
-    res.json(settings.sharedCalendar || { name: "", url: "" });
+    const shared = settings.sharedCalendar || {};
+    res.json({ name: shared.name || "", url: shared.url || "" });
   })
 );
 
@@ -1051,8 +1082,14 @@ app.put(
     } catch (err) {
       return res.status(400).json({ error: err.message });
     }
-    const name = String((req.body || {}).name || "").trim().slice(0, 60) || "HR global calendar";
-    const shared = { name, url };
+    const body = req.body || {};
+    const name = String(body.name || "").trim().slice(0, 60) || "HR global calendar";
+    const mailbox = String(body.mailbox || "").trim();
+    if (mailbox && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mailbox)) {
+      return res.status(400).json({ error: "The HR calendar mailbox must be an email address" });
+    }
+    const calendarName = String(body.calendarName || "").trim().slice(0, 80);
+    const shared = { name, url, mailbox, calendarName };
     await withSettings((settings) => {
       settings.sharedCalendar = shared;
     });
@@ -1120,6 +1157,7 @@ app.get(
         manager: u.manager,
         breakdown: u.breakdown,
         leadership: u.leadership,
+        calendarNames: u.calendarNames,
         pentagonCode: u.pentagonCode || "",
       }))
     );
@@ -1156,7 +1194,7 @@ app.post(
   "/api/admin/users",
   adminMiddleware,
   asyncHandler(async (req, res) => {
-    const { username, password, email, companies, departments, fullAccess, manager, breakdown, leadership, pentagonCode } = req.body || {};
+    const { username, password, email, companies, departments, fullAccess, manager, breakdown, leadership, calendarNames, pentagonCode } = req.body || {};
     if (!username || !email) {
       return res.status(400).json({ error: "Username and email are required" });
     }
@@ -1198,6 +1236,8 @@ app.post(
       manager: !!manager,
       breakdown: !!breakdown,
       leadership: !!leadership,
+      calendarNames: (Array.isArray(calendarNames) ? calendarNames : String(calendarNames || "").split(","))
+        .map((n) => String(n).trim().slice(0, 40)).filter(Boolean).slice(0, 5),
       departments: deptList,
       pentagonCode: String(pentagonCode || "").trim(),
     };

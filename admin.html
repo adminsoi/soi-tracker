@@ -169,11 +169,17 @@
           <div class="check-grid">
             <div class="check-row full-access-row">
               <input type="checkbox" id="u-leadership" />
-              <label for="u-leadership" style="margin:0;font-weight:600;color:var(--text);">Leadership — can see the HR global calendar tab on the Calendar page</label>
+              <label for="u-leadership" style="margin:0;font-weight:600;color:var(--text);">Leadership — can see the HR global calendar and Who's in office tabs on the Calendar page</label>
             </div>
           </div>
         </div>
-        <div class="hint" style="margin-top:-10px;">Everyone sees their own Personal calendar; only Leadership logins also get the HR global calendar.</div>
+        <div class="hint" style="margin-top:-10px;">Everyone sees their own Personal calendar; only Leadership logins also get the HR global calendar and Who's in office.</div>
+
+        <div class="field">
+          <label for="u-calnames">Names on the HR calendar (optional)</label>
+          <input id="u-calnames" maxlength="200" placeholder="e.g. Greg, Gregory S" />
+        </div>
+        <div class="hint" style="margin-top:-10px;">How this person is written in HR calendar entries, comma-separated. Their username and the first part of their email are always matched too.</div>
 
         <div class="field" id="deptField">
           <label>Departments (only needed without full access)</label>
@@ -200,6 +206,17 @@
             <input id="cal-url" type="url" placeholder="https://outlook.office365.com/owa/calendar/..." />
           </div>
         </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="cal-mailbox">Mailbox it lives in (for "Who's in office")</label>
+            <input id="cal-mailbox" type="email" placeholder="hr@soiaviation.com" />
+          </div>
+          <div class="field" style="flex:0 0 220px;">
+            <label for="cal-calname">Calendar name (optional)</label>
+            <input id="cal-calname" maxlength="80" placeholder="Leave blank for its main calendar" />
+          </div>
+        </div>
+        <div class="hint">Lets "Who's in office" read entries like "Greg – PTO" or "Alexis WFH" from this calendar. The tracker needs Calendars.Read access to this mailbox. Leave blank to use only people's own Outlook (Out of office / Working elsewhere).</div>
         <button type="submit">Save HR calendar</button>
         <div class="msg" id="calendarMsg"></div>
       </form>
@@ -426,6 +443,7 @@
     document.getElementById("u-manager").checked = !!user.manager;
     document.getElementById("u-breakdown").checked = !!user.breakdown;
     document.getElementById("u-leadership").checked = !!user.leadership;
+    document.getElementById("u-calnames").value = (user.calendarNames || []).join(", ");
     var fullAccessBox = document.getElementById("u-fullaccess");
     fullAccessBox.checked = !!user.fullAccess;
     setCheckedValues('#deptChecks input[type="checkbox"]', user.departments || []);
@@ -484,6 +502,7 @@
       manager: document.getElementById("u-manager").checked,
       breakdown: document.getElementById("u-breakdown").checked,
       leadership: document.getElementById("u-leadership").checked,
+      calendarNames: document.getElementById("u-calnames").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean),
       departments: departments
     };
     api("/api/admin/users", { method: "POST", body: JSON.stringify(body) })
@@ -537,6 +556,8 @@
     return api("/api/admin/calendar").then(function (cal) {
       document.getElementById("cal-name").value = cal.name || "";
       document.getElementById("cal-url").value = cal.url || "";
+      document.getElementById("cal-mailbox").value = cal.mailbox || "";
+      document.getElementById("cal-calname").value = cal.calendarName || "";
     }).catch(function (err) { document.getElementById("calendarMsg").textContent = err.message; });
   }
 
@@ -547,7 +568,12 @@
     msg.className = "msg";
     api("/api/admin/calendar", {
       method: "PUT",
-      body: JSON.stringify({ name: document.getElementById("cal-name").value.trim(), url: document.getElementById("cal-url").value.trim() })
+      body: JSON.stringify({
+        name: document.getElementById("cal-name").value.trim(),
+        url: document.getElementById("cal-url").value.trim(),
+        mailbox: document.getElementById("cal-mailbox").value.trim(),
+        calendarName: document.getElementById("cal-calname").value.trim()
+      })
     }).then(function () {
       msg.textContent = "Saved.";
       msg.className = "msg ok";
