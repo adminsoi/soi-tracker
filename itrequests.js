@@ -15,6 +15,8 @@ const LOOKBACK_DAYS = 14;
 
 const itRequestsConfigured = graphConfigured && !!MAILBOX;
 
+// A body that starts with the flow's first line, "Response ID: 126".
+const RESPONSE_LINE = /^\s*response id\s*:\s*\S+/i;
 // "[IT Request] ...", also without the brackets; never replies or forwards.
 const SUBJECT_RE = /^\s*\[?\s*it\s+request\s*\]?\s*[:\-—]?\s*/i;
 function isItRequestSubject(subject) {
@@ -36,9 +38,14 @@ function parseFields(text) {
 }
 
 function field(fields, ...names) {
-  const f = fields.find((x) => names.some((n) => x.label.toLowerCase() === n));
-  return f ? f.value : "";
+  for (const n of names) {
+    const f = fields.find((x) => x.label.toLowerCase() === n && x.value);
+    if (f) return f.value;
+  }
+  return "";
 }
+// Forms that don't record who's signed in send "anonymous" as the responder.
+const ANON = /^anonymous$/i;
 
 async function graphJson(url, token, extraHeaders) {
   const res = await fetch(url, { headers: Object.assign({ Authorization: `Bearer ${token}` }, extraHeaders || {}) });
@@ -74,7 +81,7 @@ async function fetchItRequests(skipIds) {
   const list = new URL(`${base}/messages`);
   list.searchParams.set("$filter", `receivedDateTime ge ${since}`);
   list.searchParams.set("$orderby", "receivedDateTime desc");
-  list.searchParams.set("$select", "id,subject,receivedDateTime,parentFolderId");
+  list.searchParams.set("$select", "id,subject,receivedDateTime,parentFolderId,bodyPreview");
   list.searchParams.set("$top", "100");
   const matches = [];
   let next = list.toString(), pages = 0;
@@ -82,7 +89,9 @@ async function fetchItRequests(skipIds) {
     const page = await graphJson(next, token);
     for (const m of page.value || []) {
       if (m.parentFolderId && m.parentFolderId === sentId) continue;
-      if (isItRequestSubject(m.subject)) matches.push(m);
+      // The subject, or — if the flow's subject came through empty — a body
+      // that starts with the flow's "Response ID:" line.
+      if (isItRequestSubject(m.subject) || RESPONSE_LINE.test(m.bodyPreview || "")) matches.push(m);
     }
     next = page["@odata.nextLink"] || null;
     pages++;
@@ -96,14 +105,16 @@ async function fetchItRequests(skipIds) {
     const full = await graphJson(`${base}/messages/${encodeURIComponent(m.id)}?$select=id,subject,body,receivedDateTime`, token, { Prefer: 'outlook.body-content-type="text"' });
     const fields = parseFields(full.body && full.body.content);
     const urgent = field(fields, "urgent", "urgency", "priority", "what is the urgency of this issue?");
+    const issue = field(fields, "details", "issue", "please describe the it issue you are having here:", "description");
     // Without the [IT Request] brackets, only the flow's emails count (they
     // carry a Response ID line), not someone's email titled "IT request ...".
     if (!/^\s*\[\s*it\s+request\s*\]/i.test(full.subject || "") && !field(fields, "response id")) continue;
     items.push({
       messageId: m.id,
       responseId: field(fields, "response id"),
-      title: String(full.subject || "").replace(SUBJECT_RE, "").trim() || "IT request",
-      requester: field(fields, "requested by", "requester", "name", "full name", "email"),
+      // Title: the subject after the tag, else the start of the details.
+      title: String(full.subject || "").replace(SUBJECT_RE, "").trim() || issue.split(/[.!?\n]/)[0].trim().slice(0, 100) || "IT request",
+      requester: [field(fields, "full name", "name"), field(fields, "email", "requested by", "requester")].filter((v) => v && !ANON.test(v))[0] || "",
       urgent: /^(yes|true|urgent|high|immediate)/i.test(urgent),
       fields: fields.filter((f) => !/^response id$/i.test(f.label)),
       receivedAt: full.receivedDateTime || m.receivedDateTime,
@@ -170,6 +181,7 @@ function setKind(rec, kind, value) {
   }
   let v = clean(value, LIMITS[kind]);
   if (kind === "urgency") v = shortUrgency(v);
+  if ((kind === "name" || kind === "email") && ANON.test(v)) return;
   // A requester given as an email address fills both.
   if (kind === "name" && v.includes("@")) { if (!rec.email) rec.email = v; if (rec.name) return; }
   if (kind === "email" && !v.includes("@")) return; // e.g. "anonymous"
