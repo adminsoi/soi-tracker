@@ -143,6 +143,38 @@
   .prio-none { background: transparent; color: var(--muted); border: 1px dashed var(--line); }
   .itr-issue { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; max-width: 420px; }
   .itr-person { background: none; border: 0; padding: 0; font: inherit; color: var(--ink); text-align: left; cursor: pointer; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
+  /* IT notebook (IT → Resolved) */
+  .nb-grid { display: grid; grid-template-columns: minmax(250px, 320px) 1fr; gap: 18px; align-items: start; margin-top: 16px; }
+  .nb-list { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; max-height: 72vh; overflow-y: auto; }
+  .nb-list-head { padding: 12px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; position: sticky; top: 0; background: var(--card); }
+  .nb-list-head input { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); }
+  .nb-item { display: block; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--line); padding: 13px 16px; cursor: pointer; font: inherit; color: var(--ink); }
+  .nb-item:hover { background: var(--soft); }
+  .nb-item.active { background: var(--soft); box-shadow: inset 3px 0 0 var(--rose-ink); }
+  .nb-item b { display: block; font-size: 13px; font-weight: 600; margin-bottom: 3px; }
+  .nb-item .nb-snip { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 12px; color: var(--muted); }
+  .nb-item .nb-meta { display: flex; gap: 6px; align-items: center; margin-top: 7px; font-size: 10.5px; color: var(--muted); }
+  .nb-chip { display: inline-block; padding: 1px 7px; border-radius: 9px; font-size: 10px; font-weight: 600; background: #eef0e8; color: #697957; }
+  .nb-chip.todo { background: transparent; color: var(--muted); border: 1px dashed var(--line); font-weight: 500; }
+  .nb-pane { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 26px 28px; min-height: 360px; }
+  .nb-pane h3 { font: 24px/1.2 'Libre Caslon Display', Georgia, serif; margin: 0 0 6px; }
+  .nb-sub { font-size: 12px; color: var(--muted); margin-bottom: 18px; }
+  .nb-quote { background: var(--soft); border-radius: 9px; padding: 12px 14px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; margin-bottom: 20px; }
+  .nb-field { margin-bottom: 16px; }
+  .nb-field label { display: block; font-size: 10px; letter-spacing: 1.4px; text-transform: uppercase; color: var(--muted); font-weight: 600; margin-bottom: 6px; }
+  .nb-field input, .nb-field textarea { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); font: inherit; font-size: 13.5px; line-height: 1.55; color: var(--ink); }
+  .nb-field textarea { resize: vertical; min-height: 90px; }
+  .nb-field input:focus, .nb-field textarea:focus, .nb-title:focus { outline: 2px solid #d9c3cb; outline-offset: 1px; }
+  .nb-title { width: 100%; box-sizing: border-box; border: 0; background: none; font: 26px/1.2 'Libre Caslon Display', Georgia, serif; color: var(--ink); padding: 2px 0; margin-bottom: 4px; }
+  .nb-foot { display: flex; gap: 10px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+  .nb-foot .grow { flex: 1; }
+  .nb-saved { font-size: 11px; color: var(--muted); }
+  .nb-read { font-size: 14px; line-height: 1.65; }
+  .nb-read h4 { font: 600 11px 'DM Sans', sans-serif; letter-spacing: 1.4px; text-transform: uppercase; color: var(--muted); margin: 20px 0 6px; }
+  .nb-read p { margin: 0 0 10px; white-space: pre-wrap; } .nb-read ul { margin: 0 0 10px 18px; padding: 0; }
+  .nb-read code { background: var(--soft); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+  .nb-empty { color: var(--muted); font-size: 13px; padding: 40px 10px; text-align: center; }
+  @media (max-width: 900px) { .nb-grid { grid-template-columns: 1fr; } .nb-list { max-height: 320px; } }
   .src { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 4px; font-size: 9px; background: #eef0e8; color: #697957; font-weight: 600; letter-spacing: .5px; vertical-align: 1px; }
   .co-note { display: block; padding: 0 8px; font-size: 10px; color: var(--muted); }
   tr.project td { background: #f7f3ea; }
@@ -688,6 +720,7 @@
     if (dept === "Business Development" && (activeCompany === "SOI Aviation" || (activeCompany === ALL && hasSOI()))) subs.push({ id: "analytics", label: "Analytics" });
     subs.push({ id: "tasks", label: isOps(dept) ? "Tasks" : "Projects" });
     if (dept === "IT" && canSeeItRequests()) subs.push({ id: "requests", label: "Requests" });
+    if (dept === "IT" && me.itNotebook) subs.push({ id: "resolved", label: "Resolved" });
     views.forEach(function (v) { subs.push({ id: v.id, label: v.label }); });
     var sub = subView[dept];
     if (!sub || !subs.some(function (s) { return s.id === sub; })) sub = subView[dept] = subs[0].id;
@@ -727,6 +760,7 @@
     if (sub === "finance") body = renderFinance();
     else if (sub === "analytics") body = renderBdAnalytics();
     else if (sub === "requests") body = renderItRequests();
+    else if (sub === "resolved") body = renderNotebook();
     else if (sub === "tasks") body = isOps(dept) ? renderOpsTable(dept) : renderProjectTable(dept);
     else {
       var view = views.filter(function (v) { return v.id === sub; })[0];
@@ -1108,6 +1142,188 @@
         .then(function (res) { return res.json().then(function (d) { if (!res.ok) throw new Error(d.error || "Import failed"); return d; }); })
         .then(function (d) { toast("Imported " + d.rows + " responses: " + d.added + " new, " + d.updated + " updated."); itr.at = 0; render(); },
               function (err) { toast(err.message, true); });
+    }
+  });
+
+  // ---- Private IT notebook (IT → Resolved) ----
+  // Only for logins with "Private IT notebook" ticked (the server checks).
+  // Left: resolved tickets or knowledge base articles. Right: the open one,
+  // saved as you type. A ticket's write-up can become an article in one click.
+  var NB_CATEGORIES = ["Hardware", "Software", "Account & access", "Email & Teams", "Network & VPN", "Printer", "Phone", "Other"];
+  var nb = { data: null, at: 0, loading: false, error: "", view: "tickets", sel: { tickets: "", kb: "" }, show: "all", q: "", edit: {}, timers: {} };
+  function loadNotebook() {
+    if (nb.loading) return;
+    nb.loading = true;
+    api("/api/it-notebook").then(function (d) { nb.data = d; nb.error = ""; }, function (err) { nb.error = err.message; })
+      .then(function () { nb.loading = false; nb.at = Date.now(); requestRender(); });
+  }
+  function nbCategories() {
+    var seen = {};
+    NB_CATEGORIES.concat((nb.data ? nb.data.articles.map(function (a) { return a.category; }).concat(nb.data.resolved.map(function (r) { return r.writeup && r.writeup.category; })) : []))
+      .forEach(function (c) { if (c) seen[c] = 1; });
+    return '<datalist id="nbCats">' + Object.keys(seen).map(function (c) { return '<option value="' + E(c) + '">'; }).join("") + "</datalist>";
+  }
+  function nbTicket(id) { return nb.data.resolved.filter(function (r) { return r.id === id; })[0]; }
+  function nbArticle(id) { return nb.data.articles.filter(function (a) { return a.id === id; })[0]; }
+  function nbWhen(ms) { return ms ? new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : ""; }
+
+  function renderNotebook() {
+    if (!nb.data || Date.now() - nb.at > 300000) loadNotebook();
+    if (nb.error) return '<div class="banner">' + E(nb.error) + "</div>";
+    if (!nb.data) return '<div class="empty">Loading your notebook…</div>';
+    var d = nb.data;
+    var todo = d.resolved.filter(function (r) { return !(r.writeup && r.writeup.fix); }).length;
+    return '<div class="table-toolbar" style="margin-top:16px;"><div class="seg">' +
+        '<button type="button" data-nb-view="tickets" class="' + (nb.view === "tickets" ? "active" : "") + '">Resolved tickets (' + d.resolved.length + ")</button>" +
+        '<button type="button" data-nb-view="kb" class="' + (nb.view === "kb" ? "active" : "") + '">Knowledge base (' + d.articles.length + ")</button></div>" +
+        '<span class="small-note">Private — only you can see this.' + (nb.view === "tickets" && todo ? " " + todo + " still need a write-up." : "") + "</span>" +
+        (nb.view === "kb" ? '<button type="button" class="primary" data-nb-new>+ New article</button>' : "") + "</div>" +
+      nbCategories() + (nb.view === "kb" ? renderKb() : renderNbTickets());
+  }
+
+  function renderNbTickets() {
+    var list = nb.data.resolved.filter(function (r) { return nb.show === "all" || !(r.writeup && r.writeup.fix); });
+    if (!nb.sel.tickets || !nbTicket(nb.sel.tickets)) nb.sel.tickets = list.length ? list[0].id : "";
+    var items = list.length ? list.map(function (r) {
+      var w = r.writeup || {};
+      return '<button type="button" class="nb-item' + (r.id === nb.sel.tickets ? " active" : "") + '" data-nb-ticket="' + E(r.id) + '">' +
+        "<b>" + E(itrPerson(r)) + "</b>" + '<span class="nb-snip">' + E(r.issue || "—") + "</span>" +
+        '<span class="nb-meta">' + E(fmtDate(r.submittedAt)) + " " + (w.fix ? '<span class="nb-chip">' + E(w.category || "Written up") + "</span>" : '<span class="nb-chip todo">Needs write-up</span>') + "</span></button>";
+    }).join("") : '<div class="nb-empty">' + (nb.data.resolved.length ? "Everything's written up." : "Requests you mark done on the Requests tab show up here.") + "</div>";
+    var head = '<div class="nb-list-head"><div class="seg">' + [["all", "All"], ["todo", "Needs write-up"]].map(function (x) {
+      return '<button type="button" data-nb-show="' + x[0] + '" class="' + (nb.show === x[0] ? "active" : "") + '">' + x[1] + "</button>";
+    }).join("") + "</div></div>";
+    return '<div class="nb-grid"><div class="nb-list">' + head + items + '</div><div class="nb-pane">' + renderNbTicketPane(nbTicket(nb.sel.tickets)) + "</div></div>";
+  }
+  function renderNbTicketPane(r) {
+    if (!r) return '<div class="nb-empty">Pick a ticket on the left.</div>';
+    var w = r.writeup || {};
+    var meta = [r.company, r.submittedAt ? "submitted " + fmtDate(r.submittedAt) : "", r.urgency ? "form said " + r.urgency : "", r.priority ? "rated " + r.priority : ""].filter(Boolean).join(" · ");
+    var art = w.articleId && nbArticle(w.articleId);
+    return "<h3>" + E(itrPerson(r)) + '</h3><div class="nb-sub">' + E(meta) + "</div>" +
+      '<div class="nb-quote">' + E(r.issue || "No description.") + (r.notes ? "\n\n" + E(r.notes) : "") + "</div>" +
+      '<div class="nb-field"><label for="nb-cat">Category</label><input id="nb-cat" list="nbCats" data-nb-t="category" data-id="' + E(r.id) + '" value="' + E(w.category || "") + '" placeholder="e.g. Hardware" autocomplete="off"></div>' +
+      '<div class="nb-field"><label for="nb-fix">What fixed it</label><textarea id="nb-fix" rows="4" data-nb-t="fix" data-id="' + E(r.id) + '" placeholder="Steps you took, so next time is quicker.">' + E(w.fix || "") + "</textarea></div>" +
+      '<div class="nb-field"><label for="nb-notes">Private notes</label><textarea id="nb-notes" rows="3" data-nb-t="notes" data-id="' + E(r.id) + '" placeholder="Anything else worth remembering — follow-ups, device details, who helped.">' + E(w.notes || "") + "</textarea></div>" +
+      '<div class="nb-foot"><span class="nb-saved" id="nb-saved">' + (w.updatedAt ? "Saved " + E(nbWhen(w.updatedAt)) : "Saves as you type") + '</span><span class="grow"></span>' +
+      (art ? '<button type="button" data-nb-open="' + E(art.id) + '">Open article →</button>' : '<button type="button" class="primary" data-nb-promote="' + E(r.id) + '">Turn into article →</button>') + "</div>";
+  }
+
+  function renderKb() {
+    var q = nb.q.trim().toLowerCase();
+    var list = nb.data.articles.filter(function (a) { return !q || (a.title + " " + a.category + " " + a.body).toLowerCase().indexOf(q) !== -1; });
+    if (!nb.sel.kb || !nbArticle(nb.sel.kb)) nb.sel.kb = list.length ? list[0].id : "";
+    var items = list.length ? list.map(function (a) {
+      return '<button type="button" class="nb-item' + (a.id === nb.sel.kb ? " active" : "") + '" data-nb-article="' + E(a.id) + '">' +
+        "<b>" + E(a.title) + "</b>" + '<span class="nb-snip">' + E(a.body.replace(/^#+\s*/gm, "").slice(0, 160) || "Empty") + "</span>" +
+        '<span class="nb-meta">' + (a.category ? '<span class="nb-chip">' + E(a.category) + "</span>" : "") + "Updated " + E(nbWhen(a.updatedAt)) + "</span></button>";
+    }).join("") : '<div class="nb-empty">' + (nb.data.articles.length ? "No articles match." : "No articles yet. Start one with + New article, or turn a resolved ticket into one.") + "</div>";
+    var head = '<div class="nb-list-head"><input type="text" id="nbFind" placeholder="Find an article" value="' + E(nb.q) + '" aria-label="Find an article" autocomplete="off"></div>';
+    return '<div class="nb-grid"><div class="nb-list">' + head + items + '</div><div class="nb-pane">' + renderKbPane(nbArticle(nb.sel.kb)) + "</div></div>";
+  }
+  // Light formatting for reading: "# " headings, "- " bullets, `code`.
+  function nbFormat(text) {
+    var out = "", bullets = [];
+    var inline = function (s) { return E(s).replace(/`([^`]+)`/g, "<code>$1</code>"); };
+    var flush = function () { if (bullets.length) { out += "<ul>" + bullets.map(function (b) { return "<li>" + inline(b) + "</li>"; }).join("") + "</ul>"; bullets = []; } };
+    String(text || "").split(/\n{2,}/).forEach(function (block) {
+      block.split("\n").forEach(function (line, i, lines) {
+        if (/^#+\s/.test(line)) { flush(); out += "<h4>" + inline(line.replace(/^#+\s*/, "")) + "</h4>"; }
+        else if (/^\s*[-*]\s/.test(line)) bullets.push(line.replace(/^\s*[-*]\s/, ""));
+        else if (line.trim()) { flush(); out += "<p>" + inline(line) + "</p>"; }
+      });
+      flush();
+    });
+    return out || '<p class="dim">Nothing written yet.</p>';
+  }
+  function renderKbPane(a) {
+    if (!a) return '<div class="nb-empty">Pick an article on the left, or start a new one.</div>';
+    var editing = nb.edit[a.id] || !a.body;
+    var from = a.fromRequest && nbTicket(a.fromRequest);
+    var top = '<div class="nb-foot" style="margin:0 0 14px;"><div class="seg">' +
+      '<button type="button" data-nb-mode="read" class="' + (editing ? "" : "active") + '">Read</button>' +
+      '<button type="button" data-nb-mode="edit" class="' + (editing ? "active" : "") + '">Edit</button></div><span class="grow"></span>' +
+      '<span class="nb-saved" id="nb-saved">Updated ' + E(nbWhen(a.updatedAt)) + "</span></div>";
+    if (!editing) {
+      return top + "<h3>" + E(a.title) + '</h3><div class="nb-sub">' + E([a.category, from ? "from " + itrPerson(from) + "'s ticket" : ""].filter(Boolean).join(" · ")) + "</div>" +
+        '<div class="nb-read">' + nbFormat(a.body) + "</div>";
+    }
+    return top + '<input class="nb-title" data-nb-a="title" data-id="' + E(a.id) + '" value="' + E(a.title) + '" placeholder="Title" aria-label="Title">' +
+      '<div class="nb-field" style="max-width:280px;margin-top:8px;"><label for="nb-acat">Category</label><input id="nb-acat" list="nbCats" data-nb-a="category" data-id="' + E(a.id) + '" value="' + E(a.category) + '" placeholder="e.g. Network & VPN" autocomplete="off"></div>' +
+      '<div class="nb-field"><label for="nb-body">Article</label><textarea id="nb-body" rows="14" data-nb-a="body" data-id="' + E(a.id) + '" placeholder="# Problem&#10;What people see.&#10;&#10;# Fix&#10;- Step one&#10;- Step two">' + E(a.body) + "</textarea>" +
+      '<span class="small-note">Tip: start a line with # for a heading, - for a bullet, and wrap commands in `backticks`.</span></div>' +
+      '<div class="nb-foot"><span class="grow"></span><button type="button" class="text-button" data-nb-delete="' + E(a.id) + '">Delete article</button></div>';
+  }
+
+  // Saving: debounced per field, without re-rendering while you type.
+  function nbSave(kind, id, key, value) {
+    var tk = kind + id + key;
+    // Keep the local copy current, so switching views shows what you typed.
+    if (kind === "t") { var lr = nbTicket(id); if (lr) { lr.writeup = lr.writeup || {}; lr.writeup[key] = value; } }
+    else { var la = nbArticle(id); if (la) la[key] = value; }
+    var saved = $("#nb-saved");
+    if (saved) saved.textContent = "Saving…";
+    clearTimeout(nb.timers[tk]);
+    nb.timers[tk] = setTimeout(function () {
+      var change = {}; change[key] = value;
+      var req = kind === "t"
+        ? api("/api/it-notebook/tickets/" + encodeURIComponent(id), { method: "PUT", body: JSON.stringify(change) })
+        : api("/api/it-notebook/articles/" + encodeURIComponent(id), { method: "PATCH", body: JSON.stringify(change) });
+      req.then(function (res) {
+        if (kind === "t") { var r = nbTicket(id); if (r) r.writeup = res; }
+        else { var a = nbArticle(id); if (a) Object.assign(a, res); }
+        var s = $("#nb-saved"); if (s) s.textContent = "Saved";
+      }, function (err) { toast(err.message, true); var s = $("#nb-saved"); if (s) s.textContent = "Not saved"; });
+    }, 700);
+  }
+  function nbNewArticle(fields) {
+    return api("/api/it-notebook/articles", { method: "POST", body: JSON.stringify(fields) }).then(function (a) {
+      nb.data.articles.unshift(a);
+      nb.view = "kb"; nb.sel.kb = a.id; nb.edit[a.id] = true; nb.q = "";
+      render();
+      var t = $(".nb-title"); if (t) { t.focus(); t.select(); }
+      return a;
+    }, function (err) { toast(err.message, true); });
+  }
+  document.addEventListener("input", function (e) {
+    var t = e.target;
+    if (t.id === "nbFind") {
+      nb.q = t.value; var pos = t.selectionStart; render();
+      var f = $("#nbFind"); if (f) { f.focus(); try { f.setSelectionRange(pos, pos); } catch (x) {} }
+      return;
+    }
+    if (t.dataset && t.dataset.nbT) nbSave("t", t.dataset.id, t.dataset.nbT, t.value);
+    else if (t.dataset && t.dataset.nbA) nbSave("a", t.dataset.id, t.dataset.nbA, t.value);
+  });
+  document.addEventListener("click", function (e) {
+    var t = e.target.closest && e.target.closest("[data-nb-view],[data-nb-show],[data-nb-ticket],[data-nb-article],[data-nb-mode],[data-nb-new],[data-nb-promote],[data-nb-open],[data-nb-delete]");
+    if (!t) return;
+    var ds = t.dataset;
+    if (ds.nbView) { nb.view = ds.nbView; render(); }
+    else if (ds.nbShow) { nb.show = ds.nbShow; render(); }
+    else if (ds.nbTicket) { nb.sel.tickets = ds.nbTicket; render(); }
+    else if (ds.nbArticle) { nb.sel.kb = ds.nbArticle; render(); }
+    else if (ds.nbMode) { nb.edit[nb.sel.kb] = ds.nbMode === "edit"; render(); }
+    else if ("nbNew" in ds) nbNewArticle({ title: "Untitled article", body: "" });
+    else if (ds.nbOpen) { nb.view = "kb"; nb.sel.kb = ds.nbOpen; nb.q = ""; render(); }
+    else if (ds.nbPromote) {
+      var r = nbTicket(ds.nbPromote), w = (r && r.writeup) || {};
+      if (!r) return;
+      var first = String(r.issue || "IT issue").split(/[.!?\n]/)[0].trim().slice(0, 100);
+      var body = "# Problem\n" + (r.issue || "") + (w.fix ? "\n\n# Fix\n" + w.fix : "\n\n# Fix\n") + (w.notes ? "\n\n# Notes\n" + w.notes : "");
+      nbNewArticle({ title: first, category: w.category || "", body: body, fromRequest: r.id }).then(function (a) {
+        if (!a) return;
+        api("/api/it-notebook/tickets/" + encodeURIComponent(r.id), { method: "PUT", body: JSON.stringify({ articleId: a.id }) })
+          .then(function (res) { r.writeup = res; }).catch(function () {});
+      });
+    }
+    else if (ds.nbDelete) {
+      var a = nbArticle(ds.nbDelete);
+      if (!a || !confirm("Delete “" + a.title + "”? This can't be undone.")) return;
+      api("/api/it-notebook/articles/" + encodeURIComponent(a.id), { method: "DELETE" }).then(function () {
+        nb.data.articles = nb.data.articles.filter(function (x) { return x.id !== a.id; });
+        nb.sel.kb = ""; render(); toast("Article deleted.");
+      }, function (err) { toast(err.message, true); });
     }
   });
 

@@ -88,6 +88,10 @@ function getFinance() {
 function getSettings() {
   return readJson("settings", {});
 }
+// Private IT notebook: ticket write-ups and knowledge base articles.
+function getItNotebook() {
+  return readJson("it_notebook", {});
+}
 // IT request form responses (imported from Excel or emailed by the flow).
 function getItRequests() {
   return readJson("it_requests", []);
@@ -102,6 +106,7 @@ let rfqMarksQueue = Promise.resolve();
 let settingsQueue = Promise.resolve();
 let financeQueue = Promise.resolve();
 let itRequestsQueue = Promise.resolve();
+let itNotebookQueue = Promise.resolve();
 
 function withUsers(mutator) {
   usersQueue = usersQueue.then(async () => {
@@ -177,7 +182,19 @@ function withItRequests(mutator) {
   return itRequestsQueue;
 }
 
+function withItNotebook(mutator) {
+  itNotebookQueue = itNotebookQueue.then(async () => {
+    const nb = await getItNotebook();
+    const result = await mutator(nb);
+    await writeJson("it_notebook", nb);
+    return result;
+  });
+  return itNotebookQueue;
+}
+
 module.exports = {
+  getItNotebook,
+  withItNotebook,
   getItRequests,
   withItRequests,
   getUsers,

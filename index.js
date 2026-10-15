@@ -31,6 +31,8 @@ const {
   withFinance,
   getItRequests,
   withItRequests,
+  getItNotebook,
+  withItNotebook,
 } = require("./s3store");
 const { sendMail } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError } = require("./calendar");
@@ -77,6 +79,7 @@ function normalizeUser(u) {
     manager: !!u.manager,
     breakdown: !!u.breakdown,
     leadership: !!u.leadership,
+    itNotebook: !!u.itNotebook,
     calendarNames: Array.isArray(u.calendarNames) ? u.calendarNames : [],
     pentagonCode: u.pentagonCode || "",
   };
@@ -189,14 +192,16 @@ app.post(
       fullAccess: user.fullAccess,
       manager: isManager(user),
       leadership: user.leadership,
+      itNotebook: !!user.itNotebook,
       pentagonCode: user.pentagonCode,
       pentagonMentions: getsPentagonMentions(user),
     });
   })
 );
 
-app.get("/api/me", authMiddleware, (req, res) => {
+app.get("/api/me", authMiddleware, asyncHandler(async (req, res) => {
   res.json({
+    itNotebook: await hasItNotebook(req.user),
     username: req.user.username,
     companies: req.user.companies,
     departments: req.user.departments,
@@ -206,7 +211,7 @@ app.get("/api/me", authMiddleware, (req, res) => {
     pentagonCode: req.user.pentagonCode,
     pentagonMentions: getsPentagonMentions(req.user),
   });
-});
+}));
 
 app.get("/api/companies", (req, res) => {
   res.json(COMPANIES);
@@ -1445,6 +1450,7 @@ app.get(
         manager: u.manager,
         breakdown: u.breakdown,
         leadership: u.leadership,
+        itNotebook: u.itNotebook,
         calendarNames: u.calendarNames,
         pentagonCode: u.pentagonCode || "",
       }))
@@ -1482,7 +1488,7 @@ app.post(
   "/api/admin/users",
   adminMiddleware,
   asyncHandler(async (req, res) => {
-    const { username, password, email, companies, departments, fullAccess, manager, breakdown, leadership, calendarNames, pentagonCode } = req.body || {};
+    const { username, password, email, companies, departments, fullAccess, manager, breakdown, leadership, itNotebook, calendarNames, pentagonCode } = req.body || {};
     if (!username || !email) {
       return res.status(400).json({ error: "Username and email are required" });
     }
@@ -1524,6 +1530,7 @@ app.post(
       manager: !!manager,
       breakdown: !!breakdown,
       leadership: !!leadership,
+      itNotebook: !!itNotebook,
       calendarNames: (Array.isArray(calendarNames) ? calendarNames : String(calendarNames || "").split(","))
         .map((n) => String(n).trim().slice(0, 40)).filter(Boolean).slice(0, 5),
       departments: deptList,
@@ -1699,6 +1706,127 @@ app.patch(
       });
     }
     res.json(rec);
+  })
+);
+
+// ---- Private IT notebook (IT → Resolved) ----
+// Write-ups on resolved requests (the fix, private notes, a category) and
+// knowledge base articles. Only logins with "Private IT notebook" ticked in
+// /admin.html can read or write it — not other managers, not full access.
+// Checked against the saved login each time, so unticking takes effect at once.
+const NB_TEXT = 20000;
+
+async function hasItNotebook(user) {
+  const u = (await getUsers()).find((x) => sameUser(x.username, user.username));
+  return !!(u && u.itNotebook);
+}
+const notebookOnly = asyncHandler(async (req, res, next) => {
+  if (!(await hasItNotebook(req.user))) return res.status(403).json({ error: "The IT notebook is private" });
+  next();
+});
+const nbText = (v, n) => String(v == null ? "" : v).slice(0, n);
+function nbShape(nb) {
+  nb.tickets = nb.tickets && typeof nb.tickets === "object" ? nb.tickets : {};
+  nb.articles = Array.isArray(nb.articles) ? nb.articles : [];
+  return nb;
+}
+
+app.get(
+  "/api/it-notebook",
+  authMiddleware,
+  notebookOnly,
+  asyncHandler(async (req, res) => {
+    const [nb, list, tasks] = await Promise.all([getItNotebook(), getItRequests(), getTasks()]);
+    nbShape(nb);
+    const byId = new Map(tasks.map((t) => [t.id, t]));
+    const resolved = list
+      .map((r) => {
+        const task = r.taskId ? byId.get(r.taskId) : null;
+        return Object.assign({}, r, task ? { status: task.status === "done" ? "done" : "open" } : {});
+      })
+      .filter((r) => r.status === "done" || nb.tickets[r.id])
+      .map((r) => Object.assign(r, { writeup: nb.tickets[r.id] || null }))
+      .sort((a, b) => String(b.submittedAt).localeCompare(String(a.submittedAt)));
+    const articles = nb.articles.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    res.json({ resolved, articles });
+  })
+);
+
+app.put(
+  "/api/it-notebook/tickets/:id",
+  authMiddleware,
+  notebookOnly,
+  asyncHandler(async (req, res) => {
+    const body = req.body || {};
+    const id = nbText(req.params.id, 80);
+    const writeup = await withItNotebook((nb) => {
+      nbShape(nb);
+      const w = nb.tickets[id] || { createdAt: Date.now() };
+      for (const k of ["fix", "notes"]) if (k in body) w[k] = nbText(body[k], NB_TEXT);
+      if ("category" in body) w.category = nbText(body.category, 40).trim();
+      if ("articleId" in body) w.articleId = nbText(body.articleId, 40);
+      w.updatedAt = Date.now();
+      nb.tickets[id] = w;
+      return w;
+    });
+    res.json(writeup);
+  })
+);
+
+app.post(
+  "/api/it-notebook/articles",
+  authMiddleware,
+  notebookOnly,
+  asyncHandler(async (req, res) => {
+    const body = req.body || {};
+    const article = {
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+      title: nbText(body.title, 160).trim() || "Untitled article",
+      category: nbText(body.category, 40).trim(),
+      body: nbText(body.body, NB_TEXT),
+      fromRequest: nbText(body.fromRequest, 80),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    await withItNotebook((nb) => { nbShape(nb).articles.push(article); });
+    res.status(201).json(article);
+  })
+);
+
+app.patch(
+  "/api/it-notebook/articles/:id",
+  authMiddleware,
+  notebookOnly,
+  asyncHandler(async (req, res) => {
+    const body = req.body || {};
+    const article = await withItNotebook((nb) => {
+      const a = nbShape(nb).articles.find((x) => x.id === req.params.id);
+      if (!a) return null;
+      if ("title" in body) a.title = nbText(body.title, 160).trim() || "Untitled article";
+      if ("category" in body) a.category = nbText(body.category, 40).trim();
+      if ("body" in body) a.body = nbText(body.body, NB_TEXT);
+      a.updatedAt = Date.now();
+      return Object.assign({}, a);
+    });
+    if (!article) return res.status(404).json({ error: "That article isn't here any more" });
+    res.json(article);
+  })
+);
+
+app.delete(
+  "/api/it-notebook/articles/:id",
+  authMiddleware,
+  notebookOnly,
+  asyncHandler(async (req, res) => {
+    const removed = await withItNotebook((nb) => {
+      const list = nbShape(nb).articles;
+      const i = list.findIndex((x) => x.id === req.params.id);
+      if (i === -1) return false;
+      list.splice(i, 1);
+      return true;
+    });
+    if (!removed) return res.status(404).json({ error: "That article isn't here any more" });
+    res.status(204).end();
   })
 );
 
