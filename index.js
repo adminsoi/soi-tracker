@@ -33,9 +33,11 @@ const {
 const { sendMail } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError } = require("./calendar");
 const { hrEvents, cleanFeedUrl, FeedError } = require("./hrcal");
+const { unreadThreads, MailError } = require("./mail");
 const { pentagonQuery } = require("./pentagon");
 const {
   PENTAGON_VIEWS,
+  FINANCE_QUERIES,
   FIELD_GUESSES,
   allViews,
   resolveField,
@@ -499,6 +501,95 @@ function cleanFinanceFields(list, body, target) {
   }
 }
 
+// ---- Finance rows from Pentagon (SOI Aviation only) ----
+// Open bills -> Daily payments / Approved to pay, open customer invoices ->
+// Expected receipts, bank balances -> Bank accounts. The money columns come
+// from Pentagon and are read-only here; Approve, Paid, Received and notes are
+// kept in the tracker under fin.pentagon, keyed by document number. Rows are
+// cached for a minute. A query that fails (or doesn't exist yet) just leaves
+// that table to the hand-entered rows, with a note saying why.
+const FINANCE_PENTAGON_COMPANY = "SOI Aviation";
+const FINANCE_CACHE_MS = 60_000;
+const financeRowCache = new Map(); // queryName -> { at, rows, error }
+const PG_KIND = { dailyPayments: "ap", approvedToPay: "ap", expectedReceipts: "ar", accounts: "bank" };
+
+async function financeRows(q) {
+  const hit = financeRowCache.get(q.queryName);
+  if (hit && Date.now() - hit.at < FINANCE_CACHE_MS) return hit;
+  let entry;
+  try {
+    const data = await pentagonQuery(q.queryName, { params: {}, limit: 500 });
+    entry = { at: Date.now(), rows: resultRows(data), error: null };
+  } catch (err) {
+    entry = { at: Date.now(), rows: [], error: /not configured/i.test(err.message) ? "Pentagon isn't connected" : `Query ${q.queryName} didn't run — has it been created in Transmute?` };
+    console.error(`Finance rows from ${q.queryName} failed: ${err.message}`);
+  }
+  financeRowCache.set(q.queryName, entry);
+  return entry;
+}
+
+function emptyPg() {
+  return { approved: {}, received: {}, notes: {} };
+}
+
+async function pentagonFinance(fin) {
+  const pg = Object.assign(emptyPg(), fin.pentagon || {});
+  const [ap, ar, banks] = await Promise.all([
+    financeRows(FINANCE_QUERIES.payables),
+    financeRows(FINANCE_QUERIES.receivables),
+    financeRows(FINANCE_QUERIES.banks),
+  ]);
+  const val = (q, row, name) => {
+    const col = q.fields[name];
+    return col && Object.prototype.hasOwnProperty.call(row, col) ? row[col] : undefined;
+  };
+  const text = (v) => (v === null || v === undefined ? "" : String(v));
+  const money = (v) => (Number.isFinite(Number(v)) ? Math.round(Number(v) * 100) / 100 : 0);
+  const date = (v) => text(v).slice(0, 10);
+  const out = { dailyPayments: [], approvedToPay: [], expectedReceipts: [], accounts: [] };
+
+  for (const row of ap.rows) {
+    const key = text(val(FINANCE_QUERIES.payables, row, "key"));
+    if (!key) continue;
+    const r = {
+      id: `pg:${key}`, source: "pentagon", docNo: key,
+      vendor: text(val(FINANCE_QUERIES.payables, row, "party")),
+      amount: money(val(FINANCE_QUERIES.payables, row, "amount")),
+      due: date(val(FINANCE_QUERIES.payables, row, "due")),
+      ref: text(val(FINANCE_QUERIES.payables, row, "ref")),
+      notes: pg.notes[`ap:${key}`] || "",
+    };
+    const a = pg.approved[key];
+    if (a) out.approvedToPay.push(Object.assign(r, { approvedAt: a.approvedAt, approvedBy: a.approvedBy, paid: !!a.paid }));
+    else out.dailyPayments.push(r);
+  }
+  for (const row of ar.rows) {
+    const key = text(val(FINANCE_QUERIES.receivables, row, "key"));
+    if (!key) continue;
+    out.expectedReceipts.push({
+      id: `pg:${key}`, source: "pentagon", docNo: key,
+      party: text(val(FINANCE_QUERIES.receivables, row, "party")),
+      amount: money(val(FINANCE_QUERIES.receivables, row, "amount")),
+      expected: date(val(FINANCE_QUERIES.receivables, row, "due")),
+      ref: text(val(FINANCE_QUERIES.receivables, row, "ref")),
+      received: !!pg.received[key],
+      notes: pg.notes[`ar:${key}`] || "",
+    });
+  }
+  for (const row of banks.rows) {
+    const key = text(val(FINANCE_QUERIES.banks, row, "key"));
+    if (!key) continue;
+    out.accounts.push({
+      id: `pg:${key}`, source: "pentagon", docNo: key, name: key,
+      balance: money(val(FINANCE_QUERIES.banks, row, "balance")),
+      asOf: date(val(FINANCE_QUERIES.banks, row, "asOf")),
+      notes: pg.notes[`bank:${key}`] || "",
+    });
+  }
+  const status = (e) => ({ connected: !e.error, error: e.error, count: e.rows.length });
+  return { rows: out, status: { payables: status(ap), receivables: status(ar), banks: status(banks) } };
+}
+
 app.get(
   "/api/finance",
   authMiddleware,
@@ -508,7 +599,17 @@ app.get(
       return res.status(403).json({ error: "Finance isn't available for your account" });
     }
     const all = await getFinance();
-    res.json({ ...emptyFinance(), ...(all[company] || {}) });
+    const fin = { ...emptyFinance(), ...(all[company] || {}) };
+    const manual = {
+      accounts: fin.accounts, dailyPayments: fin.dailyPayments,
+      approvedToPay: fin.approvedToPay, expectedReceipts: fin.expectedReceipts,
+    };
+    if (company !== FINANCE_PENTAGON_COMPANY) return res.json(manual);
+    const pentagon = await pentagonFinance(fin);
+    // Pentagon rows first, then anything typed in by hand.
+    const merged = {};
+    for (const list of Object.keys(manual)) merged[list] = pentagon.rows[list].concat(manual[list]);
+    res.json(Object.assign(merged, { pentagon: pentagon.status }));
   })
 );
 
@@ -537,6 +638,40 @@ app.post(
 
     let problem = null;
     let result = null;
+    // Rows from Pentagon ("pg:<document number>"): the money columns are
+    // Pentagon's; only approve / paid / received / notes are kept here.
+    const pgKey = typeof body.id === "string" && body.id.startsWith("pg:") ? body.id.slice(3).slice(0, 80) : null;
+    if (pgKey) {
+      if (company !== FINANCE_PENTAGON_COMPANY) return res.status(400).json({ error: "Unknown row" });
+      const kind = PG_KIND[list];
+      const extra = Object.keys(fields).filter((k) => !["notes", "paid", "received"].includes(k));
+      if (op === "add" || op === "delete" || extra.length) {
+        return res.status(400).json({ error: "That row comes from Pentagon — change it in Pentagon. Only approval, ticks and notes are kept here." });
+      }
+      await withFinance((all) => {
+        const fin = (all[company] = { ...emptyFinance(), ...(all[company] || {}) });
+        const pg = (fin.pentagon = Object.assign(emptyPg(), fin.pentagon || {}));
+        if (op === "approve" && kind === "ap") {
+          pg.approved[pgKey] = { approvedAt: new Date().toISOString(), approvedBy: req.user.username, paid: false };
+          result = pg.approved[pgKey];
+        } else if (op === "unapprove" && kind === "ap") {
+          delete pg.approved[pgKey];
+          result = { ok: true };
+        } else if (op === "update") {
+          if ("notes" in fields) pg.notes[`${kind}:${pgKey}`] = String(fields.notes || "").trim().slice(0, 500);
+          if ("paid" in fields) {
+            if (!pg.approved[pgKey]) { problem = "Approve it before marking it paid"; return; }
+            pg.approved[pgKey].paid = !!fields.paid;
+          }
+          if ("received" in fields && kind === "ar") pg.received[pgKey] = !!fields.received;
+          result = { ok: true };
+        } else {
+          problem = "Unknown change";
+        }
+      });
+      if (problem) return res.status(400).json({ error: problem });
+      return res.json(result);
+    }
     await withFinance((all) => {
       const fin = (all[company] = { ...emptyFinance(), ...(all[company] || {}) });
       const rows = fin[list];
@@ -929,6 +1064,25 @@ app.get(
       res.json(await eventsBetween(u && u.email, start, days));
     } catch (err) {
       if (err instanceof CalendarError) return res.status(409).json({ error: err.message, code: err.code });
+      throw err;
+    }
+  })
+);
+
+// Work inbox: the signed-in person's own unread Outlook mail (last 1–14
+// days), one card per conversation, Outlook's preview text, no AI. The
+// mailbox is the email on their login — never one from the browser.
+app.get(
+  "/api/inbox",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const days = Math.min(Math.max(parseInt(req.query.days, 10) || 3, 1), 14);
+    const users = await getUsers();
+    const u = users.find((x) => sameUser(x.username, req.user.username));
+    try {
+      res.json(await unreadThreads(u && u.email, days));
+    } catch (err) {
+      if (err instanceof MailError) return res.status(409).json({ error: err.message, code: err.code });
       throw err;
     }
   })

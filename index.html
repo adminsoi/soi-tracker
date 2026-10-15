@@ -177,6 +177,18 @@
   .mn-title { font: 20px 'Libre Caslon Display', Georgia, serif; }
   .mn-urgent { border-color: #e3bccb; }
   .mn-badge-red { background: #f6dcdb; color: #a03d3a; }
+  .links-a { font-size: 11px; border: 1px solid var(--line); padding: 7px 10px; border-radius: 5px; background: var(--card); color: var(--ink); }
+  .mail-card { border-top: 1px solid var(--line); padding: 18px 2px 20px; }
+  .mn-group[open] > .mail-card:first-of-type { border-top: 0; padding-top: 4px; }
+  .mail-card.is-done { opacity: .6; }
+  .mail-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .mail-from { font-size: 9.5px; letter-spacing: 1.4px; color: var(--muted); font-weight: 600; }
+  .mail-done { font-size: 11px; display: flex; gap: 6px; align-items: center; cursor: pointer; white-space: nowrap; }
+  .mail-subject { font-size: 22px; margin: 8px 0 8px; line-height: 1.25; }
+  .mail-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .mail-preview { font-size: 13px; line-height: 1.75; margin: 0 0 10px; }
+  .mail-open { display: inline-block; margin-top: 12px; font-size: 11px; border: 1px solid var(--line); padding: 7px 11px; border-radius: 6px; color: var(--ink); }
+  .mail-open:hover { background: var(--soft); }
   .month-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
   .mg-dow { font-size: 9px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); padding: 10px; background: #f2ede3; border-bottom: 1px solid var(--line); font-weight: 600; }
   .mg-cell { min-height: 108px; padding: 6px; border-right: 1px solid #efe8dc; border-bottom: 1px solid #efe8dc; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
@@ -335,7 +347,7 @@
   var me = null;
   var DEPARTMENTS = [];
   var activeCompany = null;
-  var page = "departments";        // departments | overview | mentions | calendar | global
+  var page = "departments";        // departments | overview | mentions | inbox | calendar | global
   var activeDept = null;
   var subView = {};                // dept -> "tasks" | "finance" | Pentagon view id
   var tasks = [];                  // tasks made in the tracker
@@ -499,6 +511,7 @@
       requestRender();
     }).catch(function () {});
     api("/api/claude-projects").then(function (p) { claudeProjects = p || {}; requestRender(); }).catch(function () {});
+    loadInbox(true);
   }
 
   // ---------- Data ----------
@@ -582,7 +595,8 @@
   function navItems() {
     var items = [{ group: "WORK", id: "departments", ic: "▣", label: "Departments" }];
     if (me.fullAccess || me.departments.length > 1) items.push({ id: "overview", ic: "◷", label: "Overview" });
-    items.push({ group: "YOU", id: "mentions", ic: "✉", label: "Mentions you", badge: mineOpen });
+    items.push({ group: "YOU", id: "mentions", ic: "@", label: "Mentions you", badge: mineOpen });
+    items.push({ id: "inbox", ic: "✉", label: "Work inbox", badge: inboxNeeds });
     var tools = [];
     tools.push({ id: "calendar", ic: "▦", label: "Calendar" });
     if (canUseAll()) tools.push({ id: "global", ic: "◎", label: "Global" });
@@ -621,6 +635,7 @@
       if (page === "overview") html = renderOverview();
       else if (page === "mentions") html = renderMentionsShell();
       else if (page === "calendar") html = renderCalendar();
+      else if (page === "inbox") html = renderInbox();
       else if (page === "global") html = renderGlobalShell();
       else html = renderDepartment();
     } catch (e) {
@@ -908,6 +923,13 @@
     var mgr = isManager();
     setQuickAdd("Add payment", "fin:dailyPayments");
     var fin = function (list, r, key, type, ph) {
+      if (r.source === "pentagon" && key !== "notes") {
+        if (type === "number") return '<span class="static fb-num">' + E(money(r[key])) + "</span>";
+        if (type === "date") return '<span class="static">' + (r[key] ? E(fmtDate(r[key])) : '<span class="dim">—</span>') + "</span>";
+        var first = key === "name" || key === "vendor" || key === "party";
+        return '<span class="static">' + E(r[key] || "—") + (first ? '<span class="src">PENTAGON</span>' : "") + "</span>" +
+          (first && (r.docNo || r.ref) && key !== "name" ? '<span class="co-note">' + E([r.docNo ? "#" + r.docNo : "", r.ref].filter(Boolean).join(" · ")) + "</span>" : "");
+      }
       var attrs = ' data-fin="' + list + '" data-fid="' + E(r.id) + '" data-key="' + key + '"';
       if (type === "textarea") return '<textarea class="fb-in fb-notes" rows="1"' + attrs + ' placeholder="Notes…">' + E(r[key]) + "</textarea>";
       return '<input class="fb-in' + (type === "number" ? " fb-num" : "") + '" type="' + (type || "text") + '"' + (type === "number" ? ' step="0.01"' : "") + attrs + ' value="' + E(r[key]) + '" placeholder="' + E(ph || "") + '">';
@@ -915,7 +937,14 @@
     var tick = function (list, r, key, label) {
       return '<input class="check" type="checkbox" data-fin-tick="' + list + '" data-fid="' + E(r.id) + '" data-key="' + key + '"' + (r[key] ? " checked" : "") + (mgr ? "" : " disabled") + ' aria-label="' + E(label) + '">';
     };
-    var del = function (list, r) { return '<button type="button" class="del" data-fin-del="' + list + '" data-fid="' + E(r.id) + '" title="Delete" aria-label="Delete">×</button>'; };
+    var del = function (list, r) { return r.source === "pentagon" ? "" : '<button type="button" class="del" data-fin-del="' + list + '" data-fid="' + E(r.id) + '" title="Delete" aria-label="Delete">×</button>'; };
+    // Where each table's rows come from (SOI pulls from Pentagon).
+    var pgNote = "";
+    if (f.pentagon) {
+      var line = function (label, st) { return st.connected ? label + ": " + st.count + " from Pentagon" : label + ": " + st.error; };
+      pgNote = '<div class="banner"><b>Bills, customer invoices and bank balances come from Pentagon</b> (refreshed every minute; amounts change in Pentagon, not here). ' +
+        E([line("Bills", f.pentagon.payables), line("Customer invoices", f.pentagon.receivables), line("Bank balances", f.pentagon.banks)].join(" · ")) + " — you can still add rows by hand.</div>";
+    }
     var sect = function (title, note, list, label) {
       return '<div class="section-title"><div><h2>' + title + '</h2><span class="small-note">' + note + "</span></div>" +
         (list ? '<button type="button" class="primary" data-add="fin:' + list + '">+ ' + label + "</button>" : "") + "</div>";
@@ -926,9 +955,10 @@
       metric("Payments due", money(sum(f.dailyPayments, "amount")), f.dailyPayments.length + " awaiting approval") +
       metric("Approved to pay", money(sum(f.approvedToPay, "amount")), f.approvedToPay.length + " approved, " + f.approvedToPay.filter(function (r) { return r.paid; }).length + " paid") +
       metric("Expected in", money(sum(unreceived, "amount")), unreceived.length + " still to receive") + "</div>" +
-      '<div class="banner">Typed in by people here — <b>nothing is connected to a bank</b> and nothing is ever sent. Don\'t enter account numbers. ' +
+      pgNote +
+      '<div class="banner"><b>Nothing here is connected to a bank</b> and nothing is ever sent. Don\'t enter account numbers. ' +
       (mgr ? "As a manager you approve payments and tick paid / received." : "Only a manager can approve payments or tick paid / received.") + "</div>" +
-      sect("Bank accounts", "Current balances, entered by hand.", "accounts", "Add account") +
+      sect("Bank accounts", f.pentagon ? "Balances from Pentagon, plus any entered by hand." : "Current balances, entered by hand.", "accounts", "Add account") +
       '<div class="table-wrap"><table class="narrow"><thead><tr><th>Account</th><th>Balance</th><th>As of</th><th>Notes</th><th></th></tr></thead><tbody>' +
       (f.accounts.length ? f.accounts.map(function (a) {
         return "<tr><td>" + fin("accounts", a, "name", "text", "Account name") + "</td><td>" + fin("accounts", a, "balance", "number", "0.00") + "</td><td>" + fin("accounts", a, "asOf", "date") +
@@ -1578,6 +1608,115 @@
       var d = $("#mn-g-" + target);
       if (d) { d.open = true; d.scrollIntoView({ behavior: "smooth", block: "start" }); }
     }
+  });
+
+  // ---------- Work inbox ----------
+  // Your own unread Outlook mail, one card per conversation, with Outlook's
+  // preview text (no AI). "Needs you" = flagged, high importance or sent to
+  // you directly; the rest is FYI. Done is remembered on this device and a
+  // conversation comes back if a newer message arrives. Read-only: replying
+  // happens in Outlook.
+  var inboxDays = 3, inboxData = null, inboxError = null, inboxNeeds = 0, inboxSig = "";
+  function inboxDoneKey() { return "soi_tracker_inbox_done_" + (me ? me.username.toLowerCase() : ""); }
+  function inboxDone() { try { return JSON.parse(localStorage.getItem(inboxDoneKey()) || "{}"); } catch (e) { return {}; } }
+  function setInboxDone(id, receivedAt, done) {
+    var d = inboxDone();
+    if (done) d[id] = receivedAt; else delete d[id];
+    // Keep it small: forget anything older than a month.
+    var cutoff = new Date(Date.now() - 31 * 86400000).toISOString();
+    Object.keys(d).forEach(function (k) { if (String(d[k]) < cutoff) delete d[k]; });
+    try { localStorage.setItem(inboxDoneKey(), JSON.stringify(d)); } catch (e) {}
+  }
+  function isInboxDone(t, done) { return !!done[t.id] && String(done[t.id]) >= String(t.receivedAt); }
+
+  function renderInbox() {
+    setBreadcrumb(["You", "Work inbox"]);
+    setTimeout(function () { loadInbox(false); }, 0);
+    return '<div class="intro"><div><div class="eyebrow">Outlook' + (inboxData ? " · " + E(inboxData.mailbox) : "") + '</div><h1>Work inbox</h1>' +
+      "<p>Your unread Outlook mail, newest first. Reply in Outlook when you're ready — nothing here sends or changes your mail.</p>" +
+      '<p class="small-note" id="inbox-note"></p></div>' +
+      '<div class="co-wrap"><div class="eyebrow">Received in the last</div><div class="cos">' + [[1, "Day"], [3, "3 days"], [7, "Week"]].map(function (d) {
+        return '<button type="button" class="co ' + (d[0] === inboxDays ? "active" : "") + '" data-inbox-days="' + d[0] + '">' + d[1] + "</button>";
+      }).join("") + '</div><a class="links-a" href="https://outlook.office.com/mail/" target="_blank" rel="noopener noreferrer">Open Outlook ↗</a></div></div>' +
+      '<div id="inbox-body"><div class="empty">Loading…</div></div>';
+  }
+
+  function loadInbox(quiet) {
+    api("/api/inbox?days=" + inboxDays).then(function (data) {
+      inboxError = null;
+      var sig = JSON.stringify(data.items);
+      var same = sig === inboxSig;
+      inboxSig = sig;
+      inboxData = data;
+      updateInboxBadge();
+      if (quiet && same) return;
+      drawInbox();
+    }).catch(function (err) {
+      if (quiet) return;
+      inboxError = err;
+      var box = $("#inbox-body");
+      if (box) box.innerHTML = '<div class="banner">' + E(err.message) + "</div>";
+    });
+  }
+  function updateInboxBadge() {
+    if (!inboxData) return;
+    var done = inboxDone();
+    var n = inboxData.items.filter(function (t) { return t.needsYou && !isInboxDone(t, done); }).length;
+    if (n !== inboxNeeds) { inboxNeeds = n; renderNav(); }
+  }
+
+  function drawInbox() {
+    var box = $("#inbox-body");
+    if (!box || !inboxData) return;
+    var done = inboxDone();
+    var items = inboxData.items;
+    var needs = items.filter(function (t) { return t.needsYou && !isInboxDone(t, done); });
+    var fyi = items.filter(function (t) { return !t.needsYou && !isInboxDone(t, done); });
+    var finished = items.filter(function (t) { return isInboxDone(t, done); });
+    var note = $("#inbox-note");
+    if (note) note.textContent = "Updated " + new Date().toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) + " · " + items.length + " unread conversation" + (items.length === 1 ? "" : "s") + " · checks again every few minutes";
+    var section = function (id, title, list, open) {
+      return '<details class="mn-group" id="inbox-' + id + '"' + (open ? " open" : "") + '><summary><span class="mn-title">' + title + '</span><span class="badge">' + list.length + "</span></summary>" +
+        (list.length ? list.map(mailCard).join("") : '<div class="small-note" style="padding:6px 2px 14px;">Nothing here.</div>') + "</details>";
+    };
+    box.innerHTML = items.length
+      ? section("needs", "Needs you", needs, true) + section("fyi", "FYI", fyi, needs.length === 0) + (finished.length ? section("done", "Done", finished, false) : "")
+      : '<div class="card empty">No unread mail in the last ' + (inboxDays === 1 ? "day" : inboxDays === 7 ? "week" : inboxDays + " days") + ". 🎉</div>";
+    function mailCard(t) {
+      var isDone = isInboxDone(t, done);
+      var when = new Date(t.receivedAt).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+      var link = safeLink(t.webLink);
+      var names = function (list) { return list.map(function (p) { return p.name || p.email; }).join(", "); };
+      return '<article class="mail-card' + (isDone ? " is-done" : "") + '">' +
+        '<div class="mail-head"><div class="mail-from">' + E(t.from.name || t.from.email) + (t.from.email && t.from.name ? " &lt;" + E(t.from.email) + "&gt;" : "") + " · " + E(when) + "</div>" +
+        '<label class="mail-done"><input type="checkbox" class="check" data-inbox-done="' + E(t.id) + '" data-received="' + E(t.receivedAt) + '"' + (isDone ? " checked" : "") + "> Done</label></div>" +
+        '<h3 class="mail-subject">' + E(t.subject) + "</h3>" +
+        '<div class="mail-tags">' + (t.unread > 1 ? '<span class="pill">' + t.unread + " unread in thread</span>" : "") +
+        (t.needsYou ? '<span class="pill rose">' + E(t.reason) + "</span>" : '<span class="pill">' + E(t.reason) + "</span>") +
+        (t.attachments ? '<span class="pill">Attachments</span>' : "") + "</div>" +
+        (t.preview ? '<p class="mail-preview">' + E(t.preview) + (t.preview.length >= 400 ? "…" : "") + "</p>" : "") +
+        '<div class="small-note">To: ' + E(names(t.to) || "—") + (t.cc.length ? " · cc: " + E(names(t.cc)) : "") + "</div>" +
+        (link ? '<a class="mail-open" href="' + E(link) + '" target="_blank" rel="noopener noreferrer">Open in Outlook ↗</a>' : "") +
+        "</article>";
+    }
+  }
+
+  // Checks every few minutes on any page, so the sidebar count stays current.
+  setInterval(function () { if (!document.hidden && me) loadInbox(true); }, 3 * 60 * 1000);
+  document.addEventListener("visibilitychange", function () { if (!document.hidden && page === "inbox" && me) loadInbox(true); });
+  document.addEventListener("change", function (e) {
+    var cb = e.target.closest && e.target.closest("[data-inbox-done]");
+    if (!cb) return;
+    setInboxDone(cb.dataset.inboxDone, cb.dataset.received, cb.checked);
+    updateInboxBadge();
+    drawInbox();
+  });
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest && e.target.closest("[data-inbox-days]");
+    if (!b || page !== "inbox") return;
+    inboxDays = +b.dataset.inboxDays;
+    inboxSig = "";
+    render();
   });
 
   // ---------- Calendar ----------
