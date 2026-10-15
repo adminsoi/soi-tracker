@@ -462,7 +462,7 @@
       readHash();
       render();
       refresh();
-      if (!pollTimer) pollTimer = setInterval(refresh, 15000);
+      if (!pollTimer) pollTimer = setInterval(function () { if (!document.hidden) refresh(); }, POLL_MS);
     });
     api("/api/pentagon-views").then(function (cfg) {
       if (cfg && cfg.views) PENTAGON_VIEWS = cfg.views;
@@ -473,6 +473,21 @@
   }
 
   // ---------- Data ----------
+  // Background sync: every 30 seconds, paused while the tab is hidden, and it
+  // only redraws when something actually changed — and only on pages built
+  // from that data. Calendar, Mentions you, Global and Pentagon load their
+  // own data once and are left alone, so (for example) the HR calendar
+  // doesn't reload under you.
+  var POLL_MS = 30000;
+  var lastSnapshot = "";
+  function pageUsesLiveData() {
+    if (page === "overview") return true;
+    if (page !== "departments") return false;
+    var sub = subView[activeDept];
+    return !sub || sub === "tasks" || sub === "finance";
+  }
+  document.addEventListener("visibilitychange", function () { if (!document.hidden && me) refresh(); });
+
   function refresh() {
     if (!me) return;
     setSync("busy", "Syncing…");
@@ -487,9 +502,14 @@
       tasks = r[0];
       cards = r[1].cards || [];
       pentagonErrors = r[1].errors || [];
-      loadedOnce = true;
       setSync("on", "Live");
-      requestRender();
+      var snapshot = JSON.stringify([activeCompany, tasks, cards, pentagonErrors, finance]);
+      var changed = snapshot !== lastSnapshot;
+      lastSnapshot = snapshot;
+      var first = !loadedOnce;
+      loadedOnce = true;
+      if (first || (changed && pageUsesLiveData())) requestRender();
+      else renderNav();
     }).catch(function (err) {
       if (err.message === "Session expired") return;
       setSync("off", "Sync error");
@@ -552,16 +572,20 @@
   function go(hash) { if (location.hash === "#" + hash) { readHash(); render(); } else location.hash = hash; }
 
   // ---------- Render ----------
-  function render() {
-    if (!me) return;
-    charts.forEach(function (c) { try { c.destroy(); } catch (e) {} });
-    charts = [];
+  function renderNav() {
     $("#nav").innerHTML = navItems().map(function (n) {
       var href = n.id === "departments" ? "dept/" + encodeURIComponent(activeDept || "") : n.id;
       return (n.group ? '<div class="nav-group">' + n.group + "</div>" : "") +
         '<a href="#' + href + '" class="' + (n.id === page ? "active" : "") + '"><span class="ic">' + n.ic + "</span>" + E(n.label) +
         (n.badge ? '<span class="badge">' + n.badge + "</span>" : "") + "</a>";
     }).join("");
+  }
+
+  function render() {
+    if (!me) return;
+    charts.forEach(function (c) { try { c.destroy(); } catch (e) {} });
+    charts = [];
+    renderNav();
     $("#quickAdd").style.display = "none";
     var html;
     try {
@@ -1222,7 +1246,7 @@
     var pentagon = hasSOI() ? api("/api/rfq-marks/mine").catch(function () { return []; }) : Promise.resolve([]);
     return Promise.all([api("/api/tasks/mine"), pentagon]).then(function (r) {
       var n = r[0].filter(function (t) { return !isDone(t); }).length + r[1].filter(function (m) { return !m.done; }).length;
-      if (n !== mineOpen) { mineOpen = n; requestRender(); }
+      if (n !== mineOpen) { mineOpen = n; renderNav(); }
       return r;
     });
   }
