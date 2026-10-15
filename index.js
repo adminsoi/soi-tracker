@@ -39,7 +39,7 @@ const {
 const { sendMail } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError } = require("./calendar");
 const { hrEvents, cleanFeedUrl, FeedError, WINDOWS_TO_IANA } = require("./hrcal");
-const { itRequestsConfigured, fetchItRequests, IT_REQUESTS_MAILBOX, parseFormWorkbook, recordFromEmail, FormFileError } = require("./itrequests");
+const { itRequestsConfigured, fetchItRequests, IT_REQUESTS_MAILBOX, parseFormWorkbook, recordFromEmail, FormFileError, officeStamp } = require("./itrequests");
 const { unreadThreads, MailError } = require("./mail");
 const { pentagonQuery } = require("./pentagon");
 const {
@@ -95,6 +95,7 @@ function sameUser(a, b) {
 
 const TASK_STATUSES = ["todo", "in_progress", "blocked", "done"];
 const TASK_PRIORITIES = ["low", "medium", "high"];
+const TASK_KINDS = ["task", "project"];
 
 function taskCompany(t) {
   return t.company || DEFAULT_COMPANY;
@@ -335,6 +336,9 @@ app.post(
     };
     cleanTaskFields(body, task);
     if (body.parentId) task.parentId = String(body.parentId);
+    // Tasks (quick, one-off) vs projects (long-term, with sub-tasks). Sub-tasks
+    // belong to their project and don't need one.
+    else if (TASK_KINDS.includes(body.kind)) task.kind = body.kind;
 
     let parentProblem = null;
     await withTasks((tasks) => {
@@ -2257,6 +2261,7 @@ async function syncItRequests() {
         createdAt: Date.parse(r.receivedAt) || Date.now(),
         createdBy: "IT request form",
         source: "form",
+        kind: "task",
         requester: r.requester.slice(0, 120),
         formResponseId: r.responseId || r.messageId,
       }));
@@ -2289,6 +2294,53 @@ async function syncItRequests() {
   }
   return itSync;
 }
+
+// A ticket added by hand on IT → Requests (a call, a walk-up, a Teams
+// message): a request record like a form one, plus a task on IT → Tasks for
+// the IT default person. Anyone who can see Requests can add one.
+app.post(
+  "/api/it-requests",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!canSeeItRequests(req.user)) return res.status(403).json({ error: "Only IT can add tickets" });
+    const b = req.body || {};
+    const text = (v, n) => String(v == null ? "" : v).replace(/\s+/g, " ").trim().slice(0, n);
+    const issue = String(b.issue || "").trim().slice(0, 1000);
+    if (!issue) return res.status(400).json({ error: "Describe the issue" });
+    const name = text(b.name, 80), email = text(b.email, 120).toLowerCase();
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "That email doesn't look right" });
+    const priority = IT_PRIORITIES.includes(b.priority) ? b.priority : "";
+    const settings = await getSettings();
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const task = {
+      id: "t" + id,
+      title: issue.split(/[.!?\n]/)[0].trim().slice(0, 140) || "IT ticket",
+      company: "SOI Aviation",
+      department: "IT",
+      status: "todo",
+      priority: priority ? PRIORITY_TO_TASK[priority] : "medium",
+      owner: (settings.departmentDefaults || {}).IT || "",
+      dueDate: "",
+      notes: [name || email ? `Requested by: ${[name, email].filter(Boolean).join(" · ")}` : "", issue].filter(Boolean).join("\n").slice(0, 500),
+      createdAt: Date.now(),
+      createdBy: req.user.username,
+      source: "form",
+      kind: "task",
+      requester: name || email,
+      formResponseId: "manual-" + id,
+    };
+    const rec = {
+      id: "manual-" + id, formId: null, source: "manual",
+      submittedAt: officeStamp(new Date().toISOString()),
+      name, email, phone: text(b.phone, 40), company: text(b.company, 40), remote: "", issue, startedOn: "",
+      urgency: "", contact: text(b.contact, 60), notes: "",
+      priority, status: "new", taskId: task.id, addedAt: Date.now(), addedBy: req.user.username,
+    };
+    await withTasks((tasks) => { tasks.unshift(task); });
+    await withItRequests((list) => { list.push(rec); });
+    res.status(201).json(rec);
+  })
+);
 
 // Status for IT → Requests, and "Check now" for managers.
 function itSyncStatus() {

@@ -196,7 +196,7 @@
   .nb-quote { background: var(--soft); border-radius: 9px; padding: 12px 14px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; margin-bottom: 20px; }
   .nb-field { margin-bottom: 16px; }
   .nb-field label { display: block; font-size: 10px; letter-spacing: 1.4px; text-transform: uppercase; color: var(--muted); font-weight: 600; margin-bottom: 6px; }
-  .nb-field input, .nb-field textarea { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); font: inherit; font-size: 13.5px; line-height: 1.55; color: var(--ink); }
+  .nb-field input, .nb-field textarea, .nb-field select { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); font: inherit; font-size: 13.5px; line-height: 1.55; color: var(--ink); }
   .nb-field textarea { resize: vertical; min-height: 90px; }
   .nb-field input:focus, .nb-field textarea:focus, .nb-title:focus { outline: 2px solid #d9c3cb; outline-offset: 1px; }
   .nb-title { width: 100%; box-sizing: border-box; border: 0; background: none; font: 26px/1.2 'Libre Caslon Display', Georgia, serif; color: var(--ink); padding: 2px 0; margin-bottom: 4px; }
@@ -422,7 +422,7 @@
   var activeCompany = null;
   var page = "departments";        // departments | overview | mentions | inbox | calendar | global
   var activeDept = null;
-  var subView = {};                // dept -> "tasks" | "finance" | Pentagon view id
+  var subView = {};                // dept -> "tasks" | "projects" | "finance" | … | Pentagon view id
   var tasks = [];                  // tasks made in the tracker
   var cards = [];                  // Pentagon rows as task-shaped cards
   var pentagonErrors = [];
@@ -471,6 +471,15 @@
   function shortDept(d) { return DEPT_SHORT[d] || d; }
   function isOps(d) { return OPS_DEPTS.indexOf(d) !== -1; }
   function isCard(t) { return t.source === "pentagon"; }
+  // Tasks are quick one-off items; projects are long-term and hold sub-tasks.
+  // Older rows have no kind: Procurement / Purchasing / Warehouse rows and
+  // IT form tickets are tasks, everything else was a project.
+  function itemKind(t) {
+    if (t.parentId) return "sub";
+    if (t.kind === "task" || t.kind === "project") return t.kind;
+    if (isCard(t) || t.source === "form" || isOps(t.department)) return "task";
+    return "project";
+  }
   function safeLink(url) {
     try { var u = new URL(url); return u.protocol === "https:" || u.protocol === "http:" ? u.toString() : null; } catch (e) { return null; }
   }
@@ -601,7 +610,7 @@
     if (page === "overview") return true;
     if (page !== "departments") return false;
     var sub = subView[activeDept];
-    return !sub || sub === "tasks" || sub === "finance";
+    return !sub || sub === "tasks" || sub === "projects" || sub === "finance";
   }
   document.addEventListener("visibilitychange", function () { if (!document.hidden && me) refresh(); });
 
@@ -755,7 +764,8 @@
     var subs = [];
     if (dept === "Accounting & Finance" && canSeeFinance()) subs.push({ id: "finance", label: "Finance" });
     if (dept === "Business Development" && (activeCompany === "SOI Aviation" || (activeCompany === ALL && hasSOI()))) subs.push({ id: "analytics", label: "Analytics" });
-    subs.push({ id: "tasks", label: isOps(dept) ? "Tasks" : "Projects" });
+    subs.push({ id: "tasks", label: "Tasks" });
+    subs.push({ id: "projects", label: "Projects" });
     if (dept === "IT" && canSeeItRequests()) subs.push({ id: "requests", label: "Requests" });
     if (dept === "IT" && me.itNotebook) subs.push({ id: "resolved", label: "Resolved" });
     if (dept === "HR" && canSeeAttendance()) subs.push({ id: "attendance", label: "Attendance" });
@@ -800,7 +810,8 @@
     else if (sub === "requests") body = renderItRequests();
     else if (sub === "resolved") body = renderNotebook();
     else if (sub === "attendance") body = renderAttendance();
-    else if (sub === "tasks") body = isOps(dept) ? renderOpsTable(dept) : renderProjectTable(dept);
+    else if (sub === "tasks") body = isOps(dept) ? renderOpsTable(dept) : renderTaskTable(dept);
+    else if (sub === "projects") body = renderProjectTable(dept);
     else {
       var view = views.filter(function (v) { return v.id === sub; })[0];
       body = view ? renderPentagonListShell(view) : "";
@@ -825,7 +836,7 @@
     });
   }
 
-  function toolbar(dept, addLabel) {
+  function toolbar(dept, addLabel, kind) {
     var views = pentagonViewsFor(dept).filter(function (v) { return v.tasks; });
     var sources = [{ id: "all", label: "All" }, { id: "tasks", label: "Tasks" }].concat(views.map(function (v) { return { id: v.id, label: v.label }; }));
     if (!sources.some(function (s) { return s.id === showSource; })) showSource = "all";
@@ -851,7 +862,7 @@
       }).join("") + "</select>";
     }
     if (pentagonErrors.length && views.length) html += '<span class="small-note" title="' + E(pentagonErrors.join("; ")) + '">Some Pentagon rows couldn\'t load.</span>';
-    html += '<button type="button" class="primary" data-add="' + E(dept) + '">+ ' + E(addLabel) + "</button></div>";
+    html += '<button type="button" class="primary" data-add="' + E(dept + "|" + (kind || "task")) + '">+ ' + E(addLabel) + "</button></div>";
     return html;
   }
 
@@ -925,17 +936,17 @@
       "<td>" + delButton(t) + "</td></tr>";
   }
   function renderOpsTable(dept) {
-    var all = deptItems(dept);
+    var all = deptItems(dept).filter(function (t) { return itemKind(t) === "task"; });
     var list = sortRows(filtered(all));
-    var ds = drafts.filter(function (d) { return d.department === dept && !d.parentId; });
+    var ds = drafts.filter(function (d) { return d.department === dept && !d.parentId && d.kind !== "project"; });
     var open = all.filter(function (t) { return !isDone(t); }).length;
     var late = all.filter(isOverdue).length;
-    setQuickAdd("Add row", dept);
+    setQuickAdd("Add task", dept + "|task");
     return '<div class="summary-cards">' +
       metric("Open", open, "of " + all.length + " item" + (all.length === 1 ? "" : "s")) +
       metric("Overdue", late, "Past due and not done", late > 0) +
       metric("Obsolete", all.filter(function (t) { return t.obsolete === "Yes"; }).length, "Flagged obsolete") + "</div>" +
-      toolbar(dept, "Add row") +
+      toolbar(dept, "Add task", "task") +
       '<div class="table-wrap"><table class="wide"><thead><tr><th>Task</th><th>Part number</th><th>Platform (aircraft)</th><th>Customer</th><th>Obsolete</th><th>Due date</th><th>Responsible</th><th>Done</th><th>Notes</th><th></th></tr></thead><tbody>' +
       (ds.length || list.length ? ds.map(opsRow).join("") + list.map(opsRow).join("") : '<tr><td colspan="10" class="empty">Nothing here yet. Add a row above.</td></tr>') +
       "</tbody></table></div>" + legend();
@@ -948,7 +959,7 @@
     var cls = "project " + (isDone(p) ? "done " : "") + (isOverdue(p) ? "overdue " : "") + (p.draft ? "draft" : "");
     var tools = (!p.draft && ed ? '<button type="button" class="text-button" data-add-sub="' + E(p.id) + '">+ Sub-task</button>' : "") + delButton(p);
     return '<tr class="' + cls + '"><td>' + input(p, "title", p.title, "text", "Project name", ed) +
-      '<span class="co-note">' + (p.source === "form" ? "From the IT form" + (p.requester ? " · " + E(p.requester) : "") + " · " : "") + (subs.length ? doneSubs + "/" + subs.length + " sub-tasks done" : "No sub-tasks yet") + (activeCompany === ALL && p.company ? " · " + E(shortCo(p.company)) : "") + "</span></td>" +
+      '<span class="co-note">' + (subs.length ? doneSubs + "/" + subs.length + " sub-tasks done" : "No sub-tasks yet") + (activeCompany === ALL && p.company ? " · " + E(shortCo(p.company)) : "") + "</span></td>" +
       "<td>" + responsibleCell(p) + "</td><td>" + input(p, "dueDate", p.dueDate, "date", "", ed) + "</td>" +
       '<td class="center">' + doneToggle(p) + '</td><td class="notes-cell">' + input(p, "notes", p.notes, "textarea", "", ed) + "</td>" +
       '<td class="row-tools">' + tools + "</td></tr>";
@@ -962,7 +973,7 @@
       '<td class="row-tools">' + delButton(s) + "</td></tr>";
   }
   function renderProjectTable(dept) {
-    var all = tasks.filter(function (t) { return t.department === dept; });
+    var all = tasks.filter(function (t) { return t.department === dept && itemKind(t) !== "task"; });
     var ids = {};
     all.forEach(function (t) { ids[t.id] = true; });
     var tops = all.filter(function (t) { return !t.parentId || !ids[t.parentId]; });
@@ -978,19 +989,51 @@
         if (shown.indexOf(p) === -1 && filtered(subsOf(p).filter(function (s) { return !s.draft; })).length) shown.push(p);
       });
     }
-    var ds = drafts.filter(function (d) { return d.department === dept && !d.parentId; });
+    var ds = drafts.filter(function (d) { return d.department === dept && !d.parentId && d.kind === "project"; });
     var open = all.filter(function (t) { return !isDone(t); }).length;
     var late = all.filter(isOverdue).length;
-    setQuickAdd("Add project", dept);
+    setQuickAdd("Add project", dept + "|project");
     var rows = ds.map(function (d) { return projectRow(d, []); }).join("") +
       shown.map(function (p) { var subs = subsOf(p); return projectRow(p, subs.filter(function (s) { return !s.draft; })) + subs.map(subRow).join(""); }).join("");
     return '<div class="summary-cards">' +
       metric("Projects", tops.length, tops.filter(function (p) { return !isDone(p); }).length + " still open") +
       metric("Open items", open, "Projects and sub-tasks not done") +
       metric("Overdue", late, "Past due and not done", late > 0) + "</div>" +
-      toolbar(dept, "Add project") +
+      toolbar(dept, "Add project", "project") +
       '<div class="table-wrap"><table class="wide"><thead><tr><th>Project / sub-task</th><th>Person responsible</th><th>Due date</th><th>Done</th><th>Notes</th><th></th></tr></thead><tbody>' +
-      (rows || '<tr><td colspan="6" class="empty">No projects yet. Add one above.</td></tr>') +
+      (rows || '<tr><td colspan="6" class="empty">No projects yet. Projects are longer-term work with sub-tasks — add one above.</td></tr>') +
+      "</tbody></table></div>" + legend();
+  }
+
+  // ---- Tasks (quick, one-off) for IT, Admin, HR and the rest ----
+  function srcNote(t) {
+    var bits = [];
+    if (t.source === "form") bits.push((String(t.formResponseId || "").indexOf("manual-") === 0 ? "IT ticket" : "From the IT form") + (t.requester ? " · " + t.requester : ""));
+    if (activeCompany === ALL && t.company) bits.push(shortCo(t.company));
+    return bits.length ? '<span class="co-note">' + E(bits.join(" · ")) + "</span>" : "";
+  }
+  function taskRow(t) {
+    var ed = t.draft || canEditTask(t);
+    var cls = (isDone(t) ? "done " : "") + (isOverdue(t) ? "overdue " : "") + (t.draft ? "draft" : "");
+    return '<tr class="' + cls + '"><td>' + input(t, "title", t.title, "text", "Task", ed) + srcNote(t) + "</td>" +
+      "<td>" + responsibleCell(t) + "</td><td>" + input(t, "dueDate", t.dueDate, "date", "", ed) + "</td>" +
+      '<td class="center">' + doneToggle(t) + '</td><td class="notes-cell">' + input(t, "notes", t.notes, "textarea", "", ed) + "</td>" +
+      '<td class="row-tools">' + delButton(t) + "</td></tr>";
+  }
+  function renderTaskTable(dept) {
+    var all = tasks.filter(function (t) { return t.department === dept && itemKind(t) === "task"; });
+    var list = sortRows(filtered(all));
+    var ds = drafts.filter(function (d) { return d.department === dept && !d.parentId && d.kind !== "project"; });
+    var open = all.filter(function (t) { return !isDone(t); }).length;
+    var late = all.filter(isOverdue).length;
+    setQuickAdd("Add task", dept + "|task");
+    return '<div class="summary-cards">' +
+      metric("Open", open, "of " + all.length + " task" + (all.length === 1 ? "" : "s")) +
+      metric("Overdue", late, "Past due and not done", late > 0) +
+      metric("Done", all.filter(isDone).length, "Ticked off") + "</div>" +
+      toolbar(dept, "Add task", "task") +
+      '<div class="table-wrap"><table class="wide"><thead><tr><th>Task</th><th>Person responsible</th><th>Due date</th><th>Done</th><th>Notes</th><th></th></tr></thead><tbody>' +
+      (ds.length || list.length ? ds.map(taskRow).join("") + list.map(taskRow).join("") : '<tr><td colspan="6" class="empty">No tasks yet. Tasks are quick, one-off items — add one above. Longer work goes under Projects.</td></tr>') +
       "</tbody></table></div>" + legend();
   }
 
@@ -1062,7 +1105,7 @@
     { id: "done", label: "Resolved", note: "Fixed and closed" }
   ];
   var IT_STATUS_LABEL = { new: "New", progress: "In progress", done: "Resolved" };
-  var itr = { data: null, at: 0, loading: false, error: "", person: "", tab: "all", sort: "newest", picked: {} };
+  var itr = { data: null, at: 0, loading: false, error: "", person: "", tab: "all", sort: "newest", picked: {}, adding: false, form: {}, saving: false };
   function canSeeItRequests() { return !!(me && (me.fullAccess || me.departments.indexOf("IT") !== -1)); }
   function loadItRequests() {
     if (itr.loading) return;
@@ -1286,7 +1329,10 @@
           return '<option value="' + x[0] + '"' + (itr.sort === x[0] ? " selected" : "") + ">Sort: " + x[1] + "</option>";
         }).join("") + "</select>" +
         (itr.person ? '<button type="button" class="text-button" data-itr-who="">Show everyone</button>' : "") +
-        (can ? '<input type="file" id="itrFile" accept=".xlsx" hidden><button type="button" class="primary" id="itrImport">Import from Excel</button>' : "") + "</div>" +
+        '<span class="grow" style="flex:1"></span>' +
+        (can ? '<input type="file" id="itrFile" accept=".xlsx" hidden><button type="button" id="itrImport">Import from Excel</button>' : "") +
+        '<button type="button" class="primary" data-itr-add>+ Add ticket</button></div>' +
+      (itr.adding ? itrAddForm(plist) : "") +
       bulk +
       '<div class="table-wrap"><table class="wide"><thead><tr>' +
         (can ? '<th class="center" style="width:34px;"><input type="checkbox" class="check" data-itr-pickall' + (allShownPicked ? " checked" : "") + ' aria-label="Select all shown"></th>' : "") +
@@ -1300,7 +1346,8 @@
             '<span class="co-note">' + E([r.company, r.remote === "Yes" ? "Remote" : ""].filter(Boolean).join(" · ")) + "</span></td>" +
           '<td><div class="itr-issue" title="' + E(r.issue) + '">' + E(r.issue || "—") + "</div>" +
             (r.notes ? '<span class="co-note" title="' + E(r.notes) + '">Note: ' + E(r.notes.length > 90 ? r.notes.slice(0, 90) + "…" : r.notes) + "</span>" : "") +
-            (r.taskId ? '<span class="co-note">On the IT board' + (r.taskOwner ? " · " + E(r.taskOwner) : "") + "</span>" : "") + dupCell(r) + "</td>" +
+            (r.source === "manual" ? '<span class="co-note">Added by hand' + (r.addedBy ? " · " + E(r.addedBy) : "") + "</span>" : "") +
+            (r.taskId ? '<span class="co-note">On IT → Tasks' + (r.taskOwner ? " · " + E(r.taskOwner) : "") + "</span>" : "") + dupCell(r) + "</td>" +
           "<td>" + E(r.urgency || "—") + "</td><td>" + prioCell(r) + "</td><td>" + statusCell(r) + "</td>" +
           "<td>" + E(r.contact || "—") + (r.phone ? '<span class="co-note">' + E(r.phone) + "</span>" : "") + (r.email ? '<span class="co-note">' + E(r.email) + "</span>" : "") + "</td></tr>";
       }).join("") : '<tr><td colspan="' + (can ? 8 : 7) + '" class="empty">' + (itr.tab === "dupes" ? "No duplicates." : all.length ? "Nothing here." : can ? "No requests yet — use Import from Excel for past form answers." : "No requests yet.") + "</td></tr>") +
@@ -1314,6 +1361,28 @@
       ". On a request that's on the IT board, priority and Resolved carry over to that task." +
       " New form answers arrive every few minutes as New.</p>";
   }
+  // A ticket that didn't come through the form (a call, a walk-up, Teams).
+  function itrAddForm(plist) {
+    var f = itr.form;
+    var field = function (key, label, html) { return '<div class="nb-field"><label for="itf-' + key + '">' + label + "</label>" + html + "</div>"; };
+    var inp = function (key, type, ph, extra) { return '<input id="itf-' + key + '" type="' + type + '" data-itr-f="' + key + '" value="' + E(f[key] || "") + '" placeholder="' + E(ph) + '" autocomplete="off"' + (extra || "") + ">"; };
+    return '<div class="card" style="margin-bottom:14px;padding:20px 22px;"><div class="card-label">New ticket</div>' +
+      '<datalist id="itrPeople">' + plist.map(function (p) { return '<option value="' + E(p.name) + '">'; }).join("") + "</datalist>" +
+      '<div class="grid-2" style="gap:0 16px;">' +
+        field("name", "Who's it for", inp("name", "text", "Name", ' list="itrPeople"')) +
+        field("email", "Email (optional)", inp("email", "email", "name@soiaviation.com")) +
+        field("company", "Company", '<select id="itf-company" data-itr-f="company">' + ["SOI", "CAS", "RedSun", "NanoTech"].map(function (c) {
+          return '<option' + ((f.company || "SOI") === c ? " selected" : "") + ">" + c + "</option>"; }).join("") + "</select>") +
+        field("priority", "Priority", '<select id="itf-priority" data-itr-f="priority"><option value="">Rate later</option>' + IT_PRIOS.map(function (p) {
+          return '<option value="' + p.id + '"' + (f.priority === p.id ? " selected" : "") + ">" + E(p.label) + "</option>"; }).join("") + "</select>") +
+      "</div>" +
+      field("issue", "What's the issue", '<textarea id="itf-issue" rows="3" data-itr-f="issue" placeholder="e.g. Outlook keeps asking for a password">' + E(f.issue || "") + "</textarea>") +
+      '<div class="nb-foot"><button type="button" class="primary" data-itr-save' + (itr.saving ? " disabled" : "") + ">" + (itr.saving ? "Adding…" : "Add ticket") + '</button><button type="button" class="text-button" data-itr-cancel>Cancel</button>' +
+      '<span class="small-note">It starts as New and goes on IT → Tasks for the IT default person.</span></div></div>';
+  }
+  document.addEventListener("input", function (e) { var k = e.target.dataset && e.target.dataset.itrF; if (k) itr.form[k] = e.target.value; });
+  document.addEventListener("change", function (e) { var k = e.target.dataset && e.target.dataset.itrF; if (k) itr.form[k] = e.target.value; });
+
   // Whether form emails are coming through, and why not if they aren't.
   function itSyncLine(st, can) {
     if (!st) return "";
@@ -1345,10 +1414,23 @@
     }, function (err) { toast(err.message, true); itr.at = 0; render(); });
   }
   document.addEventListener("click", function (e) {
-    var t = e.target.closest && e.target.closest("[data-itr-tab],[data-itr-who],[data-itr-bulk],[data-itr-clear],[data-itr-merge],[data-itr-dup],[data-itr-notdup],[data-itr-undup],[data-itr-main],[data-itr-checknow],#itrImport");
+    var t = e.target.closest && e.target.closest("[data-itr-tab],[data-itr-who],[data-itr-bulk],[data-itr-clear],[data-itr-merge],[data-itr-dup],[data-itr-notdup],[data-itr-undup],[data-itr-main],[data-itr-checknow],[data-itr-add],[data-itr-save],[data-itr-cancel],#itrImport");
     if (!t) return;
     var ds = t.dataset;
     if (t.id === "itrImport") { $("#itrFile").click(); return; }
+    if ("itrAdd" in ds) { itr.adding = true; render(); var n = $("#itf-name"); if (n) n.focus(); return; }
+    if ("itrCancel" in ds) { itr.adding = false; itr.form = {}; render(); return; }
+    if ("itrSave" in ds) {
+      var f = itr.form;
+      if (!String(f.issue || "").trim()) { toast("Describe the issue first.", true); var iss = $("#itf-issue"); if (iss) iss.focus(); return; }
+      itr.saving = true; render();
+      api("/api/it-requests", { method: "POST", body: JSON.stringify({ name: f.name, email: f.email, company: f.company || "SOI", priority: f.priority, issue: f.issue }) }).then(function () {
+        itr.saving = false; itr.adding = false; itr.form = {}; itr.tab = "new"; itr.at = 0;
+        toast("Ticket added.");
+        render(); refresh();
+      }, function (err) { itr.saving = false; toast(err.message, true); render(); });
+      return;
+    }
     if ("itrChecknow" in ds) {
       t.disabled = true; t.textContent = "Checking…";
       api("/api/it-requests/check-now", { method: "POST", body: "{}" }).then(function (st) {
@@ -2905,14 +2987,14 @@
     return saveMark(t.view, t.markKey, { label: t.docLabel, docNo: t.docNo, party: t.party, dueDate: t.dueDate, pentagonUser: t.pentagonUser }, change)
       .then(function () { refresh(); }).catch(function () { refresh(); });
   }
-  function newDraft(dept, parentId) {
+  function newDraft(dept, parentId, kind) {
     var co = activeCompany === ALL ? (addCompany || myCompanies()[0]) : activeCompany;
     if (parentId) { var parent = findItem(parentId); if (parent && parent.company) co = parent.company; }
     var d = {
       id: "draft-" + Date.now() + "-" + Math.random().toString(16).slice(2, 6), draft: true, company: co, department: dept,
       title: "", part: "", platform: "", customer: "", obsolete: "No", dueDate: "", notes: "", owner: deptDefaults[dept] || "", status: "todo"
     };
-    if (parentId) d.parentId = parentId;
+    if (parentId) d.parentId = parentId; else d.kind = kind === "project" ? "project" : "task";
     drafts.unshift(d);
     focusAfter = { id: d.id, key: "title" };
     render();
@@ -2922,7 +3004,7 @@
     if (d.saving || (!String(d.title).trim() && !String(d.part).trim())) return;
     d.saving = true;
     var body = { company: d.company, department: d.department, title: d.title, part: d.part, platform: d.platform, customer: d.customer, obsolete: d.obsolete, dueDate: d.dueDate, notes: d.notes };
-    if (d.parentId) body.parentId = d.parentId;
+    if (d.parentId) body.parentId = d.parentId; else body.kind = d.kind;
     if (isManager()) body.owner = d.owner;
     setSync("busy", "Saving…");
     api("/api/tasks", { method: "POST", body: JSON.stringify(body) }).then(function (t) {
@@ -2944,7 +3026,8 @@
       financeOp({ op: "add", list: list, fields: financeDefaults(list) }, "Row added.");
       return;
     }
-    newDraft(target, null);
+    var parts = target.split("|"); // "IT|task" or "IT|project"
+    newDraft(parts[0], null, parts[1]);
   }
   $("#quickAdd").addEventListener("click", function () { addFor(this.dataset.add); });
 

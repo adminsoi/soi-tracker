@@ -117,6 +117,25 @@ editable table; changes save to the server when you leave a field.
   full-access logins see it; only managers approve or tick paid / received.
   Nothing is connected to a bank.
 
+## Tasks vs projects
+
+Every department has two tabs:
+
+- **Tasks** — quick, one-off items: a name, who's responsible, a due date,
+  done and notes. Procurement, Purchasing and Warehouse keep their wider
+  table (part number, aircraft, customer, obsolete) and the Pentagon rows.
+- **Projects** — longer-term work, each with sub-tasks underneath
+  (**+ Sub-task** on a project).
+
+Existing rows stay where they were: Procurement / Purchasing / Warehouse rows
+and IT form tickets are tasks, everything else was a project. New rows are
+whichever tab you add them on.
+
+**IT → Requests → + Add ticket** adds a ticket that didn't come through the
+form (a call, a walk-up, a Teams message): who it's for, company, priority
+and the issue. It starts as New, is marked "Added by hand", and goes on
+IT → Tasks for the IT default person, like form tickets.
+
 ## Calendar
 
 The **Calendar** page (sidebar → Tools) has up to three tabs:
