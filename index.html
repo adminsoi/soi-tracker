@@ -1357,8 +1357,8 @@
       return '<button type="button" role="tab" class="tab ' + (calTab === t[0] ? "active" : "") + '" aria-selected="' + (calTab === t[0]) + '" data-cal-tab="' + t[0] + '">' + E(t[1]) + "</button>";
     }).join("") + "</div>" : "";
     var intro, body;
-    if (calTab === "hr") {
-      intro = introBlock("The HR calendar, published from Outlook. Use its own Day / Week / Month buttons to change the view.", "");
+    if (calTab === "hr" && hrCal && !hrCal.hasFeed) {
+      intro = introBlock("The HR calendar, published from Outlook.", "");
       body = '<div id="cal-hr" style="margin-top:18px;"><div class="empty">Loading…</div></div>';
       setTimeout(loadHrCalendar, 0);
     } else if (calTab === "whos") {
@@ -1378,10 +1378,13 @@
           : '<div class="cos"><button type="button" class="co" data-cal-month="-1" aria-label="Previous month">‹</button><button type="button" class="co active" data-cal-month="0">' +
             E(new Date(calMonth + "T00:00:00").toLocaleDateString(undefined, { month: "long", year: "numeric" })) + '</button><button type="button" class="co" data-cal-month="1" aria-label="Next month">›</button></div>') +
         "</div>";
-      intro = introBlock("Your Outlook calendar, straight from Microsoft 365. Read-only — nothing here changes your calendar.", picker);
-      body = calMode === "month"
-        ? '<div class="section-title"><div><h2>Your calendar</h2><span class="small-note" id="cal-note">Loading…</span></div></div><div id="cal-month"></div>'
-        : '<div class="section-title"><div><h2>Your calendar</h2><span class="small-note" id="cal-note">Loading…</span></div></div><div id="cal-mine"></div>';
+      var isHr = calTab === "hr";
+      intro = introBlock(isHr
+        ? "The HR calendar, read from its Outlook feed. View only — updates every few minutes."
+        : "Your Outlook calendar, straight from Microsoft 365. Read-only — nothing here changes your calendar.", picker);
+      var title = isHr ? hrName : "Your calendar";
+      body = '<div class="section-title"><div><h2>' + E(title) + '</h2><span class="small-note" id="cal-note">Loading…</span></div></div>' +
+        (calMode === "month" ? '<div id="cal-month"></div>' : '<div id="cal-mine"></div>');
       setTimeout(calMode === "month" ? loadMonth : loadCalendar, 0);
     }
     if (me.leadership && !hrCal) setTimeout(loadHrName, 0);
@@ -1401,20 +1404,25 @@
   }
 
   // ---- Personal: list ----
+  // Personal and HR tabs share the List / Month views; only the source differs.
+  function calSource() { return calTab === "hr" ? "/api/calendar/hr" : "/api/calendar/me"; }
   function loadCalendar() {
-    api("/api/calendar/me?days=" + calDays).then(function (data) {
+    api(calSource() + "?start=" + today + "&days=" + calDays).then(function (data) {
       var box = $("#cal-mine");
       if (!box) return;
       var events = data.events.filter(function (e) { return dayKey(e) >= today; });
       $("#cal-note").textContent = events.length + " event" + (events.length === 1 ? "" : "s") + " in the next " + (calDays === 7 ? "week" : calDays / 7 + " weeks") + " · times in your time zone";
-      if (!events.length) { box.innerHTML = '<div class="card empty">Nothing on your calendar.</div>'; return; }
+      if (!events.length) { box.innerHTML = '<div class="card empty">Nothing on ' + (calTab === "hr" ? "the HR calendar" : "your calendar") + ".</div>"; return; }
       var byDay = {};
       events.forEach(function (e) { (byDay[dayKey(e)] = byDay[dayKey(e)] || []).push(e); });
       box.innerHTML = Object.keys(byDay).sort().map(function (day) {
         var label = new Date(day + "T00:00:00").toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
         return '<div class="card" style="margin-bottom:14px;"><div class="card-label" style="margin-bottom:10px;">' + E(day === today ? "Today · " + label : label) + "</div>" +
           byDay[day].map(function (e) {
-            var when = e.allDay ? "All day" : timeOf(e.start) + " – " + timeOf(e.end);
+            var lastDay = e.allDay ? shiftDays(e.end, -1) : "";
+            var when = e.allDay
+              ? (lastDay > e.start ? "All day · through " + new Date(lastDay + "T00:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }) : "All day")
+              : timeOf(e.start) + " – " + timeOf(e.end);
             var link = safeLink(e.webLink);
             var join = safeLink(e.joinUrl);
             return '<div class="cal-event' + (e.allDay ? " all-day" : "") + '"><span class="cal-time">' + E(when) + "</span>" +
@@ -1433,7 +1441,7 @@
     var first = new Date(calMonth + "T00:00:00");
     var gridStart = shiftDays(calMonth, -first.getDay());
     var month = calMonth.slice(0, 7);
-    api("/api/calendar/me?start=" + gridStart + "&days=42").then(function (data) {
+    api(calSource() + "?start=" + gridStart + "&days=42").then(function (data) {
       var box = $("#cal-month");
       if (!box) return;
       var byDay = {};
@@ -1466,7 +1474,7 @@
   // ---- HR global calendar (Leadership) ----
   function loadHrName() {
     return api("/api/calendar/shared").then(function (cal) {
-      var changed = !hrCal || hrCal.name !== cal.name;
+      var changed = !hrCal || hrCal.name !== cal.name || hrCal.hasFeed !== cal.hasFeed;
       hrCal = cal;
       if (changed && page === "calendar") requestRender();
       return cal;
@@ -1479,7 +1487,7 @@
       var url = safeLink(cal.url);
       box.innerHTML = url
         ? '<iframe src="' + E(url) + '" title="' + E(cal.name || "HR global calendar") + '" style="width:100%;height:76vh;border:1px solid var(--line);border-radius:12px;background:#fff;"></iframe>'
-        : '<div class="banner">No HR calendar link is set yet. An admin can add the Outlook "Publish to web" HTML link under <b>HR global calendar</b> in /admin.html.</div>';
+        : '<div class="banner">No HR calendar is set yet. An admin can add its Outlook "Publish to web" <b>ICS</b> link under <b>HR global calendar</b> in /admin.html.</div>';
     }).catch(function (err) { calError("#cal-hr", err); });
   }
 
@@ -1504,7 +1512,7 @@
           (s.sources && s.sources.indexOf("hr") !== -1 ? '<span class="co-note" style="padding:2px 0 0">HR calendar</span>' : "");
       };
       box.innerHTML = (data.hrError ? '<div class="banner">' + E(data.hrError) + "</div>" : "") +
-        (!data.hrConnected && !data.hrError ? '<div class="banner">Only people\'s own Outlook is checked. To include the HR calendar, add its mailbox under <b>HR global calendar</b> in /admin.html.</div>' : "") +
+        (!data.hrConnected && !data.hrError ? '<div class="banner">Only people\'s own Outlook is checked. To include the HR calendar, add its <b>ICS</b> link under <b>HR global calendar</b> in /admin.html.</div>' : "") +
         '<div class="table-wrap"><table class="plain narrow"><thead><tr><th>Person</th>' + data.days.map(function (d, i) {
           var label = new Date(d + "T00:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
           return '<th class="' + (d === today ? "who-today" : "") + '">' + E(label) + '<br><span style="text-transform:none;letter-spacing:0;font-weight:400;">' + counts[i] + " in office</span></th>";

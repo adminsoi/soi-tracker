@@ -127,21 +127,21 @@ The **Calendar** page (sidebar → Tools) has up to three tabs:
   that person's login** in `/admin.html` (never from the browser), so
   people only see their own calendar — make sure each login's email is
   their Microsoft 365 address.
-- **HR global calendar** — one Outlook calendar, for **Leadership** logins
-  only (tick **Leadership** on a login in `/admin.html`; the server checks
-  it on every request). Set it under **HR global calendar** in `/admin.html`. Use the **HTML** link from
-  Outlook on the web → Settings → Calendar → Shared calendars → Publish a
-  calendar. Anyone with that link can view it, so only publish a calendar
-  that's fine to share.
-
+- **HR global calendar** — Leadership only (tick **Leadership** on a login
+  in `/admin.html`). Shown in the same **List** / **Month** views as the
+  Personal calendar, read from the calendar's Outlook **ICS** feed. In Outlook
+  on the web: Settings → Calendar → Shared calendars → Publish a calendar →
+  choose **"Can view titles and locations"** (or all details; "busy only" has
+  no names) → copy the **ICS** link into **HR global calendar** in
+  `/admin.html`. The link stays on the server; browsers only get the events.
+  It needs no Microsoft permission. (An HTML link can be set instead, in
+  which case Outlook's own page is embedded.)
 - **Who's in office** — Leadership only. One row per person, Mon–Fri, each
   day **In office**, **Out** or **Remote** (with times for part of a day).
   It reads only *Out of office* / *Working elsewhere* time from each
   person's own Outlook, plus HR calendar entries whose title names the
   person and says they're out or remote (e.g. "Greg – PTO", "Alexis WFH").
-  Event titles and details never reach the browser. To include the HR
-  calendar, set **Mailbox it lives in** (and optionally the calendar's name)
-  under **HR global calendar** in `/admin.html`; add nicknames per login
+  Event titles and details never reach the browser. Add nicknames per login
   under **Names on the HR calendar**. Days use `OFFICE_TIMEZONE` (default
   Pacific Standard Time).
 
@@ -160,8 +160,7 @@ It uses the same app registration as assignment emails (`MS_TENANT_ID`,
 4. Recommended: limit the app to SOI staff mailboxes instead of the whole
    tenant, using Exchange Online's RBAC for Applications (or the older
    Application Access Policy). If you do, include the `MS_FROM_EMAIL`
-   mailbox (so assignment emails keep working) and the HR calendar's
-   mailbox (so Who's in office can read it).
+   mailbox so assignment emails keep working.
 
 No redeploy is needed after consent; it can take a few minutes to apply.
 Until then the page says the permission hasn't been granted yet.
