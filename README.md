@@ -170,6 +170,41 @@ It uses the same app registration as assignment emails (`MS_TENANT_ID`,
 No redeploy is needed after consent; it can take a few minutes to apply.
 Until then the page says the permission hasn't been granted yet.
 
+## Work inbox
+
+**Work inbox** (sidebar → You) shows the signed-in person's own unread Outlook
+mail from the last day / 3 days / week, one card per conversation, newest
+first. There's no AI: each card shows Outlook's own preview text, and
+conversations are sorted into **Needs you** (flagged, high importance, or
+sent to you directly) and **FYI** (CC'd, group or list mail). **Done** is
+remembered on that device and a conversation comes back if a newer message
+arrives. It's read-only — replying happens in Outlook via **Open in Outlook**.
+The mailbox is the email on the person's login; nothing is stored (results
+are cached in memory for a minute).
+
+One-time Microsoft 365 setup: add **Microsoft Graph → Application permission
+→ `Mail.Read`** to the same app registration as the calendar, grant admin
+consent, and (strongly recommended) limit it to SOI staff mailboxes with
+Exchange Online RBAC for Applications. Until then the page says the
+permission hasn't been granted.
+
+## Finance from Pentagon
+
+For SOI Aviation, the Finance view also fills in from three Pentagon queries
+(defined in `pentagonViews.js` → `FINANCE_QUERIES`):
+
+| Query | Fills | Columns it must return |
+|---|---|---|
+| `dashboards.ap_open` | Daily payments / Approved to pay | `BILL_NO`, `VENDOR`, `AMOUNT`, `DUE_DATE` (optional `PO_NO`) |
+| `dashboards.ar_open` | Expected receipts | `INVOICE_NO`, `CUSTOMER`, `AMOUNT`, `DUE_DATE` (optional `SO_NO`) |
+| `dashboards.bank_balances` | Bank accounts | `ACCOUNT_NAME`, `BALANCE`, `AS_OF` |
+
+Amounts are read-only (they change in Pentagon). Approve, Paid, Received and
+notes are kept in the tracker (`finance.json` → `pentagon`), keyed by
+document number; approve / paid / received stay manager-only. A query that
+doesn't exist yet just leaves its table to hand-entered rows, with a note.
+These queries run only on the server, never from the browser.
+
 ## How access control works
 
 - Every login belongs to exactly one department (or `Operations`, which

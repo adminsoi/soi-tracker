@@ -34,6 +34,16 @@ const PENTAGON_VIEWS = {
   ],
 };
 
+// Finance tables filled from Pentagon (SOI Aviation). Each query returns one
+// row per open item with these column names; see the SQL file for templates.
+// Approve / Paid / Received and notes are kept in the tracker, keyed by the
+// document number, the same way ticks on RFQs are.
+const FINANCE_QUERIES = {
+  payables: { queryName: "dashboards.ap_open", fields: { key: "BILL_NO", party: "VENDOR", amount: "AMOUNT", due: "DUE_DATE", ref: "PO_NO" } },
+  receivables: { queryName: "dashboards.ar_open", fields: { key: "INVOICE_NO", party: "CUSTOMER", amount: "AMOUNT", due: "DUE_DATE", ref: "SO_NO" } },
+  banks: { queryName: "dashboards.bank_balances", fields: { key: "ACCOUNT_NAME", balance: "BALANCE", asOf: "AS_OF" } },
+};
+
 // [exact names to try first, substrings to try after], per layout field.
 const FIELD_GUESSES = {
   key: [["RFQ_NO", "QUOTE_NO", "QT_NO", "PO_NO", "SO_NO", "DOC_NO", "RFQ_NUMBER", "DOC_NUMBER"], ["_NO", "NUMBER"]],
@@ -90,6 +100,7 @@ function resultRows(data) {
 
 module.exports = {
   PENTAGON_VIEWS,
+  FINANCE_QUERIES,
   FIELD_GUESSES,
   allViews,
   viewById,
