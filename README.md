@@ -136,6 +136,17 @@ form (a call, a walk-up, a Teams message): who it's for, company, priority
 and the issue. It starts as New, is marked "Added by hand", and goes on
 IT → Tasks for the IT default person, like form tickets.
 
+### Filters
+
+Every department table (Tasks, Projects, RFQs, Quotes, Sales Orders,
+Purchase Orders) has **+ Filter**: pick a column, then one of the values
+actually in it (with counts). Filters stack, show as chips (✕ to remove),
+and the table says "N of M shown". Tasks filter by type, responsible,
+status, due (overdue / today / next 7 days / later / none), part, platform,
+customer and more; Pentagon tables by part, customer / vendor, Pentagon
+user, due, assigned to, done and notes — and with **Show all Pentagon
+columns** on, by any column the query returns.
+
 ## SOPs (every department)
 
 Each department has an **SOPs** tab, readable by everyone in that department
