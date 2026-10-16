@@ -178,6 +178,10 @@
               <label for="u-leadership" style="margin:0;font-weight:600;color:var(--text);">Leadership — can see the HR global calendar and Who's in office tabs on the Calendar page</label>
             </div>
             <div class="check-row full-access-row">
+              <input type="checkbox" id="u-performance" />
+              <label for="u-performance" style="margin:0;font-weight:600;color:var(--text);">Performance access — the Performance tool (notes, attachments and warnings for people). Only people ticked here can see it, even managers and full access can't.</label>
+            </div>
+            <div class="check-row full-access-row">
               <input type="checkbox" id="u-itnotebook" />
               <label for="u-itnotebook" style="margin:0;font-weight:600;color:var(--text);">Private IT notebook — the Resolved tab on the IT page (ticket write-ups and knowledge base). Only people ticked here can see it, even managers and full access can't.</label>
             </div>
@@ -406,6 +410,7 @@
           (u.breakdown ? ' <span class="tag">In breakdown</span>' : "") +
           (u.leadership ? ' <span class="tag">Leadership</span>' : "") +
           (u.itNotebook ? ' <span class="tag">IT notebook</span>' : "") +
+          (u.performance ? ' <span class="tag">Performance</span>' : "") +
           ((u.extraMailboxes || []).length ? ' <span class="tag" title="' + escapeHtml(u.extraMailboxes.join(", ")) + '">+' + u.extraMailboxes.length + (u.extraMailboxes.length === 1 ? " inbox" : " inboxes") + "</span>" : "");
         tr.innerHTML =
           "<td>" + escapeHtml(u.username) + "</td>" +
@@ -470,6 +475,7 @@
     document.getElementById("u-breakdown").checked = !!user.breakdown;
     document.getElementById("u-leadership").checked = !!user.leadership;
     document.getElementById("u-itnotebook").checked = !!user.itNotebook;
+    document.getElementById("u-performance").checked = !!user.performance;
     document.getElementById("u-calnames").value = (user.calendarNames || []).join(", ");
     var fullAccessBox = document.getElementById("u-fullaccess");
     fullAccessBox.checked = !!user.fullAccess;
@@ -531,6 +537,7 @@
       breakdown: document.getElementById("u-breakdown").checked,
       leadership: document.getElementById("u-leadership").checked,
       itNotebook: document.getElementById("u-itnotebook").checked,
+      performance: document.getElementById("u-performance").checked,
       calendarNames: document.getElementById("u-calnames").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean),
       departments: departments
     };

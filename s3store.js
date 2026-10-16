@@ -108,6 +108,10 @@ function getFinance() {
 function getSettings() {
   return readJson("settings", {});
 }
+// Performance records: { people: { username: { manual, hidden, entries, files } } }.
+function getPerformance() {
+  return readJson("performance", {});
+}
 // Department SOPs: { sops: [...], qa: [...] } (PDFs themselves via putFile).
 function getSops() {
   return readJson("sops", {});
@@ -132,6 +136,7 @@ let financeQueue = Promise.resolve();
 let itRequestsQueue = Promise.resolve();
 let itNotebookQueue = Promise.resolve();
 let sopsQueue = Promise.resolve();
+let performanceQueue = Promise.resolve();
 
 function withUsers(mutator) {
   usersQueue = usersQueue.then(async () => {
@@ -227,7 +232,19 @@ function withSops(mutator) {
   return sopsQueue;
 }
 
+function withPerformance(mutator) {
+  performanceQueue = performanceQueue.then(async () => {
+    const doc = await getPerformance();
+    const result = await mutator(doc);
+    await writeJson("performance", doc);
+    return result;
+  });
+  return performanceQueue;
+}
+
 module.exports = {
+  getPerformance,
+  withPerformance,
   getSops,
   withSops,
   putFile,
