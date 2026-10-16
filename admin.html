@@ -179,7 +179,7 @@
             </div>
             <div class="check-row full-access-row">
               <input type="checkbox" id="u-performance" />
-              <label for="u-performance" style="margin:0;font-weight:600;color:var(--text);">Performance access — the Performance tool (notes, attachments and warnings for people). Only people ticked here can see it, even managers and full access can't.</label>
+              <label for="u-performance" style="margin:0;font-weight:600;color:var(--text);">Performance access — the Performance tool (HR's escalation process: notes, steps, risk factors). Only people ticked here can see it, even managers and full access can't. Per HR: the CEO and Leadership (Greg, Alexis, Nyssa).</label>
             </div>
             <div class="check-row full-access-row">
               <input type="checkbox" id="u-itnotebook" />
@@ -227,6 +227,19 @@
         </div>
         <button type="submit">Save HR calendar</button>
         <div class="msg" id="calendarMsg"></div>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Performance escalation</h2>
+      <div class="hint" style="margin-bottom:12px;">How many <b>countable</b> notes (factual, dated, and discussed with the employee — not serious misconduct) prompt a <b>review</b> for the next step, and how long notes stay live. These only flag a review; a step is always recorded by a person, and termination always needs HR and legal review. HR's numbers are placeholders — confirm them with HR.</div>
+      <form id="perfForm">
+        <div class="field" style="max-width:260px;"><label for="pf-window">Notes stay live for (months)</label><input type="number" id="pf-window" min="1" max="36" required></div>
+        <div class="field" style="max-width:260px;"><label for="pf-verbal">Notes before a verbal warning review</label><input type="number" id="pf-verbal" min="1" max="20" required></div>
+        <div class="field" style="max-width:260px;"><label for="pf-written">Further notes before a written warning review</label><input type="number" id="pf-written" min="1" max="20" required></div>
+        <div class="field" style="max-width:260px;"><label for="pf-pip">Further notes before a PIP review</label><input type="number" id="pf-pip" min="1" max="20" required></div>
+        <button type="submit">Save escalation settings</button>
+        <div class="msg" id="perfMsg"></div>
       </form>
     </div>
 
@@ -655,12 +668,32 @@
       .catch(function (err) { msg.textContent = err.message; });
   });
 
+  // ---------- Performance escalation ----------
+  function loadPerfSettings() {
+    return api("/api/admin/performance").then(function (d) {
+      document.getElementById("pf-window").value = d.windowMonths;
+      document.getElementById("pf-verbal").value = d.verbal;
+      document.getElementById("pf-written").value = d.written;
+      document.getElementById("pf-pip").value = d.pip;
+    }).catch(function (err) { document.getElementById("perfMsg").textContent = err.message; });
+  }
+  document.getElementById("perfForm").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var msg = document.getElementById("perfMsg");
+    msg.textContent = ""; msg.className = "msg";
+    var v = function (id) { return document.getElementById(id).value; };
+    api("/api/admin/performance", { method: "PUT", body: JSON.stringify({ windowMonths: v("pf-window"), verbal: v("pf-verbal"), written: v("pf-written"), pip: v("pf-pip") }) })
+      .then(function () { msg.textContent = "Saved."; msg.className = "msg ok"; })
+      .catch(function (err) { msg.textContent = err.message; });
+  });
+
   function start() {
     showPanel();
     Promise.all([loadCompanies(), loadDepartments()]).then(function () {
       loadClaudeProjects();
       loadSharedCalendar();
       loadDefaults();
+      loadPerfSettings();
       return loadUsers();
     });
   }

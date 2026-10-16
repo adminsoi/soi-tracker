@@ -170,6 +170,17 @@
   .perf-files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .perf-file { display: inline-flex; gap: 6px; align-items: center; background: var(--soft); border-radius: 7px; padding: 4px 8px; font-size: 12px; }
   .perf-file button { border: 0; background: none; padding: 0 2px; cursor: pointer; color: var(--rose-ink); font-size: 12px; }
+  .ladder { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
+  .rung { padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; background: var(--soft); color: var(--muted); }
+  .rung.on { background: #f7d6b4; color: #8a4512; } .rung.end { background: none; border: 1px dashed var(--line); font-weight: 500; }
+  .flag { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 10.5px; font-weight: 600; background: var(--soft); color: var(--muted); margin: 1px 2px 1px 0; }
+  .flag.risk { background: #f6dcdb; color: #9b2c28; }
+  .risk-grid { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; } .risk-grid label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+  .juris { background: #f4f1ec; border-radius: 9px; padding: 10px 14px; font-size: 12.5px; line-height: 1.5; } .juris div { margin: 2px 0; }
+  .nstate { font-weight: 600; padding: 1px 7px; border-radius: 6px; font-size: 10.5px; } .nstate.yes { background: #e3eedf; color: #4c6b3c; }
+  .nstate.no, .nstate.review { background: #fbecc8; color: #7c5a10; } .nstate.mis { background: #f6dcdb; color: #9b2c28; } .nstate.old { background: var(--soft); color: var(--muted); }
+  .perf-entry.note-yes { border-left-color: #78846c; } .perf-entry.note-mis { border-left-color: #c0504d; } .perf-entry.note-no, .perf-entry.note-review { border-left-color: #d9a441; }
+  .perf-table tr.picked td { background: #fbf1e3; }
   /* Column filters */
   .filter-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 12px; flex-basis: 100%; }
   .fchip { display: inline-flex; align-items: center; gap: 6px; background: #fbeef2; color: var(--rose-ink); border: 1px solid #ecd2db; border-radius: 999px; padding: 4px 6px 4px 11px; font-size: 12px; }
@@ -1642,173 +1653,366 @@
   });
 
   // ---- Performance ----
-  // Only for logins with "Performance access" (the server checks). People
-  // with "Show in team breakdown" are on the list automatically; others can
-  // be added. Notes, attachments and warnings — each active warning is a
-  // strike, and the tier is the number of strikes (3 = three strikes).
-  var perf = { list: null, at: 0, loading: false, error: "", sel: "", person: null, personAt: 0, compose: "", text: "", saving: false };
+  // HR's Global Performance Management Escalation Process as a quick view for
+  // the CEO and Leadership (PerformYard stays the system of record). Only for
+  // logins with "Performance access" — the server checks. It never decides
+  // anything: it counts notes, shows when a review is due, and reminds you of
+  // each country's process and when HR / legal must review.
+  var perf = { list: null, at: 0, loading: false, error: "", sel: "", person: null, personAt: 0, personLoading: "",
+    composing: false, form: {}, editing: "", stepping: false, step: {}, adding: false, addForm: {}, saving: false };
   var perfFlagged = 0, perfPending = [];
-  var TIER_LABEL = ["No warnings", "Tier 1 · first warning", "Tier 2 · second warning", "Tier 3 · final — three strikes"];
+  var perfInitials = false;
+  try { perfInitials = localStorage.getItem("soi_perf_initials") === "1"; } catch (e) {}
+  var PERF_ORDER = ["verbal", "written", "pip", "pip_review"];
+  var PERF_SHORT = { none: "No step", verbal: "Verbal", written: "Written", pip: "PIP", pip_review: "PIP review" };
+  var ENTITY_LABEL = { SOI: "SOI Aviation · California, US", CAS: "CAS · New Zealand", RedSun: "Red Sun Aviation · Singapore", NanoTech: "Nanotech Aviation · UK" };
+  // From HR's process document — reminders, not legal advice.
+  var JURIS = {
+    SOI: [["Legal baseline", "At-will, but discipline must not be discriminatory or retaliatory (FEHA, Labor Code 1102.5, CFRA/FMLA)."],
+      ["Process", "Lower legal formality — consistency and documentation are key."],
+      ["Representation", "None required (except as per policy)."],
+      ["Employee access", "Personnel file and records access (Labor Code 1198.5); notes are discoverable."],
+      ["Claim exposure", "Civil claims, DLSE and agency complaints."]],
+    CAS: [["Legal baseline", "Employment Relations Act 2000: good-faith duty and the “fair and reasonable employer” test (s103A)."],
+      ["Process", "High: tell the employee the concerns, give them a chance to respond, and genuinely consider the response."],
+      ["Representation", "Tell them they can seek advice and bring a support person."],
+      ["Employee access", "Privacy Act 2020 requests."],
+      ["Claim exposure", "Personal grievance (raised within 90 days). Proposed law changes — confirm with local counsel."]],
+    RedSun: [["Legal baseline", "Employment Act, contract terms, TAFEP and the Tripartite Guidelines on wrongful dismissal."],
+      ["Process", "Moderate to high: warn the employee and give a fair chance to improve."],
+      ["Representation", "Not statutory, but good practice."],
+      ["Employee access", "PDPA access requests."],
+      ["Claim exposure", "TADM / ECT claims. Workplace Fairness legislation may affect this — confirm with local counsel."]],
+    NanoTech: [["Legal baseline", "ERA 1996, Equality Act 2010, ACAS Code of Practice."],
+      ["Process", "High: capability procedure with a meeting, notice and appeal."],
+      ["Representation", "Statutory right to be accompanied at formal meetings."],
+      ["Employee access", "UK GDPR subject access requests."],
+      ["Claim exposure", "Employment tribunal, possible 25% ACAS uplift for unreasonable non-compliance. Service length matters (2 years today; expected to change around January 2027 — confirm with UK counsel)."]]
+  };
+  var PERF_RISK_LABEL = { leave: "Protected leave", medical: "Medical or disability issue", complaint: "Recent complaint or whistleblowing", grievance: "Grievance raised",
+    parental: "Pregnancy or parental status", service: "Length of service (check thresholds)", claims: "Pending claim" };
+  // Words that read as opinion or emotion rather than fact (notes are discoverable).
+  var EMOTIVE = /\b(lazy|attitude|terrible|awful|horrible|useless|incompetent|stupid|idiot\w*|ridiculous|pathetic|disgusting|careless|sloppy|clueless|hopeless|dramatic|crazy|insane|annoying|rude|arrogant|worst|bad|always|never|constantly|every time|hate|obviously|clearly|i feel|i think|seems|probably|unacceptable|disrespectful|toxic|liar|lying)\b/gi;
+  function wordingFlags(text) {
+    var seen = {}, out = [];
+    String(text || "").replace(EMOTIVE, function (m) { var k = m.toLowerCase(); if (!seen[k]) { seen[k] = 1; out.push(m); } return m; });
+    return out;
+  }
+  function initialsOf(name) {
+    var parts = String(name || "").replace(/[._@-]+/g, " ").trim().split(/\s+/);
+    if (parts.length === 1 && parts[0].length <= 4) return parts[0].toUpperCase();
+    return parts.map(function (w) { return w.charAt(0).toUpperCase(); }).join("");
+  }
+  function perfName(p) { return perfInitials ? (p.employeeId || initialsOf(p.name)) : p.name + (p.employeeId ? " · " + p.employeeId : ""); }
   function loadPerf() {
     if (perf.loading) return;
     perf.loading = true;
     api("/api/performance").then(function (d) {
       perf.list = d; perf.error = "";
-      var n = d.people.filter(function (p) { return p.tier > 0; }).length;
+      var n = d.people.filter(function (p) { return p.reviewDue; }).length;
       if (n !== perfFlagged) { perfFlagged = n; renderNav(); }
     }, function (err) { perf.error = err.message; }).then(function () { perf.loading = false; perf.at = Date.now(); if (page === "performance") requestRender(); });
   }
-  function loadPerfPerson(name) {
-    if (perf.personLoading === name) return Promise.resolve();
-    perf.personLoading = name;
-    return api("/api/performance/" + encodeURIComponent(name)).then(function (d) { if (perf.sel === name) { perf.person = d; perf.personAt = Date.now(); requestRender(); } }, function (err) { toast(err.message, true); })
+  function loadPerfPerson(key) {
+    if (perf.personLoading === key) return;
+    perf.personLoading = key;
+    api("/api/performance/" + encodeURIComponent(key)).then(function (d) { if (perf.sel === key) { perf.person = d; perf.personAt = Date.now(); requestRender(); } }, function (err) { toast(err.message, true); })
       .then(function () { perf.personLoading = ""; });
   }
-  function strikeDots(n) { return '<span class="strikes" aria-label="' + n + ' of 3 strikes">' + [1, 2, 3].map(function (i) { return '<i class="' + (i <= n ? "on" : "") + '"></i>'; }).join("") + "</span>"; }
-  function tierPill(t) { return '<span class="tier tier-' + t + '">' + (t ? "Tier " + t : "Clear") + "</span>"; }
+  function stageBadge(stage) { return '<span class="tier tier-' + Math.min(PERF_ORDER.indexOf(stage) + 1, 3) + '">' + E(PERF_SHORT[stage] || stage) + "</span>"; }
+  function ladder(stage) {
+    var at = PERF_ORDER.indexOf(stage);
+    return '<span class="ladder">' + PERF_ORDER.map(function (s, i) { return '<span class="rung' + (i <= at ? " on" : "") + '">' + E(PERF_SHORT[s]) + "</span>"; }).join("") +
+      '<span class="rung end" title="Never a step here — always HR and legal review">Termination: HR + legal only</span></span>';
+  }
+  function noteState(e, d) {
+    if (e.legacyWarning && !e.reviewed) return ["review", "From the old version — check the details"];
+    if (e.misconduct) return ["mis", "Serious misconduct — separate process, not counted"];
+    if (!e.told) return ["no", "Not discussed with the employee — doesn't count yet"];
+    if (e.incidentDate < d.windowStart) return ["old", "Outside the " + d.settings.windowMonths + "-month window"];
+    if (d.stageDate && e.incidentDate <= d.stageDate) return ["old", "Before the last step"];
+    return ["yes", "Counts toward the next step"];
+  }
   function renderPerformance() {
     setBreadcrumb(["Tools", "Performance"]);
     if (!perf.list || Date.now() - perf.at > 60000) loadPerf();
     var head = '<div class="intro"><div><div class="eyebrow">Tools · private</div><h1>Performance</h1>' +
-      "<p>Notes, attachments and warnings for each person. Three active warnings is three strikes. Only logins with Performance access can see this page.</p></div></div>";
+      "<p>HR's escalation process at a glance. PerformYard is the system of record. Notes only count once the employee has been told; reaching a count means a <b>review</b> is due — every step is a person's decision, and anything beyond the PIP review needs HR and legal.</p></div></div>";
     if (perf.error) return head + '<div class="banner">' + E(perf.error) + "</div>";
     if (!perf.list) return head + '<div class="empty">Loading…</div>';
-    var people = perf.list.people;
-    if (perf.sel && !people.some(function (p) { return p.username === perf.sel; })) perf.sel = "";
-    if (!perf.sel && people.length) perf.sel = people[0].username;
-    if (perf.sel && (!perf.person || perf.person.username !== perf.sel || Date.now() - perf.personAt > 60000)) loadPerfPerson(perf.sel);
-    var flagged = people.filter(function (p) { return p.tier > 0; });
-    var alerts = flagged.length ? '<div class="perf-alerts"><b>Heads up</b>' + flagged.map(function (p) {
-      return '<button type="button" class="perf-alert" data-perf-sel="' + E(p.username) + '">' + tierPill(p.tier) + E(p.username) + " · " + p.strikes + " of 3 strikes</button>";
-    }).join("") + "</div>" : '<p class="small-note" style="margin:16px 0;">Nobody has an active warning.</p>';
-    var list = people.map(function (p) {
-      return '<button type="button" class="nb-item' + (p.username === perf.sel ? " active" : "") + '" data-perf-sel="' + E(p.username) + '">' +
-        '<b style="display:flex;justify-content:space-between;gap:8px;align-items:center;">' + E(p.username) + " " + tierPill(p.tier) + "</b>" +
-        '<span class="nb-snip">' + E((p.departments || []).join(", ") || "—") + "</span>" +
-        '<span class="nb-meta">' + strikeDots(p.strikes) + " " + p.notes + (p.notes === 1 ? " entry" : " entries") + (p.lastAt ? " · last " + E(new Date(p.lastAt).toLocaleDateString()) : "") + (p.auto ? "" : " · added by hand") + "</span></button>";
-    }).join("") || '<div class="nb-empty">Nobody yet. Tick “Show in team breakdown” on logins in /admin.html, or add someone below.</div>';
-    var add = perf.list.others.length ? '<div class="nb-list-head" style="position:static;border-top:1px solid var(--line);border-bottom:0;"><select id="perfAdd" aria-label="Add a person" style="flex:1;padding:8px;border:1px dashed var(--line);border-radius:7px;background:var(--card);"><option value="">+ Add a person…</option>' +
-      perf.list.others.map(function (u) { return '<option value="' + E(u) + '">' + E(u) + "</option>"; }).join("") + "</select></div>" : "";
-    return head + alerts + '<div class="nb-grid"><div class="nb-list">' + list + add + '</div><div class="nb-pane">' + renderPerfPerson() + "</div></div>";
+    var L = perf.list, people = L.people;
+    if (perf.sel && !people.some(function (p) { return p.key === perf.sel; })) perf.sel = "";
+    if (perf.sel && (!perf.person || perf.person.key !== perf.sel || Date.now() - perf.personAt > 60000)) loadPerfPerson(perf.sel);
+    var due = people.filter(function (p) { return p.reviewDue; });
+    var alerts = due.length ? '<div class="perf-alerts"><b>Review due</b>' + due.map(function (p) {
+      return '<button type="button" class="perf-alert" data-perf-sel="' + E(p.key) + '">' + stageBadge(p.next || p.stage) + E(perfName(p)) + " · " +
+        (p.next === "pip_review" ? "PIP outcome review" : E(p.nextLabel) + " (" + p.countable + " of " + p.threshold + " notes)") + (p.needsHrReview ? " · ⚠ HR/legal" : "") + "</button>";
+    }).join("") + "</div>" : "";
+    var flags = function (p) {
+      var f = [];
+      if (p.needsHrReview) f.push('<span class="flag risk" title="' + E(p.risks.map(function (r) { return PERF_RISK_LABEL[r]; }).join(", ")) + '">⚠ Risk factors</span>');
+      if (p.notTold) f.push('<span class="flag">' + p.notTold + " not discussed</span>");
+      if (p.misconduct) f.push('<span class="flag risk">Misconduct ×' + p.misconduct + "</span>");
+      if (p.notInPerformYard) f.push('<span class="flag">' + p.notInPerformYard + " not in PerformYard</span>");
+      if (p.legacy) f.push('<span class="flag">' + p.legacy + " to check</span>");
+      return f.join(" ") || '<span class="dim">—</span>';
+    };
+    var table = '<div class="table-wrap"><table class="plain perf-table"><thead><tr><th>Person</th><th>Entity</th><th>Stage</th><th>Countable notes</th><th>Next</th><th>Flags</th></tr></thead><tbody>' +
+      (people.length ? people.map(function (p) {
+        return '<tr class="' + (p.key === perf.sel ? "picked" : "") + '" data-perf-sel="' + E(p.key) + '" style="cursor:pointer;"><td><b>' + E(perfName(p)) + "</b>" + (p.login ? "" : '<span class="co-note">No login</span>') + "</td>" +
+          "<td>" + E(p.entity) + "</td><td>" + stageBadge(p.stage) + (p.stageDate ? '<span class="co-note">since ' + E(fmtDate(p.stageDate)) + "</span>" : "") + "</td>" +
+          "<td>" + (p.threshold != null ? '<b style="' + (p.reviewDue ? "color:#9b2c28" : "") + '">' + p.countable + "</b> of " + p.threshold : p.afterLadder ? '<span class="dim">—</span>' : p.countable) + "</td>" +
+          "<td>" + (p.reviewDue ? '<b style="color:#9b2c28">Review: ' + E(p.next === "pip_review" ? "PIP outcome" : p.nextLabel) + "</b>" : p.afterLadder ? "HR + legal" : E(p.nextLabel || "—")) + "</td>" +
+          "<td>" + flags(p) + "</td></tr>";
+      }).join("") : '<tr><td colspan="6" class="empty">Nobody yet. Add someone below — with or without a tracker login.</td></tr>') + "</tbody></table></div>";
+    var add = perf.adding
+      ? '<div class="card" style="margin:12px 0;padding:16px 18px;"><div class="card-label">Add a person</div><div class="grid-2" style="gap:0 16px;">' +
+          '<div class="nb-field"><label for="pa-login">Someone with a tracker login</label><select id="pa-login" data-pa="username"><option value="">—</option>' + L.others.map(function (u) { return '<option value="' + E(u) + '">' + E(u) + "</option>"; }).join("") + "</select></div>" +
+          '<div class="nb-field"><label for="pa-name">…or without one: name, initials or employee ID</label><input id="pa-name" data-pa="name" placeholder="e.g. J.R. or EMP-1042" autocomplete="off"></div>' +
+          '<div class="nb-field"><label for="pa-entity">Entity</label><select id="pa-entity" data-pa="entity">' + Object.keys(ENTITY_LABEL).map(function (k) { return '<option value="' + k + '">' + E(ENTITY_LABEL[k]) + "</option>"; }).join("") + "</select></div></div>" +
+          '<div class="nb-foot"><button type="button" class="primary" data-perf-addsave>Add</button><button type="button" class="text-button" data-perf-addcancel>Cancel</button></div></div>'
+      : "";
+    var tools = '<div class="table-toolbar"><label class="small-note" style="display:flex;gap:6px;align-items:center;cursor:pointer;"><input type="checkbox" class="check" id="perfInitials"' + (perfInitials ? " checked" : "") + "> Show initials / IDs only</label>" +
+      '<span class="small-note">Notes live for ' + L.settings.windowMonths + " months · " + L.settings.verbal + " → verbal review, +" + L.settings.written + " → written, +" + L.settings.pip + " → PIP (set in /admin.html)</span>" +
+      '<span class="grow" style="flex:1"></span><button type="button" class="primary" data-perf-add>+ Add a person</button></div>';
+    return head + alerts + tools + add + table + (perf.sel ? '<div class="nb-pane" style="margin-top:18px;">' + renderPerfPerson() + "</div>" : '<p class="small-note" style="margin-top:12px;">Pick a person to see their notes and steps.</p>');
   }
   function renderPerfPerson() {
     var d = perf.person;
-    if (!perf.sel) return '<div class="nb-empty">Pick a person on the left.</div>';
-    if (!d || d.username !== perf.sel) return '<div class="nb-empty">Loading…</div>';
-    var summary = perf.list.people.filter(function (p) { return p.username === d.username; })[0] || {};
+    if (!d || d.key !== perf.sel) return '<div class="nb-empty">Loading…</div>';
     var filesFor = function (id) { return d.files.filter(function (f) { return (f.entryId || "") === id; }); };
     var fileChip = function (f) {
       return '<span class="perf-file">📎 <button type="button" data-perf-dl="' + E(f.id) + '" title="Download">' + E(f.name) + "</button>" +
-        '<span class="small-note">' + Math.max(1, Math.round(f.size / 1024)) + " KB</span>" +
-        '<button type="button" data-perf-rmfile="' + E(f.id) + '" title="Remove" aria-label="Remove attachment">✕</button></span>';
+        '<span class="small-note">' + Math.max(1, Math.round(f.size / 1024)) + ' KB</span><button type="button" data-perf-rmfile="' + E(f.id) + '" title="Remove" aria-label="Remove attachment">✕</button></span>';
     };
-    var composer = perf.compose ? '<div class="card" style="margin:14px 0;padding:16px 18px;"><div class="card-label">' + (perf.compose === "warning" ? "⚠ New warning — strike " + (d.strikes + 1) + " of 3" : "New note") + "</div>" +
-      '<div class="nb-field"><textarea id="perfText" rows="4" placeholder="' + (perf.compose === "warning" ? "What happened, when, and what was agreed." : "What you want to remember — facts, dates, follow-ups.") + '">' + E(perf.text) + "</textarea></div>" +
-      '<div class="nb-foot"><input type="file" id="perfComposeFiles" multiple hidden><button type="button" data-perf-composefiles>📎 Attach files</button><span class="small-note" id="perfComposeNames">' + E(perfPending.map(function (f) { return f.name; }).join(", ")) + '</span><span class="grow"></span>' +
-      '<button type="button" class="text-button" data-perf-cancel>Cancel</button><button type="button" class="primary" data-perf-save' + (perf.saving ? " disabled" : "") + ">" + (perf.saving ? "Saving…" : perf.compose === "warning" ? "Add warning" : "Add note") + "</button></div></div>" : "";
-    var entries = d.entries.length ? d.entries.map(function (e) {
-      var cls = e.kind === "warning" ? (e.cleared ? "cleared" : "warning") : "";
-      var label = e.kind === "warning" ? (e.cleared ? "Warning — cleared" : "⚠ Warning · strike " + (e.strike || "")) : "Note";
-      return '<div class="perf-entry ' + cls + '"><div class="meta"><b>' + E(label) + "</b><span>" + E(new Date(e.at).toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })) + " · " + E(e.by) + "</span>" +
+    var status = d.afterLadder
+      ? "The ladder is complete. Any further action — including termination — needs HR and legal review before anything happens."
+      : d.next === "pip_review"
+        ? "On a PIP since " + fmtDate(d.stageDate) + ". Next: a documented PIP outcome review."
+        : d.countable + " of " + d.threshold + " countable note" + (d.threshold === 1 ? "" : "s") + (d.stageDate ? " since the " + PERF_SHORT[d.stage].toLowerCase() + " on " + fmtDate(d.stageDate) : " in the last " + d.settings.windowMonths + " months") +
+          (d.reviewDue ? " — <b>review due for a " + E(d.nextLabel.toLowerCase()) + "</b>." : ".");
+    var warn = [];
+    if (d.needsHrReview) warn.push("<b>Risk factors are ticked</b> (" + E(d.risks.map(function (r) { return PERF_RISK_LABEL[r]; }).join(", ")) + ") — HR / legal must review before any escalation.");
+    if (d.notTold) warn.push(d.notTold + " note" + (d.notTold === 1 ? " hasn't" : "s haven't") + " been discussed with the employee yet, so " + (d.notTold === 1 ? "it doesn't" : "they don't") + " count. Have a brief informal conversation first.");
+    if (d.misconduct) warn.push("Serious misconduct is noted — handle it under the separate misconduct and disciplinary process, not by counting notes.");
+    if (d.legacy) warn.push(d.legacy + " note" + (d.legacy === 1 ? " is" : "s are") + " from the earlier version — check the dates and whether the employee was told.");
+    var risk = '<details class="qa" style="margin:12px 0;"' + (d.needsHrReview ? " open" : "") + '><summary>Profile and risk factors' + (d.needsHrReview ? ' <span class="flag risk">⚠ ' + d.risks.length + "</span>" : "") + '</summary><div class="qa-body">' +
+      '<div class="grid-2" style="gap:0 16px;">' +
+        (d.login ? "" : '<div class="nb-field"><label for="pp-name">Name / initials</label><input id="pp-name" data-pp="name" value="' + E(d.name) + '"></div>') +
+        '<div class="nb-field"><label for="pp-entity">Entity</label><select id="pp-entity" data-pp="entity">' + Object.keys(ENTITY_LABEL).map(function (k) { return '<option value="' + k + '"' + (d.entity === k ? " selected" : "") + ">" + E(ENTITY_LABEL[k]) + "</option>"; }).join("") + "</select></div>" +
+        '<div class="nb-field"><label for="pp-id">Employee ID or initials</label><input id="pp-id" data-pp="employeeId" value="' + E(d.employeeId) + '" placeholder="Used when “initials only” is on"></div>' +
+        '<div class="nb-field"><label for="pp-start">Start date (length of service)</label><input id="pp-start" type="date" data-pp="startDate" value="' + E(d.startDate) + '"></div></div>' +
+      '<div class="card-label" style="margin-top:6px;">Check before any escalation</div><div class="risk-grid">' + Object.keys(PERF_RISK_LABEL).map(function (r) {
+        return '<label><input type="checkbox" class="check" data-pp-risk="' + r + '"' + (d.risk[r] ? " checked" : "") + "> " + E(PERF_RISK_LABEL[r]) + "</label>";
+      }).join("") + "</div>" +
+      '<div class="nb-field" style="margin-top:10px;"><label for="pp-rn">Risk notes</label><textarea id="pp-rn" rows="2" data-pp="riskNotes" placeholder="Context for HR / legal">' + E(d.riskNotes) + "</textarea></div></div></details>";
+    var jur = function () {
+      return '<div class="juris"><div class="card-label">' + E(ENTITY_LABEL[d.entity]) + " — from HR's process (reminders, not legal advice)</div>" +
+        (JURIS[d.entity] || []).map(function (r) { return "<div><b>" + E(r[0]) + ":</b> " + E(r[1]) + "</div>"; }).join("") + "</div>";
+    };
+    var composer = "";
+    if (perf.composing || perf.editing) {
+      var f = perf.form, words = wordingFlags(f.text);
+      composer = '<div class="card" style="margin:14px 0;padding:16px 18px;"><div class="card-label">' + (perf.editing ? "Edit note" : "New note") + "</div>" +
+        '<div class="grid-2" style="gap:0 16px;"><div class="nb-field"><label for="pn-inc">Date of incident</label><input id="pn-inc" type="date" data-pn="incidentDate" value="' + E(f.incidentDate || "") + '" max="' + E(perf.list.today) + '"></div>' +
+        '<div class="nb-field"><label for="pn-rec">Date note received</label><input id="pn-rec" type="date" data-pn="receivedDate" value="' + E(f.receivedDate || "") + '"></div></div>' +
+        '<div class="nb-field"><label for="pn-from">From (optional)</label><input id="pn-from" data-pn="from" value="' + E(f.from || "") + '" placeholder="e.g. Email from Greg" autocomplete="off"></div>' +
+        '<div class="nb-field"><label for="pn-text">What happened — facts only</label><textarea id="pn-text" rows="4" data-pn="text" placeholder="Date, what was observed, the specific impact. No opinions or labels — notes are discoverable.">' + E(f.text || "") + "</textarea>" +
+        '<div class="small-note" id="pn-words" style="color:#8a5a14;">' + (words.length ? "Check wording: <b>" + E(words.join(", ")) + "</b> reads as opinion or emotion — describe what was seen or said instead." : "") + "</div></div>" +
+        '<div class="risk-grid"><label><input type="checkbox" class="check" data-pn-flag="told"' + (f.told ? " checked" : "") + "> Employee was told about this</label>" +
+        (f.told ? '<label>on <input type="date" data-pn="toldDate" value="' + E(f.toldDate || "") + '" class="att-time" style="width:140px;"></label>' : "") +
+        '<label><input type="checkbox" class="check" data-pn-flag="inPerformYard"' + (f.inPerformYard ? " checked" : "") + "> Entered in PerformYard</label>" +
+        '<label><input type="checkbox" class="check" data-pn-flag="misconduct"' + (f.misconduct ? " checked" : "") + "> Serious misconduct (safety, harassment, theft, threats)</label></div>" +
+        (f.misconduct ? '<p class="small-note" style="color:#9b2c28;margin:6px 0 0;">Serious misconduct goes through the separate misconduct and disciplinary process. It\'s recorded here but never counted.</p>' : "") +
+        '<div class="nb-foot"><input type="file" id="perfComposeFiles" multiple hidden>' + (perf.editing ? "" : '<button type="button" data-perf-composefiles>📎 Attach files</button><span class="small-note" id="perfComposeNames">' + E(perfPending.map(function (x) { return x.name; }).join(", ")) + "</span>") +
+        '<span class="grow"></span><button type="button" class="text-button" data-perf-cancel>Cancel</button><button type="button" class="primary" data-perf-savenote' + (perf.saving ? " disabled" : "") + ">" + (perf.saving ? "Saving…" : perf.editing ? "Save" : "Add note") + "</button></div></div>";
+    }
+    if (perf.stepping) {
+      var s = perf.step;
+      composer = '<div class="card" style="margin:14px 0;padding:16px 18px;"><div class="card-label">Record a step: ' + E(d.nextLabel) + "</div>" +
+        (d.needsHrReview ? '<div class="banner" style="margin:0 0 10px;">⚠ Risk factors are ticked — confirm HR / legal have reviewed this before recording it.</div>' : "") +
+        (!d.reviewDue && d.next !== "pip_review" ? '<div class="banner" style="margin:0 0 10px;">Only ' + d.countable + " of " + d.threshold + " countable notes so far. A count is a guide, not a trigger — make sure the facts support this step on their own.</div>" : "") +
+        jur() +
+        '<div class="grid-2" style="gap:0 16px;margin-top:10px;"><div class="nb-field"><label for="ps-date">Date of the step</label><input id="ps-date" type="date" data-ps="date" value="' + E(s.date || perf.list.today) + '"></div></div>' +
+        '<div class="nb-field"><label for="ps-reason">Why — which notes it\'s based on, what was discussed</label><textarea id="ps-reason" rows="3" data-ps="reason">' + E(s.reason || "") + "</textarea></div>" +
+        '<div class="risk-grid"><label><input type="checkbox" class="check" data-ps-flag="hrReviewed"' + (s.hrReviewed ? " checked" : "") + "> HR / legal have reviewed this" + (d.needsHrReview ? " (required)" : "") + "</label>" +
+        '<label><input type="checkbox" class="check" data-ps-flag="inPerformYard"' + (s.inPerformYard ? " checked" : "") + "> Recorded in PerformYard</label></div>" +
+        '<div class="nb-foot"><span class="grow"></span><button type="button" class="text-button" data-perf-cancel>Cancel</button><button type="button" class="primary" data-perf-savestep>Record ' + E(d.nextLabel.toLowerCase()) + "</button></div></div>";
+    }
+    var steps = d.steps.length ? d.steps.map(function (st, i) {
+      var latest = !st.undone && d.steps.filter(function (x) { return !x.undone; })[0] === st;
+      return '<div class="perf-entry warning' + (st.undone ? " cleared" : "") + '"><div class="meta"><b>' + E((st.undone ? "Undone: " : "") + ({ verbal: "Verbal warning", written: "Written warning", pip: "PIP", pip_review: "PIP outcome review" }[st.stage])) + "</b><span>" + E(fmtDate(st.date)) + " · " + E(st.by) + "</span>" +
+        (st.hrReviewed ? '<span class="flag">HR/legal reviewed</span>' : "") + (st.inPerformYard ? '<span class="flag">In PerformYard</span>' : '<span class="flag risk">Not in PerformYard</span>') +
+        '<span class="grow" style="flex:1"></span>' + (latest ? '<button type="button" class="text-button" data-perf-undo="' + E(st.id) + '">Undo</button>' : "") + "</div>" +
+        '<div class="txt">' + E(st.reason) + "</div>" + (st.undone ? '<div class="small-note">Undone ' + E(new Date(st.undone.at).toLocaleDateString()) + " by " + E(st.undone.by) + (st.undone.reason ? " — " + E(st.undone.reason) : "") + "</div>" : "") + "</div>";
+    }).join("") : '<div class="small-note" style="padding:6px 0 10px;">No formal steps yet.</div>';
+    var notes = d.entries.length ? d.entries.map(function (e) {
+      var ns = noteState(e, d);
+      return '<div class="perf-entry note-' + ns[0] + '"><div class="meta"><span class="nstate ' + ns[0] + '">' + E(ns[1]) + "</span><span>Incident " + E(fmtDate(e.incidentDate)) + " · received " + E(fmtDate(e.receivedDate)) + (e.from ? " · " + E(e.from) : "") + " · logged by " + E(e.by) + "</span>" +
         (e.editedAt ? "<span>(edited)</span>" : "") + '<span class="grow" style="flex:1"></span>' +
-        (e.kind === "warning" && !e.cleared ? '<button type="button" class="text-button" data-perf-clear="' + E(e.id) + '">Clear warning</button>' : "") +
-        (e.kind === "warning" && e.cleared ? '<button type="button" class="text-button" data-perf-restore="' + E(e.id) + '">Restore</button>' : "") +
+        '<label class="small-note"><input type="checkbox" class="check" data-perf-flag="told" data-id="' + E(e.id) + '"' + (e.told ? " checked" : "") + "> Told" + (e.told && e.toldDate ? " " + E(fmtDate(e.toldDate)) : "") + "</label>" +
+        '<label class="small-note"><input type="checkbox" class="check" data-perf-flag="inPerformYard" data-id="' + E(e.id) + '"' + (e.inPerformYard ? " checked" : "") + "> PerformYard</label>" +
         '<input type="file" data-perf-entryfiles="' + E(e.id) + '" multiple hidden><button type="button" class="text-button" data-perf-attach="' + E(e.id) + '">Attach</button>' +
-        (e.kind === "note" ? '<button type="button" class="text-button" data-perf-del="' + E(e.id) + '">Delete</button>' : "") + "</div>" +
+        '<button type="button" class="text-button" data-perf-edit="' + E(e.id) + '">Edit</button><button type="button" class="text-button" data-perf-del="' + E(e.id) + '">Delete</button></div>' +
         '<div class="txt">' + E(e.text) + "</div>" +
-        (e.cleared ? '<div class="small-note" style="margin-top:4px;">Cleared ' + E(new Date(e.cleared.at).toLocaleDateString()) + " by " + E(e.cleared.by) + (e.cleared.reason ? " — " + E(e.cleared.reason) : "") + "</div>" : "") +
         (filesFor(e.id).length ? '<div class="perf-files">' + filesFor(e.id).map(fileChip).join("") + "</div>" : "") + "</div>";
-    }).join("") : '<div class="nb-empty" style="padding:24px 0;">No notes or warnings yet.</div>';
+    }).join("") : '<div class="small-note" style="padding:6px 0;">No notes yet.</div>';
     var loose = filesFor("");
-    return '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;justify-content:space-between;"><h3>' + E(d.username) + "</h3>" +
-        "<span>" + tierPill(d.tier) + " " + strikeDots(d.strikes) + "</span></div>" +
-      '<div class="nb-sub">' + E((d.departments || []).join(", ")) + " · " + E(TIER_LABEL[d.tier]) +
-        (summary.openTasks != null ? " · " + summary.openTasks + " open task" + (summary.openTasks === 1 ? "" : "s") + (summary.overdue ? ", " + summary.overdue + " overdue" : "") : "") + "</div>" +
-      '<div class="nb-tools"><button type="button" data-perf-compose="note">+ Note</button>' +
-        (d.strikes < 3 ? '<button type="button" data-perf-compose="warning">⚠ Add warning</button>' : '<span class="tier tier-3">Three strikes reached</span>') +
+    return '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;justify-content:space-between;"><h3>' + E(perfName(d)) + "</h3>" + stageBadge(d.stage) + "</div>" +
+      '<div class="nb-sub">' + E(ENTITY_LABEL[d.entity]) + (d.departments.length ? " · " + E(d.departments.join(", ")) : "") + (d.startDate ? " · started " + E(fmtDate(d.startDate)) : "") + (d.login ? "" : " · no tracker login") + "</div>" +
+      ladder(d.stage) + '<p style="margin:12px 0 6px;">' + status + "</p>" +
+      warn.map(function (w) { return '<div class="banner" style="margin:6px 0;">' + w + "</div>"; }).join("") +
+      '<div class="nb-tools" style="margin-top:12px;"><button type="button" class="primary" data-perf-compose>+ Add note</button>' +
+        (d.next ? '<button type="button" data-perf-step>Record ' + E(d.nextLabel.toLowerCase()) + "…</button>" : '<span class="flag risk">Next: HR + legal review</span>') +
         '<input type="file" id="perfLooseFiles" multiple hidden><button type="button" data-perf-loose>📎 Attach file</button>' +
+        '<button type="button" data-perf-print title="For a records request, or to share with HR — choose Save as PDF">Download record</button>' +
         '<span class="grow" style="flex:1"></span>' + (d.auto ? "" : '<button type="button" class="text-button" data-perf-remove>Take off the list</button>') + "</div>" +
-      composer +
+      composer + risk +
       (loose.length ? '<div class="card-label" style="margin-top:12px;">Files</div><div class="perf-files" style="margin-bottom:12px;">' + loose.map(fileChip).join("") + "</div>" : "") +
-      '<div class="card-label" style="margin-top:14px;">History</div>' + entries;
+      '<div class="card-label" style="margin-top:14px;">Steps</div>' + steps +
+      '<div class="card-label" style="margin-top:14px;">Notes</div>' + notes;
+  }
+  function perfPrint(d) {
+    var box = $("#nbPrint");
+    if (!box) { box = document.createElement("div"); box.id = "nbPrint"; document.body.appendChild(box); }
+    var row = function (cells) { return "<tr>" + cells.map(function (c) { return '<td style="border:1px solid #ccc;padding:4pt 6pt;vertical-align:top;">' + c + "</td>"; }).join("") + "</tr>"; };
+    var th = function (cells) { return "<tr>" + cells.map(function (c) { return '<th style="border:1px solid #ccc;padding:4pt 6pt;text-align:left;font:700 8.5pt Arial;">' + c + "</th>"; }).join("") + "</tr>"; };
+    box.innerHTML = '<div class="pk">CONFIDENTIAL · PERFORMANCE RECORD</div><h1>' + E(perfName(d)) + '</h1><div class="pm">' + E(ENTITY_LABEL[d.entity]) + " · Current stage: " + E(d.stageLabel) + (d.stageDate ? " (" + E(fmtDate(d.stageDate)) + ")" : "") + " · Printed " + E(new Date().toLocaleDateString()) + "</div>" +
+      "<h4>Steps</h4>" + (d.steps.length ? '<table style="border-collapse:collapse;width:100%;font:9.5pt Arial;">' + th(["Date", "Step", "Reason", "HR/legal", "By"]) + d.steps.map(function (s) {
+        return row([E(fmtDate(s.date)), E((s.undone ? "Undone — " : "") + PERF_SHORT[s.stage]), E(s.reason), s.hrReviewed ? "Yes" : "No", E(s.by)]); }).join("") + "</table>" : "<p>None.</p>") +
+      "<h4>Notes</h4>" + (d.entries.length ? '<table style="border-collapse:collapse;width:100%;font:9.5pt Arial;">' + th(["Incident", "Received", "Description", "Told", "PerformYard", "Status"]) + d.entries.map(function (e) {
+        return row([E(fmtDate(e.incidentDate)), E(fmtDate(e.receivedDate)), E(e.text), e.told ? "Yes" + (e.toldDate ? " (" + E(fmtDate(e.toldDate)) + ")" : "") : "No", e.inPerformYard ? "Yes" : "No", E(noteState(e, d)[1])]); }).join("") + "</table>" : "<p>None.</p>") +
+      '<div class="pf">Quick-view summary from the AOG Tracker. PerformYard is the system of record. Not a compliance determination.</div>';
+    var oldTitle = document.title;
+    document.title = ("Performance record " + perfName(d)).replace(/[\\/:*?"<>|]+/g, " ");
+    document.body.classList.add("nb-printing");
+    var done = function () { document.body.classList.remove("nb-printing"); document.title = oldTitle; window.removeEventListener("afterprint", done); };
+    window.addEventListener("afterprint", done);
+    window.print();
+    setTimeout(done, 1000);
   }
   function perfUpload(files, entryId) {
-    var name = perf.sel, list = Array.prototype.slice.call(files || []);
+    var key = perf.sel, list = Array.prototype.slice.call(files || []);
     if (!list.length) return Promise.resolve();
     toast("Uploading " + list.length + " file" + (list.length === 1 ? "" : "s") + "…");
     return list.reduce(function (p, f) {
       return p.then(function () {
-        return fetch("/api/performance/" + encodeURIComponent(name) + "/files?name=" + encodeURIComponent(f.name) + "&entryId=" + encodeURIComponent(entryId || ""),
+        return fetch("/api/performance/" + encodeURIComponent(key) + "/files?name=" + encodeURIComponent(f.name) + "&entryId=" + encodeURIComponent(entryId || ""),
           { method: "POST", headers: { Authorization: "Bearer " + token(), "Content-Type": "application/octet-stream" }, body: f })
           .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(f.name + ": " + (d.error || "upload failed")); }); });
       });
     }, Promise.resolve()).then(function () { toast("Attached."); }, function (err) { toast(err.message, true); })
-      .then(function () { perf.personAt = 0; loadPerfPerson(name); });
+      .then(function () { perf.personAt = 0; loadPerfPerson(key); });
   }
-  document.addEventListener("input", function (e) { if (e.target.id === "perfText") perf.text = e.target.value; });
+  function perfReload() { perf.at = 0; perf.personAt = 0; loadPerf(); if (perf.sel) loadPerfPerson(perf.sel); render(); }
+  function perfBase() { return "/api/performance/" + encodeURIComponent(perf.sel || ""); }
+  document.addEventListener("input", function (e) {
+    var t = e.target, ds = t.dataset || {};
+    if (ds.pn) { perf.form[ds.pn] = t.value; if (ds.pn === "text") { var w = wordingFlags(t.value), el = $("#pn-words"); if (el) el.innerHTML = w.length ? "Check wording: <b>" + E(w.join(", ")) + "</b> reads as opinion or emotion — describe what was seen or said instead." : ""; } }
+    else if (ds.ps) perf.step[ds.ps] = t.value;
+    else if (ds.pa) perf.addForm[ds.pa] = t.value;
+  });
   document.addEventListener("change", function (e) {
-    var t = e.target;
-    if (t.id === "perfAdd" && t.value) {
-      var who = t.value;
-      api("/api/performance/people", { method: "POST", body: JSON.stringify({ username: who }) }).then(function () { perf.sel = who; perf.person = null; perf.at = 0; render(); }, function (err) { toast(err.message, true); });
-    } else if (t.id === "perfLooseFiles") { perfUpload(t.files, ""); t.value = ""; }
-    else if (t.dataset && t.dataset.perfEntryfiles) { perfUpload(t.files, t.dataset.perfEntryfiles); t.value = ""; }
+    var t = e.target, ds = t.dataset || {};
+    if (t.id === "perfInitials") { perfInitials = t.checked; try { localStorage.setItem("soi_perf_initials", perfInitials ? "1" : "0"); } catch (x) {} render(); return; }
+    if (ds.pa) { perf.addForm[ds.pa] = t.value; return; }
+    if (ds.pn) { perf.form[ds.pn] = t.value; return; }
+    if (ds.ps) { perf.step[ds.ps] = t.value; return; }
+    if (ds.pnFlag) { perf.form[ds.pnFlag] = t.checked; if (ds.pnFlag === "told" && t.checked && !perf.form.toldDate) perf.form.toldDate = perf.list.today; render(); return; }
+    if (ds.psFlag) { perf.step[ds.psFlag] = t.checked; return; }
+    if (ds.pp || ds.ppRisk) {
+      var body = {};
+      if (ds.ppRisk) { body.risk = {}; body.risk[ds.ppRisk] = t.checked; } else body[ds.pp] = t.value;
+      api(perfBase() + "/profile", { method: "PUT", body: JSON.stringify(body) }).then(function () { toast("Saved."); perfReload(); }, function (err) { toast(err.message, true); });
+      return;
+    }
+    if (ds.perfFlag) {
+      var ch = {}; ch[ds.perfFlag] = t.checked;
+      if (ds.perfFlag === "told" && t.checked) ch.toldDate = perf.list.today;
+      api(perfBase() + "/entries/" + encodeURIComponent(ds.id), { method: "PATCH", body: JSON.stringify(ch) }).then(function () { perfReload(); }, function (err) { toast(err.message, true); perfReload(); });
+      return;
+    }
+    if (t.id === "perfLooseFiles") { perfUpload(t.files, ""); t.value = ""; }
+    else if (ds.perfEntryfiles) { perfUpload(t.files, ds.perfEntryfiles); t.value = ""; }
     else if (t.id === "perfComposeFiles") {
       perfPending = Array.prototype.slice.call(t.files || []);
       var n = $("#perfComposeNames"); if (n) n.textContent = perfPending.map(function (f) { return f.name; }).join(", ");
     }
   });
   document.addEventListener("click", function (e) {
-    var t = e.target.closest && e.target.closest("[data-perf-sel],[data-perf-compose],[data-perf-cancel],[data-perf-save],[data-perf-clear],[data-perf-restore],[data-perf-del],[data-perf-attach],[data-perf-loose],[data-perf-composefiles],[data-perf-dl],[data-perf-rmfile],[data-perf-remove]");
+    var t = e.target.closest && e.target.closest("[data-perf-sel],[data-perf-add],[data-perf-addsave],[data-perf-addcancel],[data-perf-compose],[data-perf-cancel],[data-perf-savenote],[data-perf-edit],[data-perf-del],[data-perf-step],[data-perf-savestep],[data-perf-undo],[data-perf-attach],[data-perf-loose],[data-perf-composefiles],[data-perf-dl],[data-perf-rmfile],[data-perf-remove],[data-perf-print]");
     if (!t) return;
-    var ds = t.dataset, name = perf.sel, base = "/api/performance/" + encodeURIComponent(name || "");
-    var reload = function () { perf.at = 0; perf.personAt = 0; loadPerfPerson(name); render(); };
-    if (ds.perfSel) { perf.sel = ds.perfSel; perf.person = null; perf.compose = ""; perf.text = ""; perfPending = []; render(); return; }
-    if (ds.perfCompose) { perf.compose = ds.perfCompose; perf.text = ""; perfPending = []; render(); var tx = $("#perfText"); if (tx) tx.focus(); return; }
-    if ("perfCancel" in ds) { perf.compose = ""; perf.text = ""; perfPending = []; render(); return; }
+    var ds = t.dataset, base = perfBase(), d = perf.person;
+    var clearForms = function () { perf.composing = false; perf.editing = ""; perf.stepping = false; perf.form = {}; perf.step = {}; perfPending = []; };
+    if (ds.perfSel) { if (perf.sel !== ds.perfSel) { perf.sel = ds.perfSel; perf.person = null; clearForms(); } render(); return; }
+    if ("perfAdd" in ds) { perf.adding = true; perf.addForm = { entity: "SOI" }; render(); return; }
+    if ("perfAddcancel" in ds) { perf.adding = false; render(); return; }
+    if ("perfAddsave" in ds) {
+      var a = perf.addForm, body = a.username ? { username: a.username } : { name: a.name, entity: a.entity || "SOI" };
+      if (!a.username && !String(a.name || "").trim()) { toast("Pick a login or type a name / initials.", true); return; }
+      api("/api/performance/people", { method: "POST", body: JSON.stringify(body) }).then(function (r) { perf.adding = false; perf.sel = r.key; perf.person = null; perfReload(); }, function (err) { toast(err.message, true); });
+      return;
+    }
+    if ("perfCompose" in ds) { clearForms(); perf.composing = true; perf.form = { incidentDate: perf.list.today, receivedDate: perf.list.today }; render(); var tx = $("#pn-text"); if (tx) tx.focus(); return; }
+    if (ds.perfEdit) { var en = d.entries.filter(function (x) { return x.id === ds.perfEdit; })[0]; clearForms(); perf.editing = en.id; perf.form = { incidentDate: en.incidentDate, receivedDate: en.receivedDate, from: en.from, text: en.text, told: en.told, toldDate: en.toldDate, inPerformYard: en.inPerformYard, misconduct: en.misconduct }; render(); return; }
+    if ("perfCancel" in ds) { clearForms(); render(); return; }
+    if ("perfStep" in ds) { clearForms(); perf.stepping = true; perf.step = { date: perf.list.today }; render(); return; }
     if ("perfComposefiles" in ds) { $("#perfComposeFiles").click(); return; }
     if ("perfLoose" in ds) { $("#perfLooseFiles").click(); return; }
     if (ds.perfAttach) { var fi = document.querySelector('[data-perf-entryfiles="' + ds.perfAttach + '"]'); if (fi) fi.click(); return; }
-    if ("perfSave" in ds) {
-      if (!perf.text.trim()) { toast("Write something first.", true); return; }
-      if (perf.compose === "warning" && !confirm("Add a warning for " + name + "? This is strike " + ((perf.person && perf.person.strikes) + 1) + " of 3.")) return;
+    if ("perfPrint" in ds) { if (d) perfPrint(d); return; }
+    if ("perfSavenote" in ds) {
+      var f = perf.form;
+      if (!String(f.text || "").trim()) { toast("Describe what happened.", true); return; }
+      var w = wordingFlags(f.text);
+      if (w.length && !confirm("These words read as opinion or emotion: " + w.join(", ") + ". Notes are discoverable. Save anyway?")) return;
+      var payload = { incidentDate: f.incidentDate, receivedDate: f.receivedDate, from: f.from || "", text: f.text, told: !!f.told, toldDate: f.told ? f.toldDate || "" : "", inPerformYard: !!f.inPerformYard, misconduct: !!f.misconduct };
       perf.saving = true; render();
-      api(base + "/entries", { method: "POST", body: JSON.stringify({ kind: perf.compose, text: perf.text }) }).then(function (entry) {
-        var files = perfPending; perfPending = [];
-        perf.saving = false; perf.compose = ""; perf.text = "";
-        toast(entry.kind === "warning" ? "Warning added — strike " + entry.strike + " of 3." : "Note added.");
+      var req = perf.editing ? api(base + "/entries/" + encodeURIComponent(perf.editing), { method: "PATCH", body: JSON.stringify(payload) }) : api(base + "/entries", { method: "POST", body: JSON.stringify(payload) });
+      req.then(function (entry) {
+        var files = perf.editing ? [] : perfPending;
+        perf.saving = false; clearForms();
+        toast("Saved.");
         return perfUpload(files, entry.id);
-      }, function (err) { perf.saving = false; toast(err.message, true); }).then(reload);
+      }, function (err) { perf.saving = false; toast(err.message, true); render(); }).then(perfReload);
       return;
     }
-    if (ds.perfClear) {
-      var why = prompt("Why is this warning being cleared? (kept with the record)");
+    if ("perfSavestep" in ds) {
+      var s = perf.step;
+      if (!String(s.reason || "").trim()) { toast("Say briefly why — which notes it's based on.", true); return; }
+      if (d.needsHrReview && !s.hrReviewed) { toast("Risk factors are ticked — confirm HR / legal have reviewed this first.", true); return; }
+      if (!confirm("Record a " + d.nextLabel.toLowerCase() + " for " + perfName(d) + " on " + fmtDate(s.date) + "?")) return;
+      api(base + "/steps", { method: "POST", body: JSON.stringify({ stage: d.next, date: s.date, reason: s.reason, hrReviewed: !!s.hrReviewed, inPerformYard: !!s.inPerformYard }) })
+        .then(function () { clearForms(); toast("Recorded. Remember to record it in PerformYard too."); perfReload(); }, function (err) { toast(err.message, true); });
+      return;
+    }
+    if (ds.perfUndo) {
+      var why = prompt("Why is this step being undone? (kept with the record)");
       if (why === null) return;
-      api(base + "/entries/" + encodeURIComponent(ds.perfClear), { method: "PATCH", body: JSON.stringify({ clear: true, reason: why }) }).then(function () { toast("Warning cleared."); reload(); }, function (err) { toast(err.message, true); });
+      api(base + "/steps/" + encodeURIComponent(ds.perfUndo) + "/undo", { method: "POST", body: JSON.stringify({ reason: why }) }).then(function () { toast("Undone."); perfReload(); }, function (err) { toast(err.message, true); });
       return;
     }
-    if (ds.perfRestore) { api(base + "/entries/" + encodeURIComponent(ds.perfRestore), { method: "PATCH", body: JSON.stringify({ restore: true }) }).then(function () { toast("Warning restored."); reload(); }, function (err) { toast(err.message, true); }); return; }
     if (ds.perfDel) {
-      if (!confirm("Delete this note and its attachments?")) return;
-      api(base + "/entries/" + encodeURIComponent(ds.perfDel), { method: "DELETE" }).then(function () { toast("Deleted."); reload(); }, function (err) { toast(err.message, true); });
+      if (!confirm("Delete this note and its attachments? (PerformYard is the system of record — delete there too if needed.)")) return;
+      api(base + "/entries/" + encodeURIComponent(ds.perfDel), { method: "DELETE" }).then(function () { toast("Deleted."); perfReload(); }, function (err) { toast(err.message, true); });
       return;
     }
     if (ds.perfDl) {
-      var meta = perf.person.files.filter(function (f) { return f.id === ds.perfDl; })[0];
+      var meta = d.files.filter(function (x) { return x.id === ds.perfDl; })[0];
       fetch(base + "/files/" + encodeURIComponent(ds.perfDl), { headers: { Authorization: "Bearer " + token() } })
         .then(function (r) { if (!r.ok) throw new Error("Couldn't download that file"); return r.blob(); })
-        .then(function (b) { var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = meta ? meta.name : "file"; document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000); },
+        .then(function (b) { var a2 = document.createElement("a"); a2.href = URL.createObjectURL(b); a2.download = meta ? meta.name : "file"; document.body.appendChild(a2); a2.click(); setTimeout(function () { URL.revokeObjectURL(a2.href); a2.remove(); }, 1000); },
               function (err) { toast(err.message, true); });
       return;
     }
     if (ds.perfRmfile) {
       if (!confirm("Remove this attachment?")) return;
-      api(base + "/files/" + encodeURIComponent(ds.perfRmfile), { method: "DELETE" }).then(function () { toast("Removed."); reload(); }, function (err) { toast(err.message, true); });
+      api(base + "/files/" + encodeURIComponent(ds.perfRmfile), { method: "DELETE" }).then(function () { toast("Removed."); perfReload(); }, function (err) { toast(err.message, true); });
       return;
     }
     if ("perfRemove" in ds) {
-      if (!confirm("Take " + name + " off the list? Their notes and warnings are kept, and they come back if anything is added.")) return;
-      api("/api/performance/people/" + encodeURIComponent(name), { method: "DELETE" }).then(function () { perf.sel = ""; perf.person = null; perf.at = 0; render(); }, function (err) { toast(err.message, true); });
+      if (!confirm("Take " + perfName(d) + " off the list? Their notes and steps are kept, and they come back if anything is added.")) return;
+      api("/api/performance/people/" + encodeURIComponent(perf.sel), { method: "DELETE" }).then(function () { perf.sel = ""; perf.person = null; perfReload(); }, function (err) { toast(err.message, true); });
     }
   });
 

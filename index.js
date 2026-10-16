@@ -1276,14 +1276,28 @@ app.put(
 );
 
 // ---------- Performance ----------
-// People are on the list automatically when "Show in team breakdown" is
-// ticked on their login, or when added by hand. Each has dated notes,
-// attachments, and warnings: every active warning is a strike, and the
-// tier is the number of strikes (3 = three strikes). Clearing a warning
-// keeps it in the history with a reason. Only logins with "Performance
-// access" ticked in /admin.html can see any of it — checked against the
-// saved login on every request.
+// HR's Global Performance Management Escalation Process, as a quick-view
+// tracker for the CEO and Leadership (PerformYard stays the system of
+// record). Only logins with "Performance access" ticked in /admin.html can
+// see any of it — checked against the saved login on every request.
+//
+// People: anyone with "Show in team breakdown", anyone added by hand — with
+// or without a tracker login (other domains), by name or initials.
+// Notes: factual, dated (incident + received), with whether the employee
+// was told, whether it's in PerformYard, and a serious-misconduct option.
+// A note counts only if the employee was told, it isn't misconduct (that
+// has its own process), and the incident is inside the rolling window.
+// Stages: verbal warning → written warning → PIP → PIP outcome review.
+// Enough countable notes since the last step makes a *review due*; a step
+// is only ever recorded by a person, never automatically. Termination is
+// not a stage: it always needs HR and legal review. Counts and the window
+// are admin settings (HR's numbers are placeholders).
 const PERF_TEXT = 5000;
+const PERF_STAGES = ["verbal", "written", "pip", "pip_review"];
+const PERF_STAGE_LABEL = { none: "No formal step", verbal: "Verbal warning", written: "Written warning", pip: "Performance Improvement Plan", pip_review: "PIP outcome review" };
+const PERF_ENTITIES = ["SOI", "CAS", "RedSun", "NanoTech"];
+const COMPANY_ENTITY = { "SOI Aviation": "SOI", CAS: "CAS", "RedSun Aviation": "RedSun", "NanoTech Aviation": "NanoTech" };
+const PERF_RISKS = ["leave", "medical", "complaint", "grievance", "parental", "service", "claims"];
 const PERF_FILE_TYPES = {
   pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp",
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -1291,6 +1305,8 @@ const PERF_FILE_TYPES = {
   pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   doc: "application/msword", xls: "application/vnd.ms-excel", txt: "text/plain", csv: "text/csv", msg: "application/vnd.ms-outlook", eml: "message/rfc822",
 };
+const PERF_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
 async function hasPerformance(user) {
   const u = (await getUsers()).find((x) => sameUser(x.username, user.username));
   return !!(u && u.performance);
@@ -1299,178 +1315,317 @@ const performanceOnly = asyncHandler(async (req, res, next) => {
   if (!(await hasPerformance(req.user))) return res.status(403).json({ error: "Performance is private" });
   next();
 });
+async function perfSettings() {
+  const s = (await getSettings()).performance || {};
+  const n = (v, d, lo, hi) => { const x = parseInt(v, 10); return x >= lo && x <= hi ? x : d; };
+  return { windowMonths: n(s.windowMonths, 12, 1, 36), verbal: n(s.verbal, 3, 1, 20), written: n(s.written, 2, 1, 20), pip: n(s.pip, 2, 1, 20) };
+}
 function perfShape(doc) { doc.people = doc.people && typeof doc.people === "object" ? doc.people : {}; return doc; }
-function perfPerson(doc, username) {
-  const p = (doc.people[username] = doc.people[username] || {});
+// Older entries (from the first version) were "warnings" with just text:
+// they become notes that don't count until someone reviews them.
+function perfEntry(e) {
+  if (e.kind === "warning") {
+    return Object.assign({}, e, { kind: "note", legacyWarning: true, told: !!e.told, incidentDate: e.incidentDate || new Date(e.at).toISOString().slice(0, 10), receivedDate: e.receivedDate || new Date(e.at).toISOString().slice(0, 10) });
+  }
+  return Object.assign({ incidentDate: new Date(e.at || Date.now()).toISOString().slice(0, 10), receivedDate: new Date(e.at || Date.now()).toISOString().slice(0, 10) }, e);
+}
+function perfRecord(doc, key) {
+  const p = (doc.people[key] = doc.people[key] || {});
   p.entries = Array.isArray(p.entries) ? p.entries : [];
   p.files = Array.isArray(p.files) ? p.files : [];
+  p.steps = Array.isArray(p.steps) ? p.steps : [];
+  p.risk = p.risk && typeof p.risk === "object" ? p.risk : {};
   return p;
 }
-function strikesOf(p) { return (p.entries || []).filter((e) => e.kind === "warning" && !e.cleared).length; }
-// Who's on the list: breakdown logins and people added by hand, minus
-// anyone taken off (their records are kept).
-function perfRoster(users, doc) {
-  return users.filter((u) => {
+function addMonths(ymd, n) { const d = new Date(`${ymd}T12:00:00Z`); d.setUTCMonth(d.getUTCMonth() + n); return d.toISOString().slice(0, 10); }
+
+/** Where someone is on the ladder, and whether a review is due. */
+function perfStatus(p, settings, today) {
+  const entries = (p.entries || []).map(perfEntry);
+  const steps = (p.steps || []).filter((s) => !s.undone).sort((a, b) => String(a.date).localeCompare(String(b.date)) || (a.at || 0) - (b.at || 0));
+  const last = steps[steps.length - 1];
+  const stage = last ? last.stage : "none";
+  const next = PERF_STAGES[stage === "none" ? 0 : PERF_STAGES.indexOf(stage) + 1] || null;
+  const windowStart = addMonths(today, -settings.windowMonths);
+  const live = entries.filter((e) => e.kind === "note" && !e.misconduct && e.incidentDate >= windowStart);
+  const countable = live.filter((e) => e.told && (!last || e.incidentDate > last.date));
+  const notTold = live.filter((e) => !e.told);
+  const threshold = next && next !== "pip_review" ? settings[next] : null;
+  const risks = PERF_RISKS.filter((r) => p.risk && p.risk[r]);
+  return {
+    stage, stageLabel: PERF_STAGE_LABEL[stage], stageDate: last ? last.date : "",
+    next, nextLabel: next ? PERF_STAGE_LABEL[next] : "",
+    countable: countable.length, threshold,
+    reviewDue: threshold != null ? countable.length >= threshold : stage === "pip",
+    afterLadder: stage === "pip_review",
+    notTold: notTold.length,
+    misconduct: entries.filter((e) => e.misconduct && !e.misconductClosed).length,
+    notInPerformYard: entries.filter((e) => e.kind === "note" && !e.inPerformYard).length,
+    legacy: entries.filter((e) => e.legacyWarning && !e.reviewed).length,
+    risks, needsHrReview: risks.length > 0,
+    windowStart,
+  };
+}
+
+// People on the list. Keys are login usernames, or "x-…" for people
+// without a login.
+function perfPeople(users, doc) {
+  const out = [];
+  const byName = new Map(users.map((u) => [u.username, u]));
+  for (const u of users) {
     const p = doc.people[u.username] || {};
-    if (p.hidden) return false;
-    return u.breakdown || p.manual || (p.entries || []).length > 0;
-  });
+    if (p.hidden) continue;
+    if (u.breakdown || p.manual || (p.entries || []).length || (p.steps || []).length) out.push({ key: u.username, name: u.username, login: true, user: u, rec: p });
+  }
+  for (const [key, p] of Object.entries(doc.people)) {
+    if (!key.startsWith("x-") || p.hidden || byName.has(key)) continue;
+    out.push({ key, name: p.name || key, login: false, user: null, rec: p });
+  }
+  return out;
 }
-async function perfUser(name) {
-  const u = (await getUsers()).map(normalizeUser).find((x) => sameUser(x.username, name));
-  return u || null;
+function entityOf(person) {
+  if (person.rec && PERF_ENTITIES.includes(person.rec.entity)) return person.rec.entity;
+  const co = person.user && (person.user.companies || [])[0];
+  return COMPANY_ENTITY[co] || "SOI";
 }
+async function perfFind(key) {
+  const users = (await getUsers()).map(normalizeUser);
+  const doc = perfShape(await getPerformance());
+  return perfPeople(users, doc).find((x) => x.key === key) ||
+    (users.find((u) => u.username === key) ? { key, name: key, login: true, user: users.find((u) => u.username === key), rec: doc.people[key] || {} } : null);
+}
+function perfOfficeToday() { return officeStamp(new Date().toISOString()).slice(0, 10) || new Date().toISOString().slice(0, 10); }
 
 app.get(
   "/api/performance",
   authMiddleware,
   performanceOnly,
   asyncHandler(async (req, res) => {
-    const [users, doc, tasks] = await Promise.all([getUsers(), getPerformance(), getTasks()]);
+    const [users, doc, tasks, settings] = await Promise.all([getUsers(), getPerformance(), getTasks(), perfSettings()]);
     perfShape(doc);
     const all = users.map(normalizeUser);
-    const roster = perfRoster(all, doc);
-    const people = roster.map((u) => {
-      const p = doc.people[u.username] || {};
-      const mine = tasks.filter((t) => sameUser(t.owner, u.username));
-      const strikes = strikesOf(p);
-      const last = (p.entries || []).reduce((m, e) => Math.max(m, e.at || 0), 0);
-      return {
-        username: u.username, departments: u.fullAccess ? ["Full access"] : u.departments, auto: !!u.breakdown,
-        strikes, tier: Math.min(strikes, 3), notes: (p.entries || []).length, lastAt: last,
+    const today = perfOfficeToday();
+    const list = perfPeople(all, doc);
+    const people = list.map((x) => {
+      const mine = x.login ? tasks.filter((t) => sameUser(t.owner, x.key)) : [];
+      return Object.assign({
+        key: x.key, name: x.name, login: x.login, employeeId: x.rec.employeeId || "", entity: entityOf(x),
+        departments: x.user ? (x.user.fullAccess ? ["Full access"] : x.user.departments) : [],
+        auto: !!(x.user && x.user.breakdown),
+        notes: (x.rec.entries || []).length,
+        lastAt: (x.rec.entries || []).reduce((m, e) => Math.max(m, e.at || 0), 0),
         openTasks: mine.filter((t) => t.status !== "done").length,
-        overdue: mine.filter((t) => t.status !== "done" && t.dueDate && t.dueDate < new Date().toISOString().slice(0, 10)).length,
-      };
-    }).sort((a, b) => b.tier - a.tier || a.username.toLowerCase().localeCompare(b.username.toLowerCase()));
-    const inList = new Set(roster.map((u) => u.username));
-    res.json({ people, others: all.filter((u) => !inList.has(u.username)).map((u) => u.username).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())) });
+      }, perfStatus(x.rec, settings, today));
+    }).sort((a, b) => Number(b.reviewDue) - Number(a.reviewDue) || PERF_STAGES.indexOf(b.stage) - PERF_STAGES.indexOf(a.stage) || a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+    const inList = new Set(list.map((x) => x.key));
+    res.json({ settings, today, people, others: all.filter((u) => !inList.has(u.username)).map((u) => u.username).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())) });
   })
 );
 
 app.get(
-  "/api/performance/:username",
+  "/api/performance/:key",
   authMiddleware,
   performanceOnly,
   asyncHandler(async (req, res) => {
-    const u = await perfUser(req.params.username);
-    if (!u) return res.status(404).json({ error: "No login by that name" });
-    const p = perfShape(await getPerformance()).people[u.username] || {};
-    const entries = (p.entries || []).slice().sort((a, b) => (b.at || 0) - (a.at || 0));
-    const strikes = strikesOf(p);
-    res.json({ username: u.username, departments: u.fullAccess ? ["Full access"] : u.departments, auto: !!u.breakdown, strikes, tier: Math.min(strikes, 3), entries, files: p.files || [] });
+    const x = await perfFind(req.params.key);
+    if (!x) return res.status(404).json({ error: "Not on the list" });
+    const settings = await perfSettings();
+    const p = x.rec || {};
+    res.json(Object.assign({
+      key: x.key, name: x.name, login: x.login, entity: entityOf(x), employeeId: p.employeeId || "", startDate: p.startDate || "",
+      risk: p.risk || {}, riskNotes: p.riskNotes || "",
+      departments: x.user ? (x.user.fullAccess ? ["Full access"] : x.user.departments) : [], auto: !!(x.user && x.user.breakdown),
+      entries: (p.entries || []).map(perfEntry).sort((a, b) => String(b.incidentDate).localeCompare(String(a.incidentDate)) || (b.at || 0) - (a.at || 0)),
+      steps: (p.steps || []).slice().sort((a, b) => String(b.date).localeCompare(String(a.date)) || (b.at || 0) - (a.at || 0)),
+      files: p.files || [], settings,
+    }, perfStatus(p, settings, perfOfficeToday())));
   })
 );
 
-// Add someone by hand, or take them off the list (records are kept).
+// Add someone: a login ({ username }) or a person without one ({ name, entity }).
 app.post(
   "/api/performance/people",
   authMiddleware,
   performanceOnly,
   asyncHandler(async (req, res) => {
-    const u = await perfUser((req.body || {}).username);
-    if (!u) return res.status(404).json({ error: "No login by that name" });
-    await withPerformance((doc) => { const p = perfPerson(perfShape(doc), u.username); p.manual = true; p.hidden = false; });
-    res.status(201).json({ username: u.username });
+    const b = req.body || {};
+    if (b.username) {
+      const u = (await getUsers()).find((x) => sameUser(x.username, b.username));
+      if (!u) return res.status(404).json({ error: "No login by that name" });
+      await withPerformance((doc) => { const p = perfRecord(perfShape(doc), u.username); p.manual = true; p.hidden = false; });
+      return res.status(201).json({ key: u.username });
+    }
+    const name = String(b.name || "").trim().slice(0, 80);
+    if (!name) return res.status(400).json({ error: "Give a name, initials or employee ID" });
+    if (b.entity && !PERF_ENTITIES.includes(b.entity)) return res.status(400).json({ error: "Pick SOI, CAS, Red Sun or Nanotech" });
+    const key = "x-" + newId();
+    await withPerformance((doc) => { const p = perfRecord(perfShape(doc), key); Object.assign(p, { name, entity: b.entity || "SOI", manual: true, hidden: false, addedAt: Date.now(), addedBy: req.user.username }); });
+    res.status(201).json({ key });
   })
 );
 app.delete(
-  "/api/performance/people/:username",
+  "/api/performance/people/:key",
   authMiddleware,
   performanceOnly,
   asyncHandler(async (req, res) => {
-    const u = await perfUser(req.params.username);
-    if (!u) return res.status(404).json({ error: "No login by that name" });
-    await withPerformance((doc) => { const p = perfPerson(perfShape(doc), u.username); p.manual = false; p.hidden = true; });
+    const x = await perfFind(req.params.key);
+    if (!x) return res.status(404).json({ error: "Not on the list" });
+    await withPerformance((doc) => { const p = perfRecord(perfShape(doc), x.key); p.manual = false; p.hidden = true; });
     res.status(204).end();
   })
 );
 
-// Notes and warnings.
-app.post(
-  "/api/performance/:username/entries",
+// Profile: entity, employee ID / initials, start date, risk factors.
+app.put(
+  "/api/performance/:key/profile",
   authMiddleware,
   performanceOnly,
   asyncHandler(async (req, res) => {
-    const u = await perfUser(req.params.username);
-    if (!u) return res.status(404).json({ error: "No login by that name" });
+    const x = await perfFind(req.params.key);
+    if (!x) return res.status(404).json({ error: "Not on the list" });
     const b = req.body || {};
-    const kind = b.kind === "warning" ? "warning" : "note";
-    const text = String(b.text || "").trim().slice(0, PERF_TEXT);
-    if (!text) return res.status(400).json({ error: kind === "warning" ? "Say what the warning is for" : "Write the note first" });
-    const entry = await withPerformance((doc) => {
-      const p = perfPerson(perfShape(doc), u.username);
-      if (kind === "warning" && strikesOf(p) >= 3) return { error: `${u.username} already has 3 active warnings` };
-      const e = { id: newId(), kind, text, at: Date.now(), by: req.user.username };
-      if (kind === "warning") e.strike = strikesOf(p) + 1;
-      p.entries.push(e);
-      p.hidden = false;
-      return e;
+    if ("entity" in b && !PERF_ENTITIES.includes(b.entity)) return res.status(400).json({ error: "Pick SOI, CAS, Red Sun or Nanotech" });
+    if ("startDate" in b && b.startDate && !PERF_DATE.test(b.startDate)) return res.status(400).json({ error: "Bad start date" });
+    const out = await withPerformance((doc) => {
+      const p = perfRecord(perfShape(doc), x.key);
+      if ("entity" in b) p.entity = b.entity;
+      if ("employeeId" in b) p.employeeId = String(b.employeeId || "").trim().slice(0, 40);
+      if ("name" in b && !x.login) p.name = String(b.name || "").trim().slice(0, 80) || p.name;
+      if ("startDate" in b) p.startDate = b.startDate || "";
+      if (b.risk && typeof b.risk === "object") for (const r of PERF_RISKS) if (r in b.risk) p.risk[r] = !!b.risk[r];
+      if ("riskNotes" in b) p.riskNotes = String(b.riskNotes || "").slice(0, 2000);
+      p.updatedAt = Date.now(); p.updatedBy = req.user.username;
+      return { ok: true };
     });
-    if (entry.error) return res.status(400).json(entry);
-    res.status(201).json(entry);
+    res.json(out);
+  })
+);
+
+function cleanNote(b, base) {
+  const e = Object.assign({}, base || {});
+  if ("text" in b) e.text = String(b.text || "").trim().slice(0, PERF_TEXT);
+  for (const k of ["incidentDate", "receivedDate", "toldDate"]) if (k in b) e[k] = PERF_DATE.test(b[k] || "") ? b[k] : "";
+  for (const k of ["told", "inPerformYard", "misconduct", "misconductClosed", "reviewed"]) if (k in b) e[k] = !!b[k];
+  if ("from" in b) e.from = String(b.from || "").trim().slice(0, 120);
+  return e;
+}
+app.post(
+  "/api/performance/:key/entries",
+  authMiddleware,
+  performanceOnly,
+  asyncHandler(async (req, res) => {
+    const x = await perfFind(req.params.key);
+    if (!x) return res.status(404).json({ error: "Not on the list" });
+    const today = perfOfficeToday();
+    const e = cleanNote(req.body || {}, { id: newId(), kind: "note", at: Date.now(), by: req.user.username, incidentDate: today, receivedDate: today });
+    if (!e.text) return res.status(400).json({ error: "Describe what happened" });
+    if (!e.incidentDate) return res.status(400).json({ error: "Give the date of the incident" });
+    if (e.incidentDate > today) return res.status(400).json({ error: "The incident date can't be in the future" });
+    await withPerformance((doc) => { const p = perfRecord(perfShape(doc), x.key); p.entries.push(e); p.hidden = false; });
+    res.status(201).json(e);
   })
 );
 app.patch(
-  "/api/performance/:username/entries/:id",
+  "/api/performance/:key/entries/:id",
   authMiddleware,
   performanceOnly,
   asyncHandler(async (req, res) => {
-    const u = await perfUser(req.params.username);
-    if (!u) return res.status(404).json({ error: "No login by that name" });
-    const b = req.body || {};
+    const x = await perfFind(req.params.key);
+    if (!x) return res.status(404).json({ error: "Not on the list" });
     const out = await withPerformance((doc) => {
-      const p = perfPerson(perfShape(doc), u.username);
-      const e = p.entries.find((x) => x.id === req.params.id);
-      if (!e) return null;
-      if ("text" in b) { const t = String(b.text || "").trim().slice(0, PERF_TEXT); if (!t) return { error: "Text can't be empty" }; e.text = t; e.editedAt = Date.now(); e.editedBy = req.user.username; }
-      // Clearing a warning keeps it on record and removes the strike.
-      if (b.clear && e.kind === "warning" && !e.cleared) e.cleared = { at: Date.now(), by: req.user.username, reason: String(b.reason || "").trim().slice(0, 500) };
-      if (b.restore && e.kind === "warning" && e.cleared) {
-        if (strikesOf(p) >= 3) return { error: "Already at 3 active warnings" };
-        delete e.cleared;
-      }
+      const p = perfRecord(perfShape(doc), x.key);
+      const i = p.entries.findIndex((y) => y.id === req.params.id);
+      if (i === -1) return null;
+      const before = perfEntry(p.entries[i]);
+      const e = cleanNote(req.body || {}, before);
+      if (!e.text) return { error: "Text can't be empty" };
+      if (!e.incidentDate) return { error: "Give the date of the incident" };
+      delete e.kind; e.kind = "note";
+      if (before.legacyWarning) { e.legacyWarning = true; if ("told" in (req.body || {}) || "reviewed" in (req.body || {})) e.reviewed = true; }
+      e.editedAt = Date.now(); e.editedBy = req.user.username;
+      p.entries[i] = e;
       return Object.assign({}, e);
     });
-    if (!out) return res.status(404).json({ error: "That entry isn't here any more" });
+    if (!out) return res.status(404).json({ error: "That note isn't here any more" });
     if (out.error) return res.status(400).json(out);
     res.json(out);
   })
 );
-// Notes can be deleted; warnings are cleared instead, so the record stays.
 app.delete(
-  "/api/performance/:username/entries/:id",
+  "/api/performance/:key/entries/:id",
   authMiddleware,
   performanceOnly,
   asyncHandler(async (req, res) => {
-    const u = await perfUser(req.params.username);
-    if (!u) return res.status(404).json({ error: "No login by that name" });
+    const x = await perfFind(req.params.key);
+    if (!x) return res.status(404).json({ error: "Not on the list" });
     const out = await withPerformance((doc) => {
-      const p = perfPerson(perfShape(doc), u.username);
-      const i = p.entries.findIndex((x) => x.id === req.params.id);
+      const p = perfRecord(perfShape(doc), x.key);
+      const i = p.entries.findIndex((y) => y.id === req.params.id);
       if (i === -1) return null;
-      if (p.entries[i].kind === "warning") return { error: "Warnings are cleared, not deleted, so the history stays" };
       const [gone] = p.entries.splice(i, 1);
       const files = p.files.filter((f) => f.entryId === gone.id);
       p.files = p.files.filter((f) => f.entryId !== gone.id);
       return { files };
     });
-    if (!out) return res.status(404).json({ error: "That entry isn't here any more" });
-    if (out.error) return res.status(400).json(out);
+    if (!out) return res.status(404).json({ error: "That note isn't here any more" });
     await Promise.all(out.files.map((f) => deleteFile(`performance_files/${f.id}`).catch(() => {})));
     res.status(204).end();
+  })
+);
+
+// Record a step (always a person's decision). Only the next stage in order.
+// With any risk factor ticked, HR / legal review must be confirmed.
+app.post(
+  "/api/performance/:key/steps",
+  authMiddleware,
+  performanceOnly,
+  asyncHandler(async (req, res) => {
+    const x = await perfFind(req.params.key);
+    if (!x) return res.status(404).json({ error: "Not on the list" });
+    const b = req.body || {};
+    const settings = await perfSettings();
+    const st = perfStatus(x.rec || {}, settings, perfOfficeToday());
+    if (!st.next || b.stage !== st.next) return res.status(400).json({ error: st.next ? `The next step is ${st.nextLabel}` : "The ladder is complete — anything further needs HR and legal review" });
+    if (!PERF_DATE.test(b.date || "")) return res.status(400).json({ error: "Give the date of the step" });
+    const reason = String(b.reason || "").trim().slice(0, 2000);
+    if (!reason) return res.status(400).json({ error: "Say briefly why (the notes it's based on)" });
+    if (st.needsHrReview && !b.hrReviewed) return res.status(400).json({ error: "Risk factors are ticked — confirm HR / legal have reviewed this first" });
+    const step = { id: newId(), stage: b.stage, date: b.date, reason, hrReviewed: !!b.hrReviewed, inPerformYard: !!b.inPerformYard, at: Date.now(), by: req.user.username };
+    await withPerformance((doc) => { const p = perfRecord(perfShape(doc), x.key); p.steps.push(step); p.hidden = false; });
+    res.status(201).json(step);
+  })
+);
+// Undo the latest step (kept in the history, marked undone, with a reason).
+app.post(
+  "/api/performance/:key/steps/:id/undo",
+  authMiddleware,
+  performanceOnly,
+  asyncHandler(async (req, res) => {
+    const x = await perfFind(req.params.key);
+    if (!x) return res.status(404).json({ error: "Not on the list" });
+    const out = await withPerformance((doc) => {
+      const p = perfRecord(perfShape(doc), x.key);
+      const live = p.steps.filter((s) => !s.undone).sort((a, b) => String(a.date).localeCompare(String(b.date)) || (a.at || 0) - (b.at || 0));
+      const last = live[live.length - 1];
+      if (!last || last.id !== req.params.id) return { error: "Only the latest step can be undone" };
+      last.undone = { at: Date.now(), by: req.user.username, reason: String((req.body || {}).reason || "").trim().slice(0, 500) };
+      return { ok: true };
+    });
+    if (out.error) return res.status(400).json(out);
+    res.json(out);
   })
 );
 
 // Attachments (up to 15 MB): documents, images, emails. Always downloaded,
 // never shown in the page.
 app.post(
-  "/api/performance/:username/files",
+  "/api/performance/:key/files",
   authMiddleware,
   performanceOnly,
   express.raw({ type: () => true, limit: "15mb" }),
   asyncHandler(async (req, res) => {
-    const u = await perfUser(req.params.username);
-    if (!u) return res.status(404).json({ error: "No login by that name" });
+    const x = await perfFind(req.params.key);
+    if (!x) return res.status(404).json({ error: "Not on the list" });
     const name = String(req.query.name || "file").replace(/[\\/\r\n"]+/g, "_").slice(0, 160);
     const ext = (name.match(/\.([a-z0-9]{2,5})$/i) || [])[1];
     const type = ext && PERF_FILE_TYPES[ext.toLowerCase()];
@@ -1478,18 +1633,17 @@ app.post(
     if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "No file came through" });
     const file = { id: newId(), name, type, size: req.body.length, at: Date.now(), by: req.user.username, entryId: String(req.query.entryId || "").slice(0, 40) };
     await putFile(`performance_files/${file.id}`, req.body, type);
-    await withPerformance((doc) => { const p = perfPerson(perfShape(doc), u.username); p.files.push(file); p.hidden = false; });
+    await withPerformance((doc) => { const p = perfRecord(perfShape(doc), x.key); p.files.push(file); p.hidden = false; });
     res.status(201).json(file);
   })
 );
 app.get(
-  "/api/performance/:username/files/:id",
+  "/api/performance/:key/files/:id",
   authMiddleware,
   performanceOnly,
   asyncHandler(async (req, res) => {
-    const u = await perfUser(req.params.username);
-    const p = u && perfShape(await getPerformance()).people[u.username];
-    const meta = p && (p.files || []).find((f) => f.id === req.params.id);
+    const x = await perfFind(req.params.key);
+    const meta = x && (x.rec.files || []).find((f) => f.id === req.params.id);
     if (!meta) return res.status(404).json({ error: "That file isn't here" });
     const file = await getFile(`performance_files/${meta.id}`);
     if (!file) return res.status(404).json({ error: "The file is missing" });
@@ -1498,20 +1652,35 @@ app.get(
   })
 );
 app.delete(
-  "/api/performance/:username/files/:id",
+  "/api/performance/:key/files/:id",
   authMiddleware,
   performanceOnly,
   asyncHandler(async (req, res) => {
-    const u = await perfUser(req.params.username);
-    if (!u) return res.status(404).json({ error: "No login by that name" });
+    const x = await perfFind(req.params.key);
+    if (!x) return res.status(404).json({ error: "Not on the list" });
     const gone = await withPerformance((doc) => {
-      const p = perfPerson(perfShape(doc), u.username);
+      const p = perfRecord(perfShape(doc), x.key);
       const i = p.files.findIndex((f) => f.id === req.params.id);
       return i === -1 ? null : p.files.splice(i, 1)[0];
     });
     if (!gone) return res.status(404).json({ error: "That file isn't here" });
     await deleteFile(`performance_files/${gone.id}`).catch(() => {});
     res.status(204).end();
+  })
+);
+
+// Escalation settings (admin page).
+app.get("/api/admin/performance", adminMiddleware, asyncHandler(async (req, res) => res.json(await perfSettings())));
+app.put(
+  "/api/admin/performance",
+  adminMiddleware,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const ok = (v, lo, hi) => Number.isInteger(+v) && +v >= lo && +v <= hi;
+    if (!ok(b.windowMonths, 1, 36) || !ok(b.verbal, 1, 20) || !ok(b.written, 1, 20) || !ok(b.pip, 1, 20)) return res.status(400).json({ error: "Window is 1–36 months; counts are 1–20" });
+    const v = { windowMonths: +b.windowMonths, verbal: +b.verbal, written: +b.written, pip: +b.pip };
+    await withSettings((s) => { s.performance = v; });
+    res.json(v);
   })
 );
 
