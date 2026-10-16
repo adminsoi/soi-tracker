@@ -1433,7 +1433,7 @@ app.get(
     const p = x.rec || {};
     res.json(Object.assign({
       key: x.key, name: x.name, login: x.login, entity: entityOf(x), employeeId: p.employeeId || "", startDate: p.startDate || "",
-      risk: p.risk || {}, riskNotes: p.riskNotes || "",
+      risk: p.risk || {}, riskNotes: p.riskNotes || "", summary: p.summary || "",
       departments: x.user ? (x.user.fullAccess ? ["Full access"] : x.user.departments) : [], auto: !!(x.user && x.user.breakdown),
       entries: (p.entries || []).map(perfEntry).sort((a, b) => String(b.incidentDate).localeCompare(String(a.incidentDate)) || (b.at || 0) - (a.at || 0)),
       steps: (p.steps || []).slice().sort((a, b) => String(b.date).localeCompare(String(a.date)) || (b.at || 0) - (a.at || 0)),
@@ -1494,6 +1494,7 @@ app.put(
       if ("startDate" in b) p.startDate = b.startDate || "";
       if (b.risk && typeof b.risk === "object") for (const r of PERF_RISKS) if (r in b.risk) p.risk[r] = !!b.risk[r];
       if ("riskNotes" in b) p.riskNotes = String(b.riskNotes || "").slice(0, 2000);
+      if ("summary" in b) p.summary = String(b.summary || "").slice(0, PERF_TEXT);
       p.updatedAt = Date.now(); p.updatedBy = req.user.username;
       return { ok: true };
     });
@@ -1595,6 +1596,29 @@ app.post(
     res.status(201).json(step);
   })
 );
+// Edit a recorded step's description, or tick it as in PerformYard.
+app.patch(
+  "/api/performance/:key/steps/:id",
+  authMiddleware,
+  performanceOnly,
+  asyncHandler(async (req, res) => {
+    const x = await perfFind(req.params.key);
+    if (!x) return res.status(404).json({ error: "Not on the list" });
+    const b = req.body || {};
+    const out = await withPerformance((doc) => {
+      const st = perfRecord(perfShape(doc), x.key).steps.find((y) => y.id === req.params.id);
+      if (!st) return null;
+      if ("reason" in b) { const r = String(b.reason || "").trim().slice(0, 2000); if (!r) return { error: "The description can't be empty" }; st.reason = r; }
+      if ("inPerformYard" in b) st.inPerformYard = !!b.inPerformYard;
+      st.editedAt = Date.now(); st.editedBy = req.user.username;
+      return Object.assign({}, st);
+    });
+    if (!out) return res.status(404).json({ error: "That step isn't here any more" });
+    if (out.error) return res.status(400).json(out);
+    res.json(out);
+  })
+);
+
 // Undo the latest step (kept in the history, marked undone, with a reason).
 app.post(
   "/api/performance/:key/steps/:id/undo",
