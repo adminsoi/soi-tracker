@@ -138,37 +138,42 @@ IT → Tasks for the IT default person, like form tickets.
 
 ## Performance (Tools → Performance)
 
-A private tool, shown only to logins with **Performance access** ticked in
-`/admin.html` — other managers and full access can't see it; the server
-checks the saved login on every request.
+A quick-view tracker for HR's **Global Performance Management Escalation
+Process**, for the CEO and Leadership. **PerformYard stays the system of
+record.** Only logins with **Performance access** ticked in `/admin.html` can
+see it (per HR: Greg, Alexis and Nyssa); the server checks every request.
 
-- **Who's listed:** everyone with **Show in team breakdown** ticked, plus
-  anyone added with **+ Add a person**. *Take off the list* hides someone
-  added by hand; their records are kept.
-- **Each person:** dated **notes**, **attachments** (PDF, images, Word,
-  Excel, PowerPoint, text, email files; up to 15 MB; stored privately in S3
-  under `performance_files/` and always downloaded, never opened in the
-  page), and **warnings**.
-- **Three strikes:** every active warning is a strike; the tier is the
-  number of strikes (Tier 1 · first warning, Tier 2 · second warning,
-  Tier 3 · final). A fourth isn't allowed. Warnings aren't deleted — **Clear
-  warning** keeps it on record with a reason and removes the strike;
-  **Restore** puts it back. Notes can be deleted.
-- **Heads up** at the top lists everyone at Tier 1 or above, and the
-  sidebar shows how many.
+- **People:** everyone with *Show in team breakdown*, plus anyone added —
+  with a login, or without one by name / initials / employee ID and entity
+  (SOI · California, CAS · New Zealand, Red Sun · Singapore, Nanotech · UK).
+  *Show initials / IDs only* hides names on screen.
+- **Notes:** date of incident, date received, from, a factual description,
+  **employee was told** (and when), **entered in PerformYard**, and **serious
+  misconduct** (handled under the separate process; never counted). A
+  wording check flags opinion or emotive words (notes are discoverable).
+- **What counts:** a note counts only if the employee was told, it isn't
+  misconduct, the incident is within the rolling window, and it's after the
+  last step.
+- **Ladder:** verbal warning → written warning → PIP → PIP outcome review.
+  Enough countable notes makes a **review due** — a count is a guide, not a
+  trigger. Steps are recorded by a person, only in order, with a date and
+  reason; the latest can be undone (kept, with a reason). Termination is
+  never a step: it always needs HR and legal review.
+- **Risk factors** (protected leave, medical, complaints / whistleblowing,
+  grievance, pregnancy / parental, length of service, pending claims): if
+  any are ticked, a step can't be recorded until HR / legal review is
+  confirmed.
+- **Jurisdiction reminders** from HR's document show when recording a step
+  (reminders, not legal advice).
+- **Download record** prints a person's steps and notes (e.g. for an access
+  request — Labor Code 1198.5, NZ Privacy Act, PDPA, UK GDPR).
+- **Settings** in `/admin.html` → *Performance escalation*: months notes stay
+  live (default 12), notes before a verbal review (3), and further notes
+  before a written warning (2) and PIP (2). HR's numbers are placeholders.
 
-Records are in S3 as `performance.json`. Check the process with HR before
-relying on it for formal discipline.
-### Filters
-
-Every department table (Tasks, Projects, RFQs, Quotes, Sales Orders,
-Purchase Orders) has **+ Filter**: pick a column, then one of the values
-actually in it (with counts). Filters stack, show as chips (✕ to remove),
-and the table says "N of M shown". Tasks filter by type, responsible,
-status, due (overdue / today / next 7 days / later / none), part, platform,
-customer and more; Pentagon tables by part, customer / vendor, Pentagon
-user, due, assigned to, done and notes — and with **Show all Pentagon
-columns** on, by any column the query returns.
+Notes from the first version ("warnings") show as notes to check and don't
+count until someone confirms the employee was told. Records are in S3 as
+`performance.json`; attachments under `performance_files/`.
 
 ## SOPs (every department)
 
