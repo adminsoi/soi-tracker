@@ -36,6 +36,8 @@ const {
   putFile,
   getFile,
   deleteFile,
+  getSops,
+  withSops,
 } = require("./s3store");
 const { sendMail } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError } = require("./calendar");
@@ -1265,6 +1267,178 @@ app.put(
       settings.sharedCalendar = shared;
     });
     res.json(shared);
+  })
+);
+
+// ---------- Department SOPs ----------
+// Each department's SOP tab: SOP documents (PDFs, stored privately in S3)
+// and "quick answers" — the how-do-we questions people ask when the manager
+// is out. Anyone in the department can read; managers add and change.
+// dept "*" means every department (e.g. CUST-001 Customer Communication).
+const SOP_ALL = "*";
+const sopText = (v, n) => String(v == null ? "" : v).trim().slice(0, n);
+function sopShape(doc) {
+  doc.sops = Array.isArray(doc.sops) ? doc.sops : [];
+  doc.qa = Array.isArray(doc.qa) ? doc.qa : [];
+  return doc;
+}
+function sopDeptOk(dept) { return dept === SOP_ALL || DEPARTMENTS.includes(dept); }
+function canReadSops(user, dept) { return dept === SOP_ALL || inDepartment(user, dept); }
+function newId() { return Date.now().toString(36) + require("crypto").randomBytes(5).toString("hex"); }
+
+app.get(
+  "/api/sops",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const dept = String(req.query.dept || "");
+    if (!DEPARTMENTS.includes(dept)) return res.status(400).json({ error: "Pick a department" });
+    if (!inDepartment(req.user, dept)) return res.status(403).json({ error: "That's not one of your departments" });
+    const doc = sopShape(await getSops());
+    const mine = (x) => x.dept === dept || x.dept === SOP_ALL;
+    res.json({
+      dept,
+      canEdit: isManager(req.user),
+      sops: doc.sops.filter(mine).sort((a, b) => String(a.code || a.title).localeCompare(String(b.code || b.title), undefined, { numeric: true })),
+      qa: doc.qa.filter(mine).sort((a, b) => (a.order || 0) - (b.order || 0) || (a.createdAt || 0) - (b.createdAt || 0)),
+    });
+  })
+);
+
+// Upload an SOP PDF (raw bytes; up to 20 MB). Details come in the query
+// string: dept, code, title, version, fileName.
+app.post(
+  "/api/sops",
+  authMiddleware,
+  express.raw({ type: () => true, limit: "20mb" }),
+  asyncHandler(async (req, res) => {
+    if (!isManager(req.user)) return res.status(403).json({ error: "Only managers can add SOPs" });
+    const dept = String(req.query.dept || "");
+    if (!sopDeptOk(dept) || (dept !== SOP_ALL && !inDepartment(req.user, dept))) return res.status(400).json({ error: "Pick one of your departments" });
+    if (!Buffer.isBuffer(req.body) || req.body.slice(0, 5).toString() !== "%PDF-") return res.status(400).json({ error: "SOPs need to be PDF files" });
+    const id = newId();
+    await putFile(`sop_files/${id}`, req.body, "application/pdf");
+    const sop = {
+      id, dept,
+      code: sopText(req.query.code, 30), title: sopText(req.query.title, 160) || "SOP", version: sopText(req.query.version, 30),
+      fileName: sopText(req.query.fileName, 200), size: req.body.length,
+      uploadedAt: Date.now(), uploadedBy: req.user.username,
+    };
+    await withSops((doc) => { sopShape(doc).sops.push(sop); });
+    res.status(201).json(sop);
+  })
+);
+
+app.patch(
+  "/api/sops/:id",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!isManager(req.user)) return res.status(403).json({ error: "Only managers can change SOPs" });
+    const b = req.body || {};
+    if ("dept" in b && !sopDeptOk(b.dept)) return res.status(400).json({ error: "Bad department" });
+    const sop = await withSops((doc) => {
+      const x = sopShape(doc).sops.find((y) => y.id === req.params.id);
+      if (!x) return null;
+      if ("code" in b) x.code = sopText(b.code, 30);
+      if ("title" in b) x.title = sopText(b.title, 160) || x.title;
+      if ("version" in b) x.version = sopText(b.version, 30);
+      if ("dept" in b) x.dept = b.dept;
+      x.updatedAt = Date.now();
+      return Object.assign({}, x);
+    });
+    if (!sop) return res.status(404).json({ error: "That SOP isn't here any more" });
+    res.json(sop);
+  })
+);
+
+app.delete(
+  "/api/sops/:id",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!isManager(req.user)) return res.status(403).json({ error: "Only managers can remove SOPs" });
+    const gone = await withSops((doc) => {
+      const list = sopShape(doc).sops;
+      const i = list.findIndex((y) => y.id === req.params.id);
+      if (i === -1) return null;
+      for (const q of doc.qa) if (q.sopId === req.params.id) q.sopId = "";
+      return list.splice(i, 1)[0];
+    });
+    if (!gone) return res.status(404).json({ error: "That SOP isn't here any more" });
+    await deleteFile(`sop_files/${gone.id}`).catch(() => {});
+    res.status(204).end();
+  })
+);
+
+app.get(
+  "/api/sops/:id/file",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const sop = sopShape(await getSops()).sops.find((y) => y.id === req.params.id);
+    if (!sop || !canReadSops(req.user, sop.dept)) return res.status(404).json({ error: "That SOP isn't here" });
+    const file = await getFile(`sop_files/${sop.id}`);
+    if (!file) return res.status(404).json({ error: "The PDF is missing" });
+    const name = (sop.fileName || `${sop.code || "SOP"} ${sop.title}.pdf`).replace(/[^\w .()-]+/g, "_");
+    res.set({ "Content-Type": "application/pdf", "Content-Disposition": `inline; filename="${name}"`, "Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff" });
+    res.send(file.body);
+  })
+);
+
+// Quick answers: add one (or many at once with "items"), change, remove.
+function cleanQa(b) {
+  return { q: sopText(b.q, 300), a: String(b.a == null ? "" : b.a).trim().slice(0, 5000), sopId: sopText(b.sopId, 40) };
+}
+app.post(
+  "/api/sops/qa",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!isManager(req.user)) return res.status(403).json({ error: "Only managers can add answers" });
+    const b = req.body || {};
+    const dept = String(b.dept || "");
+    if (!sopDeptOk(dept) || (dept !== SOP_ALL && !inDepartment(req.user, dept))) return res.status(400).json({ error: "Pick one of your departments" });
+    const items = (Array.isArray(b.items) ? b.items : [b]).map(cleanQa).filter((x) => x.q).slice(0, 200);
+    if (!items.length) return res.status(400).json({ error: "Write a question" });
+    const added = await withSops((doc) => {
+      sopShape(doc);
+      let order = Math.max(0, ...doc.qa.filter((x) => x.dept === dept).map((x) => x.order || 0));
+      const out = items.map((x) => Object.assign({ id: newId(), dept, order: ++order, createdAt: Date.now(), updatedAt: Date.now(), by: req.user.username }, x));
+      doc.qa.push(...out);
+      return out;
+    });
+    res.status(201).json({ added });
+  })
+);
+app.patch(
+  "/api/sops/qa/:id",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!isManager(req.user)) return res.status(403).json({ error: "Only managers can change answers" });
+    const b = req.body || {};
+    const item = await withSops((doc) => {
+      const x = sopShape(doc).qa.find((y) => y.id === req.params.id);
+      if (!x) return null;
+      const c = cleanQa(Object.assign({}, x, b));
+      if (!c.q) return { error: "A question can't be empty" };
+      Object.assign(x, c, { updatedAt: Date.now(), by: req.user.username });
+      return Object.assign({}, x);
+    });
+    if (!item) return res.status(404).json({ error: "That answer isn't here any more" });
+    if (item.error) return res.status(400).json(item);
+    res.json(item);
+  })
+);
+app.delete(
+  "/api/sops/qa/:id",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!isManager(req.user)) return res.status(403).json({ error: "Only managers can remove answers" });
+    const ok = await withSops((doc) => {
+      const list = sopShape(doc).qa;
+      const i = list.findIndex((y) => y.id === req.params.id);
+      if (i === -1) return false;
+      list.splice(i, 1);
+      return true;
+    });
+    if (!ok) return res.status(404).json({ error: "That answer isn't here any more" });
+    res.status(204).end();
   })
 );
 
