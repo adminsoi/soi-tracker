@@ -154,6 +154,12 @@ see it (per HR: Greg, Alexis and Nyssa); the server checks every request.
 - **What counts:** a note counts only if the employee was told, it isn't
   misconduct, the incident is within the rolling window, and it's after the
   last step.
+- **Cards:** each person is a collapsible card (stage, countable notes, next
+  step and flags on the closed card). Open it for a **description**, files,
+  the step cards, notes and risk factors. Each step — verbal warning, written
+  warning, PIP, PIP outcome review — is its own card: done steps have an
+  editable description and **attachments** (e.g. the signed written
+  warning); the next step has the form to record it, with attachments.
 - **Ladder:** verbal warning → written warning → PIP → PIP outcome review.
   Enough countable notes makes a **review due** — a count is a guide, not a
   trigger. Steps are recorded by a person, only in order, with a date and
