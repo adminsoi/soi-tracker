@@ -159,6 +159,16 @@ checks the saved login on every request.
 
 Records are in S3 as `performance.json`. Check the process with HR before
 relying on it for formal discipline.
+### Filters
+
+Every department table (Tasks, Projects, RFQs, Quotes, Sales Orders,
+Purchase Orders) has **+ Filter**: pick a column, then one of the values
+actually in it (with counts). Filters stack, show as chips (✕ to remove),
+and the table says "N of M shown". Tasks filter by type, responsible,
+status, due (overdue / today / next 7 days / later / none), part, platform,
+customer and more; Pentagon tables by part, customer / vendor, Pentagon
+user, due, assigned to, done and notes — and with **Show all Pentagon
+columns** on, by any column the query returns.
 
 ## SOPs (every department)
 

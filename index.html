@@ -170,6 +170,13 @@
   .perf-files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .perf-file { display: inline-flex; gap: 6px; align-items: center; background: var(--soft); border-radius: 7px; padding: 4px 8px; font-size: 12px; }
   .perf-file button { border: 0; background: none; padding: 0 2px; cursor: pointer; color: var(--rose-ink); font-size: 12px; }
+  /* Column filters */
+  .filter-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 12px; flex-basis: 100%; }
+  .fchip { display: inline-flex; align-items: center; gap: 6px; background: #fbeef2; color: var(--rose-ink); border: 1px solid #ecd2db; border-radius: 999px; padding: 4px 6px 4px 11px; font-size: 12px; }
+  .fchip b { font-weight: 600; }
+  .fchip button { border: 0; background: none; color: inherit; padding: 0 4px; font-size: 13px; cursor: pointer; line-height: 1; }
+  .filter-row select { padding: 6px 9px; border: 1px dashed var(--line); border-radius: 7px; background: var(--card); font-size: 12px; max-width: 260px; }
+  .filter-row .fcount { font-size: 11.5px; color: var(--muted); }
   /* Department SOPs */
   .qa { background: var(--card); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 8px; }
   .qa > summary { cursor: pointer; padding: 14px 16px; font-weight: 600; font-size: 14px; list-style: none; display: flex; gap: 10px; align-items: baseline; }
@@ -881,6 +888,89 @@
     });
   }
 
+  // ---- Column filters ----
+  // "+ Filter" → pick a column → pick one of the values actually in it
+  // (with counts). Filters stack (all must match) and show as chips.
+  // Each table passes its fields: { key, label, get(row) -> text }.
+  var colFilters = {}, filterPick = {};
+  function dueBucket(d) {
+    d = String(d || "").slice(0, 10);
+    if (!d) return "No due date";
+    if (d < today) return "Overdue";
+    if (d === today) return "Today";
+    var wk = new Date(today + "T00:00:00"); wk.setDate(wk.getDate() + 7);
+    return d <= ymdLocal(wk) ? "Next 7 days" : "Later";
+  }
+  function ymdLocal(d) { return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
+  function fval(f, row) { var v = f.get(row); v = v == null ? "" : String(v).trim(); return v || "—"; }
+  function applyColFilters(scope, fields, rows) {
+    var list = colFilters[scope] || [];
+    if (!list.length) return rows;
+    var byKey = {}; fields.forEach(function (f) { byKey[f.key] = f; });
+    return rows.filter(function (r) {
+      return list.every(function (c) { var f = byKey[c.key]; return !f || fval(f, r) === c.value; });
+    });
+  }
+  function filterUi(scope, fields, rows, shown) {
+    var list = (colFilters[scope] = (colFilters[scope] || []).filter(function (c) { return fields.some(function (f) { return f.key === c.key; }); }));
+    var byKey = {}; fields.forEach(function (f) { byKey[f.key] = f; });
+    var chips = list.map(function (c, i) {
+      return '<span class="fchip">' + E(byKey[c.key].label) + ": <b>" + E(c.value) + '</b><button type="button" data-fdel="' + E(scope) + '" data-i="' + i + '" aria-label="Remove filter">✕</button></span>';
+    }).join("");
+    var pick = filterPick[scope] && byKey[filterPick[scope]];
+    var html = '<div class="filter-row">' + chips;
+    if (pick) {
+      // Values among rows that match the other filters, most common first.
+      var base = applyColFilters(scope, fields, rows), counts = {};
+      base.forEach(function (r) { var v = fval(pick, r); counts[v] = (counts[v] || 0) + 1; });
+      var vals = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a] || a.localeCompare(b, undefined, { numeric: true }); }).slice(0, 300);
+      html += '<select data-fadd-value="' + E(scope) + '" aria-label="' + E(pick.label) + ' is"><option value="">' + E(pick.label) + " is…</option>" +
+        vals.map(function (v) { return '<option value="' + E(v) + '">' + E(v.length > 60 ? v.slice(0, 60) + "…" : v) + " (" + counts[v] + ")</option>"; }).join("") + "</select>" +
+        '<button type="button" class="text-button" data-fcancel="' + E(scope) + '">Cancel</button>';
+    } else {
+      html += '<select data-fadd-field="' + E(scope) + '" aria-label="Add a filter"><option value="">+ Filter</option>' +
+        fields.map(function (f) { return '<option value="' + E(f.key) + '">' + E(f.label) + "</option>"; }).join("") + "</select>";
+    }
+    if (list.length) html += '<span class="fcount">' + shown + " of " + rows.length + ' shown</span><button type="button" class="text-button" data-fclear="' + E(scope) + '">Clear filters</button>';
+    return html + "</div>";
+  }
+  function redrawFor(scope) { if (scope.indexOf("doc:") === 0) drawDocTable(); else render(); }
+  document.addEventListener("change", function (e) {
+    var t = e.target, sc;
+    if ((sc = t.dataset && t.dataset.faddField) !== undefined && sc) { filterPick[sc] = t.value; redrawFor(sc); var n = document.querySelector('[data-fadd-value="' + sc + '"]'); if (n) n.focus(); return; }
+    if ((sc = t.dataset && t.dataset.faddValue) !== undefined && sc && t.value) {
+      (colFilters[sc] = colFilters[sc] || []).push({ key: filterPick[sc], value: t.value });
+      filterPick[sc] = ""; redrawFor(sc);
+    }
+  });
+  document.addEventListener("click", function (e) {
+    var t = e.target.closest && e.target.closest("[data-fdel],[data-fclear],[data-fcancel]");
+    if (!t) return;
+    var ds = t.dataset;
+    if (ds.fdel) { colFilters[ds.fdel].splice(+ds.i, 1); redrawFor(ds.fdel); }
+    else if (ds.fclear) { colFilters[ds.fclear] = []; filterPick[ds.fclear] = ""; redrawFor(ds.fclear); }
+    else if (ds.fcancel) { filterPick[ds.fcancel] = ""; redrawFor(ds.fcancel); }
+  });
+  function personOf(t) { return t.owner || (isCard(t) ? t.assignee : "") || "Unassigned"; }
+  function taskFields(dept, ops) {
+    var f = [];
+    if (ops) f.push({ key: "type", label: "Type", get: function (t) { return isCard(t) ? t.docLabel || "Pentagon" : "Task"; } });
+    f.push({ key: "owner", label: "Responsible", get: personOf });
+    f.push({ key: "status", label: "Status", get: function (t) { return isDone(t) ? "Done" : isOverdue(t) ? "Overdue" : "Open"; } });
+    f.push({ key: "due", label: "Due", get: function (t) { return dueBucket(t.dueDate); } });
+    if (ops) {
+      f.push({ key: "part", label: "Part number", get: function (t) { return t.part; } });
+      f.push({ key: "platform", label: "Platform", get: function (t) { return t.platform; } });
+      f.push({ key: "customer", label: "Customer", get: function (t) { return t.customer || t.party; } });
+      f.push({ key: "obsolete", label: "Obsolete", get: function (t) { return isCard(t) ? "" : t.obsolete || "No"; } });
+    } else {
+      f.push({ key: "src", label: "Came from", get: function (t) { return t.source === "form" ? (String(t.formResponseId || "").indexOf("manual-") === 0 ? "IT ticket" : "IT form") : "Added here"; } });
+    }
+    f.push({ key: "by", label: "Added by", get: function (t) { return isCard(t) ? "Pentagon" : t.createdBy; } });
+    if (activeCompany === ALL) f.push({ key: "co", label: "Company", get: function (t) { return shortCo(t.company || "SOI Aviation"); } });
+    return f;
+  }
+
   function toolbar(dept, addLabel, kind) {
     var views = pentagonViewsFor(dept).filter(function (v) { return v.tasks; });
     var sources = [{ id: "all", label: "All" }, { id: "tasks", label: "Tasks" }].concat(views.map(function (v) { return { id: v.id, label: v.label }; }));
@@ -982,7 +1072,8 @@
   }
   function renderOpsTable(dept) {
     var all = deptItems(dept).filter(function (t) { return itemKind(t) === "task"; });
-    var list = sortRows(filtered(all));
+    var fields = taskFields(dept, true), scope = "ops:" + dept;
+    var pre = filtered(all), list = sortRows(applyColFilters(scope, fields, pre));
     var ds = drafts.filter(function (d) { return d.department === dept && !d.parentId && d.kind !== "project"; });
     var open = all.filter(function (t) { return !isDone(t); }).length;
     var late = all.filter(isOverdue).length;
@@ -991,7 +1082,7 @@
       metric("Open", open, "of " + all.length + " item" + (all.length === 1 ? "" : "s")) +
       metric("Overdue", late, "Past due and not done", late > 0) +
       metric("Obsolete", all.filter(function (t) { return t.obsolete === "Yes"; }).length, "Flagged obsolete") + "</div>" +
-      toolbar(dept, "Add task", "task") +
+      toolbar(dept, "Add task", "task") + filterUi(scope, fields, pre, list.length) +
       '<div class="table-wrap"><table class="wide"><thead><tr><th>Task</th><th>Part number</th><th>Platform (aircraft)</th><th>Customer</th><th>Obsolete</th><th>Due date</th><th>Responsible</th><th>Done</th><th>Notes</th><th></th></tr></thead><tbody>' +
       (ds.length || list.length ? ds.map(opsRow).join("") + list.map(opsRow).join("") : '<tr><td colspan="10" class="empty">Nothing here yet. Add a row above.</td></tr>') +
       "</tbody></table></div>" + legend();
@@ -1027,7 +1118,17 @@
         .concat(drafts.filter(function (d) { return d.parentId === p.id; }))
         .sort(function (a, b) { return (a.createdAt || 9e15) - (b.createdAt || 9e15); });
     };
-    var shown = sortRows(filtered(tops));
+    var pfields = [
+      { key: "owner", label: "Responsible", get: personOf },
+      { key: "status", label: "Status", get: function (t) { return isDone(t) ? "Done" : isOverdue(t) ? "Overdue" : "Open"; } },
+      { key: "due", label: "Due", get: function (t) { return dueBucket(t.dueDate); } },
+      { key: "subs", label: "Sub-tasks", get: function (p) { var n = all.filter(function (x) { return x.parentId === p.id; }); return !n.length ? "None" : n.every(isDone) ? "All done" : "Some open"; } },
+      { key: "by", label: "Added by", get: function (t) { return t.createdBy; } }
+    ];
+    if (activeCompany === ALL) pfields.push({ key: "co", label: "Company", get: function (t) { return shortCo(t.company || "SOI Aviation"); } });
+    var pscope = "proj:" + dept;
+    var preTops = filtered(tops);
+    var shown = sortRows(applyColFilters(pscope, pfields, preTops));
     // A project also shows when one of its sub-tasks belongs to the chosen person.
     if (showPerson) {
       tops.forEach(function (p) {
@@ -1044,7 +1145,7 @@
       metric("Projects", tops.length, tops.filter(function (p) { return !isDone(p); }).length + " still open") +
       metric("Open items", open, "Projects and sub-tasks not done") +
       metric("Overdue", late, "Past due and not done", late > 0) + "</div>" +
-      toolbar(dept, "Add project", "project") +
+      toolbar(dept, "Add project", "project") + filterUi(pscope, pfields, preTops, shown.length) +
       '<div class="table-wrap"><table class="wide"><thead><tr><th>Project / sub-task</th><th>Person responsible</th><th>Due date</th><th>Done</th><th>Notes</th><th></th></tr></thead><tbody>' +
       (rows || '<tr><td colspan="6" class="empty">No projects yet. Projects are longer-term work with sub-tasks — add one above.</td></tr>') +
       "</tbody></table></div>" + legend();
@@ -1067,7 +1168,8 @@
   }
   function renderTaskTable(dept) {
     var all = tasks.filter(function (t) { return t.department === dept && itemKind(t) === "task"; });
-    var list = sortRows(filtered(all));
+    var fields = taskFields(dept, false), scope = "tasks:" + dept;
+    var pre = filtered(all), list = sortRows(applyColFilters(scope, fields, pre));
     var ds = drafts.filter(function (d) { return d.department === dept && !d.parentId && d.kind !== "project"; });
     var open = all.filter(function (t) { return !isDone(t); }).length;
     var late = all.filter(isOverdue).length;
@@ -1076,7 +1178,7 @@
       metric("Open", open, "of " + all.length + " task" + (all.length === 1 ? "" : "s")) +
       metric("Overdue", late, "Past due and not done", late > 0) +
       metric("Done", all.filter(isDone).length, "Ticked off") + "</div>" +
-      toolbar(dept, "Add task", "task") +
+      toolbar(dept, "Add task", "task") + filterUi(scope, fields, pre, list.length) +
       '<div class="table-wrap"><table class="wide"><thead><tr><th>Task</th><th>Person responsible</th><th>Due date</th><th>Done</th><th>Notes</th><th></th></tr></thead><tbody>' +
       (ds.length || list.length ? ds.map(taskRow).join("") + list.map(taskRow).join("") : '<tr><td colspan="6" class="empty">No tasks yet. Tasks are quick, one-off items — add one above. Longer work goes under Projects.</td></tr>') +
       "</tbody></table></div>" + legend();
@@ -2389,13 +2491,37 @@
       '<span class="small-note">' + (mgr ? "Assign, tick ✓ / ✗ and add notes — managers only." : "Only managers can assign, tick or add notes.") + "</span>" +
       (missing.length ? '<span class="small-note">This query doesn\'t return ' + missing.join(" or ") + " yet.</span>" : "") +
       (f.key ? "" : '<span class="small-note" style="color:var(--danger)">No document number column found, so changes can\'t be saved.</span>');
+    // Filters: the visible columns, or every Pentagon column when "Show all".
+    var markOf = function (r) { var no = f.key ? cellText(r[f.key]) : ""; return no ? docState.marks[markKey(view, no)] || {} : {}; };
+    var dfields;
+    if (docState.showAll) {
+      var cols = [];
+      rows.forEach(function (r) { Object.keys(r).forEach(function (k) { if (cols.indexOf(k) === -1) cols.push(k); }); });
+      dfields = cols.map(function (c) { return { key: "c:" + c, label: c, get: function (r) { return cellText(r[c]); } }; });
+    } else {
+      dfields = [
+        { key: "part", label: "Part number", get: function (r) { return f.part ? cellText(r[f.part]) : ""; } },
+        { key: "party", label: (view.fields && view.fields.partyLabel) || "Customer", get: function (r) { return f.party ? cellText(r[f.party]) : ""; } },
+        { key: "person", label: "Pentagon user", get: function (r) { return f.person ? cellText(r[f.person]) : ""; } },
+        { key: "due", label: "Due", get: function (r) { return dueBucket(f.due ? cellText(r[f.due]) : ""); } },
+        { key: "assigned", label: "Assigned to", get: function (r) { return markOf(r).assignee || "Unassigned"; } },
+        { key: "done", label: "Done", get: function (r) { return markOf(r).done ? "Done" : "Not done"; } },
+        { key: "notes", label: "Notes", get: function (r) { return markOf(r).notes ? "Has notes" : "No notes"; } }
+      ];
+    }
+    var dscope = "doc:" + view.id + (docState.showAll ? ":all" : "");
+    var indexed = rows.map(function (r, i) { return { r: r, i: i }; });
+    var kept = applyColFilters(dscope, dfields.map(function (x) { return { key: x.key, label: x.label, get: function (o) { return x.get(o.r); } }; }), indexed);
+    bar.innerHTML += filterUi(dscope, dfields, rows, kept.length);
     $("#plv-all").onchange = function () { docState.showAll = this.checked; drawDocTable(); };
     if (docState.showAll) {
-      table.innerHTML = autoTable(rows);
+      table.innerHTML = autoTable(kept.map(function (o) { return o.r; })) || '<tbody><tr><td class="empty">Nothing matches these filters.</td></tr></tbody>';
     } else {
       var users = mgr ? usersFor("SOI Aviation") : [];
       table.innerHTML = "<thead><tr><th>Part number</th><th>" + E((view.fields && view.fields.partyLabel) || "Customer") + "</th><th>Pentagon user</th><th>Due date</th><th>Assigned to</th><th>Done</th><th>Notes</th></tr></thead><tbody>" +
-        rows.map(function (r, i) {
+        (kept.length ? "" : '<tr><td colspan="7" class="empty">Nothing matches these filters.</td></tr>') +
+        kept.map(function (o) {
+          var r = o.r, i = o.i;
           var docNo = f.key ? cellText(r[f.key]) : "";
           var key = docNo ? markKey(view, docNo) : "";
           var m = key ? docState.marks[key] || {} : {};
