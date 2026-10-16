@@ -9,6 +9,7 @@ const {
   S3Client,
   GetObjectCommand,
   PutObjectCommand,
+  DeleteObjectCommand,
 } = require("@aws-sdk/client-s3");
 
 const REGION = process.env.AWS_REGION || "us-east-1";
@@ -61,6 +62,25 @@ async function writeJson(name, data) {
       ContentType: "application/json",
     })
   );
+}
+
+// Binary files (KB images). Stored under the same prefix, never public.
+async function putFile(name, buffer, contentType) {
+  await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: `${PREFIX}/${name}`, Body: buffer, ContentType: contentType }));
+}
+async function getFile(name) {
+  try {
+    const res = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: `${PREFIX}/${name}` }));
+    const chunks = [];
+    for await (const chunk of res.Body) chunks.push(chunk);
+    return { body: Buffer.concat(chunks), contentType: res.ContentType || "application/octet-stream" };
+  } catch (err) {
+    if (err.name === "NoSuchKey" || err?.$metadata?.httpStatusCode === 404) return null;
+    throw err;
+  }
+}
+async function deleteFile(name) {
+  await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: `${PREFIX}/${name}` }));
 }
 
 function getUsers() {
@@ -193,6 +213,9 @@ function withItNotebook(mutator) {
 }
 
 module.exports = {
+  putFile,
+  getFile,
+  deleteFile,
   getItNotebook,
   withItNotebook,
   getItRequests,

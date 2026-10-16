@@ -339,6 +339,21 @@ request.
   mode formats `# headings`, `- bullets` and `` `commands` ``. "Find an
   article" filters the list.
 
+- **KB numbers:** every article is numbered (KB-0001, KB-0002…; older
+  articles were numbered oldest first). Type a number in "Find an article".
+- **Photos and screenshots:** in Edit, **Add image**, paste a screenshot
+  (⌘V) or drag a picture into the article (PNG, JPEG, GIF or WebP, up to
+  8 MB). It's written as `![caption](kb-img:…)` and shows inline in Read;
+  click to open full size. Stored privately in S3 under
+  `it_notebook_images/`; only notebook logins can load them, and an
+  article's images are removed when it's deleted.
+- **✨ Suggest title:** writes a title from the Problem section (or the
+  ticket's issue) with simple rules — "Fix: …" for something broken, "How
+  to …" for a request. No AI and nothing leaves the server. Turning a
+  ticket into an article uses it automatically.
+- **Download PDF:** a clean print page (KB number, title, category, date,
+  the article and its images); choose **Save as PDF** or print it.
+
 Everything saves as you type. It's stored in S3 as `it_notebook.json`.
 
 ## Finance from Pentagon

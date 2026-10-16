@@ -33,6 +33,9 @@ const {
   withItRequests,
   getItNotebook,
   withItNotebook,
+  putFile,
+  getFile,
+  deleteFile,
 } = require("./s3store");
 const { sendMail } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError } = require("./calendar");
@@ -1866,7 +1869,22 @@ const nbText = (v, n) => String(v == null ? "" : v).slice(0, n);
 function nbShape(nb) {
   nb.tickets = nb.tickets && typeof nb.tickets === "object" ? nb.tickets : {};
   nb.articles = Array.isArray(nb.articles) ? nb.articles : [];
+  // KB numbers (KB-0001…): oldest first for articles from before numbering.
+  const unnumbered = nb.articles.filter((a) => !a.kb).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  let seq = Math.max(nb.kbSeq || 0, ...nb.articles.map((a) => a.kb || 0));
+  for (const a of unnumbered) a.kb = ++seq;
+  nb.kbSeq = seq;
   return nb;
+}
+// Images in articles are written as ![caption](kb-img:ID) in the body.
+const KB_IMG_RE = /kb-img:([a-z0-9]{8,40})/g;
+const KB_IMG_TYPES = { png: "image/png", jpg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+function imageKind(buf) {
+  if (buf.length > 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return "png";
+  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "jpg";
+  if (buf.length > 6 && buf.slice(0, 3).toString() === "GIF") return "gif";
+  if (buf.length > 12 && buf.slice(0, 4).toString() === "RIFF" && buf.slice(8, 12).toString() === "WEBP") return "webp";
+  return null;
 }
 
 app.get(
@@ -1874,7 +1892,8 @@ app.get(
   authMiddleware,
   notebookOnly,
   asyncHandler(async (req, res) => {
-    const [nb, list, tasks] = await Promise.all([getItNotebook(), getItRequests(), getTasks()]);
+    let [nb, list, tasks] = await Promise.all([getItNotebook(), getItRequests(), getTasks()]);
+    if ((nb.articles || []).some((a) => !a.kb)) nb = await withItNotebook((x) => JSON.parse(JSON.stringify(nbShape(x))));
     nbShape(nb);
     const byId = new Map(tasks.map((t) => [t.id, t]));
     const resolved = list
@@ -1926,7 +1945,11 @@ app.post(
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-    await withItNotebook((nb) => { nbShape(nb).articles.push(article); });
+    await withItNotebook((nb) => {
+      nbShape(nb);
+      article.kb = ++nb.kbSeq;
+      nb.articles.push(article);
+    });
     res.status(201).json(article);
   })
 );
@@ -1956,15 +1979,49 @@ app.delete(
   authMiddleware,
   notebookOnly,
   asyncHandler(async (req, res) => {
-    const removed = await withItNotebook((nb) => {
+    const result = await withItNotebook((nb) => {
       const list = nbShape(nb).articles;
       const i = list.findIndex((x) => x.id === req.params.id);
-      if (i === -1) return false;
-      list.splice(i, 1);
-      return true;
+      if (i === -1) return null;
+      const [gone] = list.splice(i, 1);
+      // Its images, unless another article uses them too.
+      const others = list.map((a) => a.body).join("\n");
+      const imgs = [...String(gone.body).matchAll(KB_IMG_RE)].map((m) => m[1]).filter((id) => !others.includes(`kb-img:${id}`));
+      return { imgs };
     });
-    if (!removed) return res.status(404).json({ error: "That article isn't here any more" });
+    if (!result) return res.status(404).json({ error: "That article isn't here any more" });
+    await Promise.all(result.imgs.map((id) => deleteFile(`it_notebook_images/${id}`).catch(() => {})));
     res.status(204).end();
+  })
+);
+
+// Photos and screenshots for articles: upload one (raw image bytes, up to
+// 8 MB; PNG, JPEG, GIF or WebP, checked by content), and fetch one. Stored
+// privately in S3; only notebook logins can read them.
+app.post(
+  "/api/it-notebook/images",
+  authMiddleware,
+  notebookOnly,
+  express.raw({ type: () => true, limit: "8mb" }),
+  asyncHandler(async (req, res) => {
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "No image came through" });
+    const kind = imageKind(req.body);
+    if (!kind) return res.status(400).json({ error: "Images need to be PNG, JPEG, GIF or WebP" });
+    const id = Date.now().toString(36) + require("crypto").randomBytes(6).toString("hex");
+    await putFile(`it_notebook_images/${id}`, req.body, KB_IMG_TYPES[kind]);
+    res.status(201).json({ id });
+  })
+);
+app.get(
+  "/api/it-notebook/images/:id",
+  authMiddleware,
+  notebookOnly,
+  asyncHandler(async (req, res) => {
+    if (!/^[a-z0-9]{8,40}$/.test(req.params.id)) return res.status(400).end();
+    const file = await getFile(`it_notebook_images/${req.params.id}`);
+    if (!file) return res.status(404).json({ error: "That image isn't here any more" });
+    res.set({ "Content-Type": file.contentType, "Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff" });
+    res.send(file.body);
   })
 );
 
