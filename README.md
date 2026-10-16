@@ -136,6 +136,30 @@ form (a call, a walk-up, a Teams message): who it's for, company, priority
 and the issue. It starts as New, is marked "Added by hand", and goes on
 IT → Tasks for the IT default person, like form tickets.
 
+## Performance (Tools → Performance)
+
+A private tool, shown only to logins with **Performance access** ticked in
+`/admin.html` — other managers and full access can't see it; the server
+checks the saved login on every request.
+
+- **Who's listed:** everyone with **Show in team breakdown** ticked, plus
+  anyone added with **+ Add a person**. *Take off the list* hides someone
+  added by hand; their records are kept.
+- **Each person:** dated **notes**, **attachments** (PDF, images, Word,
+  Excel, PowerPoint, text, email files; up to 15 MB; stored privately in S3
+  under `performance_files/` and always downloaded, never opened in the
+  page), and **warnings**.
+- **Three strikes:** every active warning is a strike; the tier is the
+  number of strikes (Tier 1 · first warning, Tier 2 · second warning,
+  Tier 3 · final). A fourth isn't allowed. Warnings aren't deleted — **Clear
+  warning** keeps it on record with a reason and removes the strike;
+  **Restore** puts it back. Notes can be deleted.
+- **Heads up** at the top lists everyone at Tier 1 or above, and the
+  sidebar shows how many.
+
+Records are in S3 as `performance.json`. Check the process with HR before
+relying on it for formal discipline.
+
 ## SOPs (every department)
 
 Each department has an **SOPs** tab, readable by everyone in that department

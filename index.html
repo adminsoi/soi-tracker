@@ -155,6 +155,21 @@
   .prio-none { background: transparent; color: var(--muted); border: 1px dashed var(--line); }
   .itr-issue { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; max-width: 420px; }
   .itr-person { background: none; border: 0; padding: 0; font: inherit; color: var(--ink); text-align: left; cursor: pointer; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
+  /* Performance */
+  .perf-alerts { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; background: #fff6ec; border: 1px solid #f0d9b8; border-radius: 12px; padding: 12px 16px; margin: 16px 0 18px; }
+  .perf-alerts > b { font-size: 12px; letter-spacing: 1px; text-transform: uppercase; color: #8a5a14; margin-right: 4px; }
+  .perf-alert { display: inline-flex; gap: 8px; align-items: center; background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px 4px 4px; font-size: 12.5px; cursor: pointer; color: var(--ink); }
+  .tier { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 10.5px; font-weight: 700; letter-spacing: .3px; }
+  .tier-0 { background: var(--soft); color: var(--muted); } .tier-1 { background: #fbecc8; color: #7c5a10; } .tier-2 { background: #f7d6b4; color: #8a4512; } .tier-3 { background: #f2c4c2; color: #9b2c28; }
+  .strikes { display: inline-flex; gap: 3px; vertical-align: middle; } .strikes i { width: 9px; height: 9px; border-radius: 50%; background: var(--line); display: inline-block; }
+  .strikes i.on { background: #c0504d; }
+  .perf-entry { border-left: 3px solid var(--line); padding: 10px 0 10px 14px; margin-bottom: 6px; }
+  .perf-entry.warning { border-left-color: #c0504d; } .perf-entry.cleared { border-left-color: #b9b2a8; opacity: .75; }
+  .perf-entry .meta { font-size: 11.5px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 4px; }
+  .perf-entry .txt { white-space: pre-wrap; font-size: 13.5px; line-height: 1.55; }
+  .perf-files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .perf-file { display: inline-flex; gap: 6px; align-items: center; background: var(--soft); border-radius: 7px; padding: 4px 8px; font-size: 12px; }
+  .perf-file button { border: 0; background: none; padding: 0 2px; cursor: pointer; color: var(--rose-ink); font-size: 12px; }
   /* Department SOPs */
   .qa { background: var(--card); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 8px; }
   .qa > summary { cursor: pointer; padding: 14px 16px; font-weight: 600; font-size: 14px; list-style: none; display: flex; gap: 10px; align-items: baseline; }
@@ -599,6 +614,7 @@
 
   function onSignedIn() {
     me.departments = me.departments || [];
+    if (me.performance) setTimeout(loadPerf, 1500);
     var saved = null;
     try { saved = localStorage.getItem(COMPANY_KEY); } catch (e) {}
     var ok = saved && ((saved === ALL && canUseAll()) || me.companies.indexOf(saved) !== -1);
@@ -710,6 +726,7 @@
     items.push({ id: "inbox", ic: "✉", label: "Work inbox", badge: inboxNeeds });
     var tools = [];
     tools.push({ id: "calendar", ic: "▦", label: "Calendar" });
+    if (me.performance) tools.push({ id: "performance", ic: "◐", label: "Performance", badge: perfFlagged });
     if (canUseAll()) tools.push({ id: "global", ic: "◎", label: "Global" });
     if (tools.length) { tools[0].group = "TOOLS"; items = items.concat(tools); }
     return items;
@@ -747,6 +764,7 @@
       else if (page === "mentions") html = renderMentionsShell();
       else if (page === "calendar") html = renderCalendar();
       else if (page === "inbox") html = renderInbox();
+      else if (page === "performance") html = renderPerformance();
       else if (page === "global") html = renderGlobalShell();
       else html = renderDepartment();
     } catch (e) {
@@ -1518,6 +1536,177 @@
         .then(function (res) { return res.json().then(function (d) { if (!res.ok) throw new Error(d.error || "Import failed"); return d; }); })
         .then(function (d) { toast("Imported " + d.rows + " responses: " + d.added + " new, " + d.updated + " updated."); itr.at = 0; render(); },
               function (err) { toast(err.message, true); });
+    }
+  });
+
+  // ---- Performance ----
+  // Only for logins with "Performance access" (the server checks). People
+  // with "Show in team breakdown" are on the list automatically; others can
+  // be added. Notes, attachments and warnings — each active warning is a
+  // strike, and the tier is the number of strikes (3 = three strikes).
+  var perf = { list: null, at: 0, loading: false, error: "", sel: "", person: null, personAt: 0, compose: "", text: "", saving: false };
+  var perfFlagged = 0, perfPending = [];
+  var TIER_LABEL = ["No warnings", "Tier 1 · first warning", "Tier 2 · second warning", "Tier 3 · final — three strikes"];
+  function loadPerf() {
+    if (perf.loading) return;
+    perf.loading = true;
+    api("/api/performance").then(function (d) {
+      perf.list = d; perf.error = "";
+      var n = d.people.filter(function (p) { return p.tier > 0; }).length;
+      if (n !== perfFlagged) { perfFlagged = n; renderNav(); }
+    }, function (err) { perf.error = err.message; }).then(function () { perf.loading = false; perf.at = Date.now(); if (page === "performance") requestRender(); });
+  }
+  function loadPerfPerson(name) {
+    if (perf.personLoading === name) return Promise.resolve();
+    perf.personLoading = name;
+    return api("/api/performance/" + encodeURIComponent(name)).then(function (d) { if (perf.sel === name) { perf.person = d; perf.personAt = Date.now(); requestRender(); } }, function (err) { toast(err.message, true); })
+      .then(function () { perf.personLoading = ""; });
+  }
+  function strikeDots(n) { return '<span class="strikes" aria-label="' + n + ' of 3 strikes">' + [1, 2, 3].map(function (i) { return '<i class="' + (i <= n ? "on" : "") + '"></i>'; }).join("") + "</span>"; }
+  function tierPill(t) { return '<span class="tier tier-' + t + '">' + (t ? "Tier " + t : "Clear") + "</span>"; }
+  function renderPerformance() {
+    setBreadcrumb(["Tools", "Performance"]);
+    if (!perf.list || Date.now() - perf.at > 60000) loadPerf();
+    var head = '<div class="intro"><div><div class="eyebrow">Tools · private</div><h1>Performance</h1>' +
+      "<p>Notes, attachments and warnings for each person. Three active warnings is three strikes. Only logins with Performance access can see this page.</p></div></div>";
+    if (perf.error) return head + '<div class="banner">' + E(perf.error) + "</div>";
+    if (!perf.list) return head + '<div class="empty">Loading…</div>';
+    var people = perf.list.people;
+    if (perf.sel && !people.some(function (p) { return p.username === perf.sel; })) perf.sel = "";
+    if (!perf.sel && people.length) perf.sel = people[0].username;
+    if (perf.sel && (!perf.person || perf.person.username !== perf.sel || Date.now() - perf.personAt > 60000)) loadPerfPerson(perf.sel);
+    var flagged = people.filter(function (p) { return p.tier > 0; });
+    var alerts = flagged.length ? '<div class="perf-alerts"><b>Heads up</b>' + flagged.map(function (p) {
+      return '<button type="button" class="perf-alert" data-perf-sel="' + E(p.username) + '">' + tierPill(p.tier) + E(p.username) + " · " + p.strikes + " of 3 strikes</button>";
+    }).join("") + "</div>" : '<p class="small-note" style="margin:16px 0;">Nobody has an active warning.</p>';
+    var list = people.map(function (p) {
+      return '<button type="button" class="nb-item' + (p.username === perf.sel ? " active" : "") + '" data-perf-sel="' + E(p.username) + '">' +
+        '<b style="display:flex;justify-content:space-between;gap:8px;align-items:center;">' + E(p.username) + " " + tierPill(p.tier) + "</b>" +
+        '<span class="nb-snip">' + E((p.departments || []).join(", ") || "—") + "</span>" +
+        '<span class="nb-meta">' + strikeDots(p.strikes) + " " + p.notes + (p.notes === 1 ? " entry" : " entries") + (p.lastAt ? " · last " + E(new Date(p.lastAt).toLocaleDateString()) : "") + (p.auto ? "" : " · added by hand") + "</span></button>";
+    }).join("") || '<div class="nb-empty">Nobody yet. Tick “Show in team breakdown” on logins in /admin.html, or add someone below.</div>';
+    var add = perf.list.others.length ? '<div class="nb-list-head" style="position:static;border-top:1px solid var(--line);border-bottom:0;"><select id="perfAdd" aria-label="Add a person" style="flex:1;padding:8px;border:1px dashed var(--line);border-radius:7px;background:var(--card);"><option value="">+ Add a person…</option>' +
+      perf.list.others.map(function (u) { return '<option value="' + E(u) + '">' + E(u) + "</option>"; }).join("") + "</select></div>" : "";
+    return head + alerts + '<div class="nb-grid"><div class="nb-list">' + list + add + '</div><div class="nb-pane">' + renderPerfPerson() + "</div></div>";
+  }
+  function renderPerfPerson() {
+    var d = perf.person;
+    if (!perf.sel) return '<div class="nb-empty">Pick a person on the left.</div>';
+    if (!d || d.username !== perf.sel) return '<div class="nb-empty">Loading…</div>';
+    var summary = perf.list.people.filter(function (p) { return p.username === d.username; })[0] || {};
+    var filesFor = function (id) { return d.files.filter(function (f) { return (f.entryId || "") === id; }); };
+    var fileChip = function (f) {
+      return '<span class="perf-file">📎 <button type="button" data-perf-dl="' + E(f.id) + '" title="Download">' + E(f.name) + "</button>" +
+        '<span class="small-note">' + Math.max(1, Math.round(f.size / 1024)) + " KB</span>" +
+        '<button type="button" data-perf-rmfile="' + E(f.id) + '" title="Remove" aria-label="Remove attachment">✕</button></span>';
+    };
+    var composer = perf.compose ? '<div class="card" style="margin:14px 0;padding:16px 18px;"><div class="card-label">' + (perf.compose === "warning" ? "⚠ New warning — strike " + (d.strikes + 1) + " of 3" : "New note") + "</div>" +
+      '<div class="nb-field"><textarea id="perfText" rows="4" placeholder="' + (perf.compose === "warning" ? "What happened, when, and what was agreed." : "What you want to remember — facts, dates, follow-ups.") + '">' + E(perf.text) + "</textarea></div>" +
+      '<div class="nb-foot"><input type="file" id="perfComposeFiles" multiple hidden><button type="button" data-perf-composefiles>📎 Attach files</button><span class="small-note" id="perfComposeNames">' + E(perfPending.map(function (f) { return f.name; }).join(", ")) + '</span><span class="grow"></span>' +
+      '<button type="button" class="text-button" data-perf-cancel>Cancel</button><button type="button" class="primary" data-perf-save' + (perf.saving ? " disabled" : "") + ">" + (perf.saving ? "Saving…" : perf.compose === "warning" ? "Add warning" : "Add note") + "</button></div></div>" : "";
+    var entries = d.entries.length ? d.entries.map(function (e) {
+      var cls = e.kind === "warning" ? (e.cleared ? "cleared" : "warning") : "";
+      var label = e.kind === "warning" ? (e.cleared ? "Warning — cleared" : "⚠ Warning · strike " + (e.strike || "")) : "Note";
+      return '<div class="perf-entry ' + cls + '"><div class="meta"><b>' + E(label) + "</b><span>" + E(new Date(e.at).toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })) + " · " + E(e.by) + "</span>" +
+        (e.editedAt ? "<span>(edited)</span>" : "") + '<span class="grow" style="flex:1"></span>' +
+        (e.kind === "warning" && !e.cleared ? '<button type="button" class="text-button" data-perf-clear="' + E(e.id) + '">Clear warning</button>' : "") +
+        (e.kind === "warning" && e.cleared ? '<button type="button" class="text-button" data-perf-restore="' + E(e.id) + '">Restore</button>' : "") +
+        '<input type="file" data-perf-entryfiles="' + E(e.id) + '" multiple hidden><button type="button" class="text-button" data-perf-attach="' + E(e.id) + '">Attach</button>' +
+        (e.kind === "note" ? '<button type="button" class="text-button" data-perf-del="' + E(e.id) + '">Delete</button>' : "") + "</div>" +
+        '<div class="txt">' + E(e.text) + "</div>" +
+        (e.cleared ? '<div class="small-note" style="margin-top:4px;">Cleared ' + E(new Date(e.cleared.at).toLocaleDateString()) + " by " + E(e.cleared.by) + (e.cleared.reason ? " — " + E(e.cleared.reason) : "") + "</div>" : "") +
+        (filesFor(e.id).length ? '<div class="perf-files">' + filesFor(e.id).map(fileChip).join("") + "</div>" : "") + "</div>";
+    }).join("") : '<div class="nb-empty" style="padding:24px 0;">No notes or warnings yet.</div>';
+    var loose = filesFor("");
+    return '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;justify-content:space-between;"><h3>' + E(d.username) + "</h3>" +
+        "<span>" + tierPill(d.tier) + " " + strikeDots(d.strikes) + "</span></div>" +
+      '<div class="nb-sub">' + E((d.departments || []).join(", ")) + " · " + E(TIER_LABEL[d.tier]) +
+        (summary.openTasks != null ? " · " + summary.openTasks + " open task" + (summary.openTasks === 1 ? "" : "s") + (summary.overdue ? ", " + summary.overdue + " overdue" : "") : "") + "</div>" +
+      '<div class="nb-tools"><button type="button" data-perf-compose="note">+ Note</button>' +
+        (d.strikes < 3 ? '<button type="button" data-perf-compose="warning">⚠ Add warning</button>' : '<span class="tier tier-3">Three strikes reached</span>') +
+        '<input type="file" id="perfLooseFiles" multiple hidden><button type="button" data-perf-loose>📎 Attach file</button>' +
+        '<span class="grow" style="flex:1"></span>' + (d.auto ? "" : '<button type="button" class="text-button" data-perf-remove>Take off the list</button>') + "</div>" +
+      composer +
+      (loose.length ? '<div class="card-label" style="margin-top:12px;">Files</div><div class="perf-files" style="margin-bottom:12px;">' + loose.map(fileChip).join("") + "</div>" : "") +
+      '<div class="card-label" style="margin-top:14px;">History</div>' + entries;
+  }
+  function perfUpload(files, entryId) {
+    var name = perf.sel, list = Array.prototype.slice.call(files || []);
+    if (!list.length) return Promise.resolve();
+    toast("Uploading " + list.length + " file" + (list.length === 1 ? "" : "s") + "…");
+    return list.reduce(function (p, f) {
+      return p.then(function () {
+        return fetch("/api/performance/" + encodeURIComponent(name) + "/files?name=" + encodeURIComponent(f.name) + "&entryId=" + encodeURIComponent(entryId || ""),
+          { method: "POST", headers: { Authorization: "Bearer " + token(), "Content-Type": "application/octet-stream" }, body: f })
+          .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(f.name + ": " + (d.error || "upload failed")); }); });
+      });
+    }, Promise.resolve()).then(function () { toast("Attached."); }, function (err) { toast(err.message, true); })
+      .then(function () { perf.personAt = 0; loadPerfPerson(name); });
+  }
+  document.addEventListener("input", function (e) { if (e.target.id === "perfText") perf.text = e.target.value; });
+  document.addEventListener("change", function (e) {
+    var t = e.target;
+    if (t.id === "perfAdd" && t.value) {
+      var who = t.value;
+      api("/api/performance/people", { method: "POST", body: JSON.stringify({ username: who }) }).then(function () { perf.sel = who; perf.person = null; perf.at = 0; render(); }, function (err) { toast(err.message, true); });
+    } else if (t.id === "perfLooseFiles") { perfUpload(t.files, ""); t.value = ""; }
+    else if (t.dataset && t.dataset.perfEntryfiles) { perfUpload(t.files, t.dataset.perfEntryfiles); t.value = ""; }
+    else if (t.id === "perfComposeFiles") {
+      perfPending = Array.prototype.slice.call(t.files || []);
+      var n = $("#perfComposeNames"); if (n) n.textContent = perfPending.map(function (f) { return f.name; }).join(", ");
+    }
+  });
+  document.addEventListener("click", function (e) {
+    var t = e.target.closest && e.target.closest("[data-perf-sel],[data-perf-compose],[data-perf-cancel],[data-perf-save],[data-perf-clear],[data-perf-restore],[data-perf-del],[data-perf-attach],[data-perf-loose],[data-perf-composefiles],[data-perf-dl],[data-perf-rmfile],[data-perf-remove]");
+    if (!t) return;
+    var ds = t.dataset, name = perf.sel, base = "/api/performance/" + encodeURIComponent(name || "");
+    var reload = function () { perf.at = 0; perf.personAt = 0; loadPerfPerson(name); render(); };
+    if (ds.perfSel) { perf.sel = ds.perfSel; perf.person = null; perf.compose = ""; perf.text = ""; perfPending = []; render(); return; }
+    if (ds.perfCompose) { perf.compose = ds.perfCompose; perf.text = ""; perfPending = []; render(); var tx = $("#perfText"); if (tx) tx.focus(); return; }
+    if ("perfCancel" in ds) { perf.compose = ""; perf.text = ""; perfPending = []; render(); return; }
+    if ("perfComposefiles" in ds) { $("#perfComposeFiles").click(); return; }
+    if ("perfLoose" in ds) { $("#perfLooseFiles").click(); return; }
+    if (ds.perfAttach) { var fi = document.querySelector('[data-perf-entryfiles="' + ds.perfAttach + '"]'); if (fi) fi.click(); return; }
+    if ("perfSave" in ds) {
+      if (!perf.text.trim()) { toast("Write something first.", true); return; }
+      if (perf.compose === "warning" && !confirm("Add a warning for " + name + "? This is strike " + ((perf.person && perf.person.strikes) + 1) + " of 3.")) return;
+      perf.saving = true; render();
+      api(base + "/entries", { method: "POST", body: JSON.stringify({ kind: perf.compose, text: perf.text }) }).then(function (entry) {
+        var files = perfPending; perfPending = [];
+        perf.saving = false; perf.compose = ""; perf.text = "";
+        toast(entry.kind === "warning" ? "Warning added — strike " + entry.strike + " of 3." : "Note added.");
+        return perfUpload(files, entry.id);
+      }, function (err) { perf.saving = false; toast(err.message, true); }).then(reload);
+      return;
+    }
+    if (ds.perfClear) {
+      var why = prompt("Why is this warning being cleared? (kept with the record)");
+      if (why === null) return;
+      api(base + "/entries/" + encodeURIComponent(ds.perfClear), { method: "PATCH", body: JSON.stringify({ clear: true, reason: why }) }).then(function () { toast("Warning cleared."); reload(); }, function (err) { toast(err.message, true); });
+      return;
+    }
+    if (ds.perfRestore) { api(base + "/entries/" + encodeURIComponent(ds.perfRestore), { method: "PATCH", body: JSON.stringify({ restore: true }) }).then(function () { toast("Warning restored."); reload(); }, function (err) { toast(err.message, true); }); return; }
+    if (ds.perfDel) {
+      if (!confirm("Delete this note and its attachments?")) return;
+      api(base + "/entries/" + encodeURIComponent(ds.perfDel), { method: "DELETE" }).then(function () { toast("Deleted."); reload(); }, function (err) { toast(err.message, true); });
+      return;
+    }
+    if (ds.perfDl) {
+      var meta = perf.person.files.filter(function (f) { return f.id === ds.perfDl; })[0];
+      fetch(base + "/files/" + encodeURIComponent(ds.perfDl), { headers: { Authorization: "Bearer " + token() } })
+        .then(function (r) { if (!r.ok) throw new Error("Couldn't download that file"); return r.blob(); })
+        .then(function (b) { var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = meta ? meta.name : "file"; document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000); },
+              function (err) { toast(err.message, true); });
+      return;
+    }
+    if (ds.perfRmfile) {
+      if (!confirm("Remove this attachment?")) return;
+      api(base + "/files/" + encodeURIComponent(ds.perfRmfile), { method: "DELETE" }).then(function () { toast("Removed."); reload(); }, function (err) { toast(err.message, true); });
+      return;
+    }
+    if ("perfRemove" in ds) {
+      if (!confirm("Take " + name + " off the list? Their notes and warnings are kept, and they come back if anything is added.")) return;
+      api("/api/performance/people/" + encodeURIComponent(name), { method: "DELETE" }).then(function () { perf.sel = ""; perf.person = null; perf.at = 0; render(); }, function (err) { toast(err.message, true); });
     }
   });
 

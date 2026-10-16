@@ -38,6 +38,8 @@ const {
   deleteFile,
   getSops,
   withSops,
+  getPerformance,
+  withPerformance,
 } = require("./s3store");
 const { sendMail } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError } = require("./calendar");
@@ -85,6 +87,7 @@ function normalizeUser(u) {
     breakdown: !!u.breakdown,
     leadership: !!u.leadership,
     itNotebook: !!u.itNotebook,
+    performance: !!u.performance,
     extraMailboxes: Array.isArray(u.extraMailboxes) ? u.extraMailboxes : [],
     calendarNames: Array.isArray(u.calendarNames) ? u.calendarNames : [],
     pentagonCode: u.pentagonCode || "",
@@ -200,6 +203,7 @@ app.post(
       manager: isManager(user),
       leadership: user.leadership,
       itNotebook: !!user.itNotebook,
+      performance: !!user.performance,
       pentagonCode: user.pentagonCode,
       pentagonMentions: getsPentagonMentions(user),
     });
@@ -209,6 +213,7 @@ app.post(
 app.get("/api/me", authMiddleware, asyncHandler(async (req, res) => {
   res.json({
     itNotebook: await hasItNotebook(req.user),
+    performance: await hasPerformance(req.user),
     username: req.user.username,
     companies: req.user.companies,
     departments: req.user.departments,
@@ -1270,6 +1275,246 @@ app.put(
   })
 );
 
+// ---------- Performance ----------
+// People are on the list automatically when "Show in team breakdown" is
+// ticked on their login, or when added by hand. Each has dated notes,
+// attachments, and warnings: every active warning is a strike, and the
+// tier is the number of strikes (3 = three strikes). Clearing a warning
+// keeps it in the history with a reason. Only logins with "Performance
+// access" ticked in /admin.html can see any of it — checked against the
+// saved login on every request.
+const PERF_TEXT = 5000;
+const PERF_FILE_TYPES = {
+  pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  doc: "application/msword", xls: "application/vnd.ms-excel", txt: "text/plain", csv: "text/csv", msg: "application/vnd.ms-outlook", eml: "message/rfc822",
+};
+async function hasPerformance(user) {
+  const u = (await getUsers()).find((x) => sameUser(x.username, user.username));
+  return !!(u && u.performance);
+}
+const performanceOnly = asyncHandler(async (req, res, next) => {
+  if (!(await hasPerformance(req.user))) return res.status(403).json({ error: "Performance is private" });
+  next();
+});
+function perfShape(doc) { doc.people = doc.people && typeof doc.people === "object" ? doc.people : {}; return doc; }
+function perfPerson(doc, username) {
+  const p = (doc.people[username] = doc.people[username] || {});
+  p.entries = Array.isArray(p.entries) ? p.entries : [];
+  p.files = Array.isArray(p.files) ? p.files : [];
+  return p;
+}
+function strikesOf(p) { return (p.entries || []).filter((e) => e.kind === "warning" && !e.cleared).length; }
+// Who's on the list: breakdown logins and people added by hand, minus
+// anyone taken off (their records are kept).
+function perfRoster(users, doc) {
+  return users.filter((u) => {
+    const p = doc.people[u.username] || {};
+    if (p.hidden) return false;
+    return u.breakdown || p.manual || (p.entries || []).length > 0;
+  });
+}
+async function perfUser(name) {
+  const u = (await getUsers()).map(normalizeUser).find((x) => sameUser(x.username, name));
+  return u || null;
+}
+
+app.get(
+  "/api/performance",
+  authMiddleware,
+  performanceOnly,
+  asyncHandler(async (req, res) => {
+    const [users, doc, tasks] = await Promise.all([getUsers(), getPerformance(), getTasks()]);
+    perfShape(doc);
+    const all = users.map(normalizeUser);
+    const roster = perfRoster(all, doc);
+    const people = roster.map((u) => {
+      const p = doc.people[u.username] || {};
+      const mine = tasks.filter((t) => sameUser(t.owner, u.username));
+      const strikes = strikesOf(p);
+      const last = (p.entries || []).reduce((m, e) => Math.max(m, e.at || 0), 0);
+      return {
+        username: u.username, departments: u.fullAccess ? ["Full access"] : u.departments, auto: !!u.breakdown,
+        strikes, tier: Math.min(strikes, 3), notes: (p.entries || []).length, lastAt: last,
+        openTasks: mine.filter((t) => t.status !== "done").length,
+        overdue: mine.filter((t) => t.status !== "done" && t.dueDate && t.dueDate < new Date().toISOString().slice(0, 10)).length,
+      };
+    }).sort((a, b) => b.tier - a.tier || a.username.toLowerCase().localeCompare(b.username.toLowerCase()));
+    const inList = new Set(roster.map((u) => u.username));
+    res.json({ people, others: all.filter((u) => !inList.has(u.username)).map((u) => u.username).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())) });
+  })
+);
+
+app.get(
+  "/api/performance/:username",
+  authMiddleware,
+  performanceOnly,
+  asyncHandler(async (req, res) => {
+    const u = await perfUser(req.params.username);
+    if (!u) return res.status(404).json({ error: "No login by that name" });
+    const p = perfShape(await getPerformance()).people[u.username] || {};
+    const entries = (p.entries || []).slice().sort((a, b) => (b.at || 0) - (a.at || 0));
+    const strikes = strikesOf(p);
+    res.json({ username: u.username, departments: u.fullAccess ? ["Full access"] : u.departments, auto: !!u.breakdown, strikes, tier: Math.min(strikes, 3), entries, files: p.files || [] });
+  })
+);
+
+// Add someone by hand, or take them off the list (records are kept).
+app.post(
+  "/api/performance/people",
+  authMiddleware,
+  performanceOnly,
+  asyncHandler(async (req, res) => {
+    const u = await perfUser((req.body || {}).username);
+    if (!u) return res.status(404).json({ error: "No login by that name" });
+    await withPerformance((doc) => { const p = perfPerson(perfShape(doc), u.username); p.manual = true; p.hidden = false; });
+    res.status(201).json({ username: u.username });
+  })
+);
+app.delete(
+  "/api/performance/people/:username",
+  authMiddleware,
+  performanceOnly,
+  asyncHandler(async (req, res) => {
+    const u = await perfUser(req.params.username);
+    if (!u) return res.status(404).json({ error: "No login by that name" });
+    await withPerformance((doc) => { const p = perfPerson(perfShape(doc), u.username); p.manual = false; p.hidden = true; });
+    res.status(204).end();
+  })
+);
+
+// Notes and warnings.
+app.post(
+  "/api/performance/:username/entries",
+  authMiddleware,
+  performanceOnly,
+  asyncHandler(async (req, res) => {
+    const u = await perfUser(req.params.username);
+    if (!u) return res.status(404).json({ error: "No login by that name" });
+    const b = req.body || {};
+    const kind = b.kind === "warning" ? "warning" : "note";
+    const text = String(b.text || "").trim().slice(0, PERF_TEXT);
+    if (!text) return res.status(400).json({ error: kind === "warning" ? "Say what the warning is for" : "Write the note first" });
+    const entry = await withPerformance((doc) => {
+      const p = perfPerson(perfShape(doc), u.username);
+      if (kind === "warning" && strikesOf(p) >= 3) return { error: `${u.username} already has 3 active warnings` };
+      const e = { id: newId(), kind, text, at: Date.now(), by: req.user.username };
+      if (kind === "warning") e.strike = strikesOf(p) + 1;
+      p.entries.push(e);
+      p.hidden = false;
+      return e;
+    });
+    if (entry.error) return res.status(400).json(entry);
+    res.status(201).json(entry);
+  })
+);
+app.patch(
+  "/api/performance/:username/entries/:id",
+  authMiddleware,
+  performanceOnly,
+  asyncHandler(async (req, res) => {
+    const u = await perfUser(req.params.username);
+    if (!u) return res.status(404).json({ error: "No login by that name" });
+    const b = req.body || {};
+    const out = await withPerformance((doc) => {
+      const p = perfPerson(perfShape(doc), u.username);
+      const e = p.entries.find((x) => x.id === req.params.id);
+      if (!e) return null;
+      if ("text" in b) { const t = String(b.text || "").trim().slice(0, PERF_TEXT); if (!t) return { error: "Text can't be empty" }; e.text = t; e.editedAt = Date.now(); e.editedBy = req.user.username; }
+      // Clearing a warning keeps it on record and removes the strike.
+      if (b.clear && e.kind === "warning" && !e.cleared) e.cleared = { at: Date.now(), by: req.user.username, reason: String(b.reason || "").trim().slice(0, 500) };
+      if (b.restore && e.kind === "warning" && e.cleared) {
+        if (strikesOf(p) >= 3) return { error: "Already at 3 active warnings" };
+        delete e.cleared;
+      }
+      return Object.assign({}, e);
+    });
+    if (!out) return res.status(404).json({ error: "That entry isn't here any more" });
+    if (out.error) return res.status(400).json(out);
+    res.json(out);
+  })
+);
+// Notes can be deleted; warnings are cleared instead, so the record stays.
+app.delete(
+  "/api/performance/:username/entries/:id",
+  authMiddleware,
+  performanceOnly,
+  asyncHandler(async (req, res) => {
+    const u = await perfUser(req.params.username);
+    if (!u) return res.status(404).json({ error: "No login by that name" });
+    const out = await withPerformance((doc) => {
+      const p = perfPerson(perfShape(doc), u.username);
+      const i = p.entries.findIndex((x) => x.id === req.params.id);
+      if (i === -1) return null;
+      if (p.entries[i].kind === "warning") return { error: "Warnings are cleared, not deleted, so the history stays" };
+      const [gone] = p.entries.splice(i, 1);
+      const files = p.files.filter((f) => f.entryId === gone.id);
+      p.files = p.files.filter((f) => f.entryId !== gone.id);
+      return { files };
+    });
+    if (!out) return res.status(404).json({ error: "That entry isn't here any more" });
+    if (out.error) return res.status(400).json(out);
+    await Promise.all(out.files.map((f) => deleteFile(`performance_files/${f.id}`).catch(() => {})));
+    res.status(204).end();
+  })
+);
+
+// Attachments (up to 15 MB): documents, images, emails. Always downloaded,
+// never shown in the page.
+app.post(
+  "/api/performance/:username/files",
+  authMiddleware,
+  performanceOnly,
+  express.raw({ type: () => true, limit: "15mb" }),
+  asyncHandler(async (req, res) => {
+    const u = await perfUser(req.params.username);
+    if (!u) return res.status(404).json({ error: "No login by that name" });
+    const name = String(req.query.name || "file").replace(/[\\/\r\n"]+/g, "_").slice(0, 160);
+    const ext = (name.match(/\.([a-z0-9]{2,5})$/i) || [])[1];
+    const type = ext && PERF_FILE_TYPES[ext.toLowerCase()];
+    if (!type) return res.status(400).json({ error: "Attach a PDF, image, Word, Excel, PowerPoint, text or email file" });
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "No file came through" });
+    const file = { id: newId(), name, type, size: req.body.length, at: Date.now(), by: req.user.username, entryId: String(req.query.entryId || "").slice(0, 40) };
+    await putFile(`performance_files/${file.id}`, req.body, type);
+    await withPerformance((doc) => { const p = perfPerson(perfShape(doc), u.username); p.files.push(file); p.hidden = false; });
+    res.status(201).json(file);
+  })
+);
+app.get(
+  "/api/performance/:username/files/:id",
+  authMiddleware,
+  performanceOnly,
+  asyncHandler(async (req, res) => {
+    const u = await perfUser(req.params.username);
+    const p = u && perfShape(await getPerformance()).people[u.username];
+    const meta = p && (p.files || []).find((f) => f.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: "That file isn't here" });
+    const file = await getFile(`performance_files/${meta.id}`);
+    if (!file) return res.status(404).json({ error: "The file is missing" });
+    res.set({ "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${meta.name.replace(/[^\w .()-]+/g, "_")}"`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" });
+    res.send(file.body);
+  })
+);
+app.delete(
+  "/api/performance/:username/files/:id",
+  authMiddleware,
+  performanceOnly,
+  asyncHandler(async (req, res) => {
+    const u = await perfUser(req.params.username);
+    if (!u) return res.status(404).json({ error: "No login by that name" });
+    const gone = await withPerformance((doc) => {
+      const p = perfPerson(perfShape(doc), u.username);
+      const i = p.files.findIndex((f) => f.id === req.params.id);
+      return i === -1 ? null : p.files.splice(i, 1)[0];
+    });
+    if (!gone) return res.status(404).json({ error: "That file isn't here" });
+    await deleteFile(`performance_files/${gone.id}`).catch(() => {});
+    res.status(204).end();
+  })
+);
+
 // ---------- Department SOPs ----------
 // Each department's SOP tab: SOP documents (PDFs, stored privately in S3)
 // and "quick answers" — the how-do-we questions people ask when the manager
@@ -1653,6 +1898,7 @@ app.get(
         breakdown: u.breakdown,
         leadership: u.leadership,
         itNotebook: u.itNotebook,
+        performance: u.performance,
         extraMailboxes: u.extraMailboxes,
         calendarNames: u.calendarNames,
         pentagonCode: u.pentagonCode || "",
@@ -1691,7 +1937,7 @@ app.post(
   "/api/admin/users",
   adminMiddleware,
   asyncHandler(async (req, res) => {
-    const { username, password, email, companies, departments, fullAccess, manager, breakdown, leadership, itNotebook, extraMailboxes, calendarNames, pentagonCode } = req.body || {};
+    const { username, password, email, companies, departments, fullAccess, manager, breakdown, leadership, itNotebook, performance, extraMailboxes, calendarNames, pentagonCode } = req.body || {};
     if (!username || !email) {
       return res.status(400).json({ error: "Username and email are required" });
     }
@@ -1744,6 +1990,7 @@ app.post(
       breakdown: !!breakdown,
       leadership: !!leadership,
       itNotebook: !!itNotebook,
+      performance: !!performance,
       extraMailboxes: extras,
       calendarNames: (Array.isArray(calendarNames) ? calendarNames : String(calendarNames || "").split(","))
         .map((n) => String(n).trim().slice(0, 40)).filter(Boolean).slice(0, 5),
