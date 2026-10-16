@@ -155,7 +155,10 @@ The **Calendar** page (sidebar → Tools) has up to three tabs:
   `/admin.html`. The link stays on the server; browsers only get the events.
   It needs no Microsoft permission. (An HTML link can be set instead, in
   which case Outlook's own page is embedded.)
-- **Who's in office** — Leadership only. One row per person, Mon–Fri, each
+- **Who's in office** — Leadership only. At the top, **Today** at a glance:
+  everyone grouped into In the office / Remote / Part of the day / Out as
+  name badges (pick another weekday to see that day). Below, one row per
+  person, Mon–Fri, each
   day **In office**, **Out** or **Remote** (with times for part of a day).
   It reads only *Out of office* / *Working elsewhere* time from each
   person's own Outlook, plus HR calendar entries whose title names the
@@ -188,31 +191,6 @@ It uses the same app registration as assignment emails (`MS_TENANT_ID`,
 
 No redeploy is needed after consent; it can take a few minutes to apply.
 Until then the page says the permission hasn't been granted yet.
-
-## Attendance (check in / check out)
-
-The first time someone opens the tracker on a workday (Monday–Friday,
-office time), a pop-up asks where they're working: **In the office**,
-**Remote** or **Out today**. A button in the top bar shows where they are
-("In office · since 8:42 AM") and is how they **check out** or switch.
-Times come from the server's clock in `OFFICE_TIMEZONE`, not the browser.
-"Not now" hides the pop-up for 30 minutes.
-
-**HR → Attendance** is visible to HR-department and leadership logins:
-
-- **Day:** in office / remote / out / not checked in, with each person's
-  in and out times. Flags: **Not checked in** (no check-in by the deadline)
-  and **Late** (checked in after it). Flagged people are listed first. HR can
-  correct where someone was or their times (marked "edited"); "—" clears
-  the day.
-- **Week:** Monday–Friday grid per person, with office / remote / out /
-  late / missed totals. ‹ › move by a day or a week.
-
-Settings in `/admin.html`: **Attendance → Check in by** (default 9:30), and
-**Checks in each workday** on each login (on by default; untick for shared
-or service logins). Days before the feature went live aren't flagged.
-Holidays aren't known to the tracker; HR can mark people Out. It's a
-presence check, not payroll timekeeping. Stored in S3 as `attendance.json`.
 
 ## Default person per department
 
