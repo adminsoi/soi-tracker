@@ -164,7 +164,12 @@ The **Calendar** page (sidebar → Tools) has up to three tabs:
   person's own Outlook, plus HR calendar entries whose title names the
   person and says they're out or remote (e.g. "Greg – PTO", "Alexis WFH").
   Event titles and details never reach the browser. Add nicknames per login
-  under **Names on the HR calendar**. Days use `OFFICE_TIMEZONE` (default
+  under **Names on the HR calendar**. People named on the HR calendar who
+  don't have a login yet (for example on another Microsoft domain) still
+  show, marked "From the HR calendar · no login yet": their name is taken
+  from the entry title ("OOO - Maria Lopez", "Greg – PTO"), office closures
+  and holidays are skipped, and days the HR calendar doesn't mention show
+  "—" since there's no Outlook to check. Days use `OFFICE_TIMEZONE` (default
   Pacific Standard Time).
 
 The Personal calendar can be shown as a **List** or a **Month** grid. The open Calendar tab quietly

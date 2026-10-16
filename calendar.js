@@ -153,6 +153,31 @@ function upcomingEvents(email, days) {
 const OUT_WORDS = /\b(pto|vacation|holiday|out|off|leave|sick|travel(?:ing|ling)?|ooo|trip|away|absent|bereavement|jury)\b/i;
 const REMOTE_WORDS = /\b(remote|wfh|work(?:ing)? from home|home office|working elsewhere)\b/i;
 
+// Words in an HR calendar title that aren't someone's name ("Greg – PTO",
+// "OOO - Maria Lopez", "Alexis WFH 1-3pm", "Office closed - Thanksgiving").
+const NOT_NAME = new Set(("pto vacation holiday holidays out off leave sick travel traveling travelling ooo trip away absent bereavement jury " +
+  "remote wfh work working from home office elsewhere half day days am pm all the of in on at for until back and to a an " +
+  "doctor dentist appointment appt medical personal family maternity paternity parental early late lunch morning afternoon " +
+  "closed closure company team staff everyone all-hands meeting training conference event party birthday anniversary " +
+  "christmas thanksgiving easter new year years eve independence labor memorial veterans presidents columbus juneteenth mlk " +
+  "day-off tbd tentative note reminder hr").split(" "));
+
+/**
+ * A person's name from an HR calendar title, or "" if it doesn't look like
+ * one: what's left after removing out/remote words, times and filler,
+ * 1–3 words of letters, and not a holiday or office closure.
+ */
+function nameFromTitle(subject) {
+  const words = String(subject || "")
+    .replace(/\b\d{1,2}(:\d{2})?\s*(am|pm)?\s*[-–—to]*\s*\d{0,2}(:\d{2})?\s*(am|pm)?\b/gi, " ")
+    .split(/[\s\-–—:|()\/,.;!&+]+/)
+    .filter(Boolean);
+  if (words.some((w) => /^(closed|closure|company|office|everyone|team|staff|holiday|holidays)$/i.test(w))) return "";
+  const left = words.filter((w) => /^[a-z\u00c0-\u024f'][a-z\u00c0-\u024f']+$/i.test(w) && !NOT_NAME.has(w.toLowerCase()));
+  if (!left.length || left.length > 3) return "";
+  return left.map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" ");
+}
+
 function addDays(ymd, n) {
   const d = new Date(`${ymd}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + n);
@@ -269,6 +294,7 @@ async function whosIn(people, hrFeed, date) {
 
   // 2. The HR calendar feed: entries whose title names a person and says they're out or remote.
   let hrError = null;
+  const hrOnly = new Map(); // lowercased name -> display name, for people with no login
   if (hrFeed) {
     try {
       const entries = await hrEvents(hrFeed, new Date(startIso), new Date(endIso));
@@ -287,12 +313,25 @@ async function whosIn(people, hrFeed, date) {
         const subject = e.subject || "";
         const kind = REMOTE_WORDS.test(subject) ? "remote" : OUT_WORDS.test(subject) ? "out" : null;
         if (!kind) continue;
+        let matched = false;
         for (const { p, re } of matchers) {
           if (!re || !re.test(subject)) continue;
+          matched = true;
           for (const day of days) {
             const o = overlap(e, day);
             if (o) add(p.username, day, Object.assign({ kind, source: "hr" }, o));
           }
+        }
+        // Named on the HR calendar but no login yet (e.g. a different
+        // Microsoft domain): they still show, from the HR calendar alone.
+        if (!matched) {
+          const name = nameFromTitle(subject);
+          if (!name) continue;
+          const touched = days.map((day) => [day, overlap(e, day)]).filter(([, o]) => o);
+          if (!touched.length) continue;
+          const key = name.toLowerCase();
+          if (!hrOnly.has(key)) hrOnly.set(key, name);
+          for (const [day, o] of touched) add(`hr:${key}`, day, Object.assign({ kind, source: "hr" }, o));
         }
       }
     } catch (err) {
@@ -300,18 +339,43 @@ async function whosIn(people, hrFeed, date) {
     }
   }
 
+  // A first name on its own joins the one full name that starts with it
+  // ("Maria" and "Maria Lopez" on different entries are one person).
+  for (const [key] of [...hrOnly]) {
+    if (key.includes(" ")) continue;
+    const full = [...hrOnly.keys()].filter((k) => k.startsWith(key + " "));
+    if (full.length !== 1) continue;
+    const into = marks.get(`hr:${full[0]}`) || {};
+    for (const [day, list] of Object.entries(marks.get(`hr:${key}`) || {})) (into[day] = into[day] || []).push(...list);
+    marks.set(`hr:${full[0]}`, into);
+    marks.delete(`hr:${key}`);
+    hrOnly.delete(key);
+  }
+
+  const known = people.map((p) => ({
+    username: p.username,
+    error: errors[p.username] || null,
+    days: Object.fromEntries(days.map((d) => [d, dayStatus(((marks.get(p.username) || {})[d]) || [])])),
+  }));
+  // No login, so no Outlook to check: days without an HR entry are unknown.
+  const fromHr = [...hrOnly].map(([key, name]) => ({
+    username: name,
+    hrOnly: true,
+    error: null,
+    days: Object.fromEntries(days.map((d) => {
+      const m = ((marks.get(`hr:${key}`) || {})[d]) || [];
+      return [d, m.length ? dayStatus(m) : { status: "unknown" }];
+    })),
+  })).sort((a, b) => a.username.localeCompare(b.username));
+
   return {
     week: monday,
     days,
     timeZone: OFFICE_TZ,
     hrConnected: !!hrFeed && !hrError,
     hrError,
-    people: people.map((p) => ({
-      username: p.username,
-      error: errors[p.username] || null,
-      days: Object.fromEntries(days.map((d) => [d, dayStatus(((marks.get(p.username) || {})[d]) || [])])),
-    })),
+    people: known.concat(fromHr),
   };
 }
 
-module.exports = { upcomingEvents, eventsBetween, whosIn, mondayOf, CalendarError };
+module.exports = { upcomingEvents, eventsBetween, whosIn, mondayOf, CalendarError, nameFromTitle };
