@@ -33,12 +33,10 @@ const {
   withItRequests,
   getItNotebook,
   withItNotebook,
-  getAttendance,
-  withAttendance,
 } = require("./s3store");
 const { sendMail } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError } = require("./calendar");
-const { hrEvents, cleanFeedUrl, FeedError, WINDOWS_TO_IANA } = require("./hrcal");
+const { hrEvents, cleanFeedUrl, FeedError } = require("./hrcal");
 const { itRequestsConfigured, fetchItRequests, IT_REQUESTS_MAILBOX, parseFormWorkbook, recordFromEmail, FormFileError, officeStamp } = require("./itrequests");
 const { unreadThreads, MailError } = require("./mail");
 const { pentagonQuery } = require("./pentagon");
@@ -82,7 +80,6 @@ function normalizeUser(u) {
     breakdown: !!u.breakdown,
     leadership: !!u.leadership,
     itNotebook: !!u.itNotebook,
-    attendance: u.attendance !== false,
     extraMailboxes: Array.isArray(u.extraMailboxes) ? u.extraMailboxes : [],
     calendarNames: Array.isArray(u.calendarNames) ? u.calendarNames : [],
     pentagonCode: u.pentagonCode || "",
@@ -1268,221 +1265,6 @@ app.put(
   })
 );
 
-// ---------- Attendance ----------
-// Each workday people check in (In the office / Remote / Out today) and
-// check out. Times are the server's clock in office time, never sent by the
-// browser. Anyone not checked in by the deadline (default 9:30, set in
-// /admin.html) is flagged "Not checked in"; checking in after it is "Late".
-// HR and leadership see everyone on HR → Attendance and can correct a day.
-// Logins with "Checks in each workday" unticked are left out.
-const ATT_STATUSES = ["office", "remote", "out"];
-const ATT_IANA = (() => {
-  const tz = process.env.OFFICE_TIMEZONE || "Pacific Standard Time";
-  return WINDOWS_TO_IANA[tz] || tz;
-})();
-const ATT_DATE = /^\d{4}-\d{2}-\d{2}$/;
-const ATT_TIME = /^\d{2}:\d{2}$/;
-
-function officeNow() {
-  const p = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
-    timeZone: ATT_IANA, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-  }).formatToParts(new Date()).map((x) => [x.type, x.value]));
-  return { date: `${p.year}-${p.month}-${p.day}`, time: `${p.hour}:${p.minute}` };
-}
-function isWorkday(date) {
-  const d = new Date(`${date}T12:00:00Z`).getUTCDay();
-  return d >= 1 && d <= 5;
-}
-function addDays(date, n) {
-  const d = new Date(`${date}T12:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
-}
-async function attendanceCutoff() {
-  const c = ((await getSettings()).attendance || {}).cutoff;
-  return ATT_TIME.test(c || "") ? c : "09:30";
-}
-// The day check-ins started (set once on first start), so days before it
-// aren't flagged as missed.
-let attendanceSince = "";
-async function startAttendance() {
-  const s = await getSettings();
-  if (s.attendance && ATT_DATE.test(s.attendance.since || "")) { attendanceSince = s.attendance.since; return; }
-  const since = officeNow().date;
-  await withSettings((x) => { x.attendance = Object.assign({}, x.attendance, { since }); });
-  attendanceSince = since;
-}
-startAttendance().catch((err) => console.error("Attendance start date not saved (will retry next start):", err.message));
-// "missing": a workday, past the deadline (or a past day), no check-in.
-// "late": checked in (office or remote) after the deadline.
-function attendanceFlag(rec, date, now, cutoff) {
-  if (!isWorkday(date) || date > now.date || (attendanceSince && date < attendanceSince)) return "";
-  if (!rec || !rec.status) return date < now.date || now.time >= cutoff ? "missing" : "";
-  if (rec.status !== "out" && rec.in && rec.in > cutoff) return "late";
-  return "";
-}
-function canSeeAttendance(user) {
-  return !!user.leadership || (user.departments || []).includes("HR");
-}
-async function trackedUsers() {
-  return (await getUsers()).map(normalizeUser).filter((u) => u.attendance)
-    .sort((a, b) => a.username.toLowerCase().localeCompare(b.username.toLowerCase()));
-}
-
-app.get(
-  "/api/attendance/me",
-  authMiddleware,
-  asyncHandler(async (req, res) => {
-    const u = (await getUsers()).map(normalizeUser).find((x) => sameUser(x.username, req.user.username));
-    const now = officeNow();
-    const cutoff = await attendanceCutoff();
-    const rec = ((await getAttendance())[now.date] || {})[u ? u.username : req.user.username] || null;
-    res.json({ required: !!(u && u.attendance), workday: isWorkday(now.date), date: now.date, time: now.time, cutoff, record: rec, hr: canSeeAttendance(req.user) });
-  })
-);
-
-app.post(
-  "/api/attendance/check-in",
-  authMiddleware,
-  asyncHandler(async (req, res) => {
-    const where = String((req.body || {}).where || "");
-    if (!ATT_STATUSES.includes(where)) return res.status(400).json({ error: "Pick In the office, Remote or Out today" });
-    const u = (await getUsers()).find((x) => sameUser(x.username, req.user.username));
-    const name = u ? u.username : req.user.username;
-    const now = officeNow();
-    const rec = await withAttendance((att) => {
-      const day = (att[now.date] = att[now.date] || {});
-      const r = day[name] || { at: Date.now() };
-      r.status = where;
-      // The first check-in time sticks; switching office <-> remote keeps it.
-      if (where !== "out" && !r.in) r.in = now.time;
-      if (where === "out") { r.in = r.in || ""; r.out = ""; }
-      r.updatedAt = Date.now();
-      day[name] = r;
-      return Object.assign({}, r);
-    });
-    res.json(rec);
-  })
-);
-
-app.post(
-  "/api/attendance/check-out",
-  authMiddleware,
-  asyncHandler(async (req, res) => {
-    const u = (await getUsers()).find((x) => sameUser(x.username, req.user.username));
-    const name = u ? u.username : req.user.username;
-    const now = officeNow();
-    const rec = await withAttendance((att) => {
-      const r = (att[now.date] || {})[name];
-      if (!r || r.status === "out") return null;
-      r.out = now.time;
-      r.updatedAt = Date.now();
-      return Object.assign({}, r);
-    });
-    if (!rec) return res.status(400).json({ error: "Check in first" });
-    res.json(rec);
-  })
-);
-
-// One day, everyone (HR / leadership).
-app.get(
-  "/api/attendance/day",
-  authMiddleware,
-  asyncHandler(async (req, res) => {
-    if (!canSeeAttendance(req.user)) return res.status(403).json({ error: "Attendance is for HR and leadership" });
-    const now = officeNow();
-    const date = ATT_DATE.test(req.query.date || "") ? req.query.date : now.date;
-    const [users, att, cutoff] = await Promise.all([trackedUsers(), getAttendance(), attendanceCutoff()]);
-    const day = att[date] || {};
-    const names = new Set(users.map((u) => u.username));
-    Object.keys(day).forEach((n) => names.add(n)); // anyone who checked in, even if untracked now
-    const people = [...names].map((n) => {
-      const rec = day[n] || null;
-      return { username: n, record: rec, flag: names.has(n) && users.some((u) => u.username === n) ? attendanceFlag(rec, date, now, cutoff) : "" };
-    }).sort((a, b) => a.username.toLowerCase().localeCompare(b.username.toLowerCase()));
-    res.json({ date, today: now.date, time: now.time, cutoff, workday: isWorkday(date), people });
-  })
-);
-
-// Monday–Friday of a week, everyone (HR / leadership).
-app.get(
-  "/api/attendance/week",
-  authMiddleware,
-  asyncHandler(async (req, res) => {
-    if (!canSeeAttendance(req.user)) return res.status(403).json({ error: "Attendance is for HR and leadership" });
-    const now = officeNow();
-    const any = ATT_DATE.test(req.query.date || "") ? req.query.date : now.date;
-    const dow = new Date(`${any}T12:00:00Z`).getUTCDay();
-    const monday = addDays(any, -((dow + 6) % 7));
-    const days = [0, 1, 2, 3, 4].map((i) => addDays(monday, i));
-    const [users, att, cutoff] = await Promise.all([trackedUsers(), getAttendance(), attendanceCutoff()]);
-    const people = users.map((u) => {
-      const cells = days.map((d) => {
-        const rec = (att[d] || {})[u.username] || null;
-        return { date: d, record: rec, flag: attendanceFlag(rec, d, now, cutoff) };
-      });
-      const n = (f) => cells.filter(f).length;
-      return {
-        username: u.username,
-        days: cells,
-        totals: {
-          office: n((c) => c.record && c.record.status === "office"),
-          remote: n((c) => c.record && c.record.status === "remote"),
-          out: n((c) => c.record && c.record.status === "out"),
-          late: n((c) => c.flag === "late"),
-          missing: n((c) => c.flag === "missing"),
-        },
-      };
-    });
-    res.json({ monday, days, today: now.date, cutoff, people });
-  })
-);
-
-// HR corrects a day: status (or "" to clear), and the in / out times.
-app.put(
-  "/api/attendance/:date/:username",
-  authMiddleware,
-  asyncHandler(async (req, res) => {
-    if (!canSeeAttendance(req.user)) return res.status(403).json({ error: "Only HR and leadership can change attendance" });
-    const { date } = req.params;
-    if (!ATT_DATE.test(date)) return res.status(400).json({ error: "Bad date" });
-    const u = (await getUsers()).find((x) => sameUser(x.username, req.params.username));
-    if (!u) return res.status(404).json({ error: "No login by that name" });
-    const body = req.body || {};
-    if ("status" in body && body.status !== "" && !ATT_STATUSES.includes(body.status)) return res.status(400).json({ error: "Bad status" });
-    for (const k of ["in", "out"]) if (k in body && body[k] !== "" && !ATT_TIME.test(body[k])) return res.status(400).json({ error: "Times look like 08:30" });
-    const rec = await withAttendance((att) => {
-      const day = (att[date] = att[date] || {});
-      if (body.status === "") { delete day[u.username]; return null; }
-      const r = day[u.username] || { at: Date.now() };
-      if ("status" in body) r.status = body.status;
-      if ("in" in body) r.in = body.in;
-      if ("out" in body) r.out = body.out;
-      if (!r.status) r.status = "office";
-      Object.assign(r, { updatedAt: Date.now(), editedBy: req.user.username });
-      day[u.username] = r;
-      return Object.assign({}, r);
-    });
-    res.json({ record: rec });
-  })
-);
-
-app.get(
-  "/api/admin/attendance",
-  adminMiddleware,
-  asyncHandler(async (req, res) => res.json({ cutoff: await attendanceCutoff() }))
-);
-app.put(
-  "/api/admin/attendance",
-  adminMiddleware,
-  asyncHandler(async (req, res) => {
-    const cutoff = String((req.body || {}).cutoff || "");
-    if (!ATT_TIME.test(cutoff)) return res.status(400).json({ error: "Pick a time like 09:30" });
-    await withSettings((s) => { s.attendance = Object.assign({}, s.attendance, { cutoff }); });
-    res.json({ cutoff });
-  })
-);
-
 // ---------- Default person per department ----------
 // A new task with nobody picked goes to its department's default person.
 
@@ -1694,7 +1476,6 @@ app.get(
         breakdown: u.breakdown,
         leadership: u.leadership,
         itNotebook: u.itNotebook,
-        attendance: u.attendance,
         extraMailboxes: u.extraMailboxes,
         calendarNames: u.calendarNames,
         pentagonCode: u.pentagonCode || "",
@@ -1733,7 +1514,7 @@ app.post(
   "/api/admin/users",
   adminMiddleware,
   asyncHandler(async (req, res) => {
-    const { username, password, email, companies, departments, fullAccess, manager, breakdown, leadership, itNotebook, attendance, extraMailboxes, calendarNames, pentagonCode } = req.body || {};
+    const { username, password, email, companies, departments, fullAccess, manager, breakdown, leadership, itNotebook, extraMailboxes, calendarNames, pentagonCode } = req.body || {};
     if (!username || !email) {
       return res.status(400).json({ error: "Username and email are required" });
     }
@@ -1786,7 +1567,6 @@ app.post(
       breakdown: !!breakdown,
       leadership: !!leadership,
       itNotebook: !!itNotebook,
-      attendance: attendance !== false,
       extraMailboxes: extras,
       calendarNames: (Array.isArray(calendarNames) ? calendarNames : String(calendarNames || "").split(","))
         .map((n) => String(n).trim().slice(0, 40)).filter(Boolean).slice(0, 5),

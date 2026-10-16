@@ -178,10 +178,6 @@
               <label for="u-leadership" style="margin:0;font-weight:600;color:var(--text);">Leadership — can see the HR global calendar and Who's in office tabs on the Calendar page</label>
             </div>
             <div class="check-row full-access-row">
-              <input type="checkbox" id="u-attendance" checked />
-              <label for="u-attendance" style="margin:0;font-weight:600;color:var(--text);">Checks in each workday — asked In the office / Remote / Out when they open the tracker, and flagged on HR → Attendance if they haven't by the deadline. Untick for shared or service logins.</label>
-            </div>
-            <div class="check-row full-access-row">
               <input type="checkbox" id="u-itnotebook" />
               <label for="u-itnotebook" style="margin:0;font-weight:600;color:var(--text);">Private IT notebook — the Resolved tab on the IT page (ticket write-ups and knowledge base). Only people ticked here can see it, even managers and full access can't.</label>
             </div>
@@ -227,16 +223,6 @@
         </div>
         <button type="submit">Save HR calendar</button>
         <div class="msg" id="calendarMsg"></div>
-      </form>
-    </div>
-
-    <div class="card">
-      <h2>Attendance</h2>
-      <div class="hint" style="margin-bottom:12px;">Each workday people check in as In the office, Remote or Out today when they open the tracker, and check out from the sidebar. Anyone who hasn't checked in by this time (office time, Monday–Friday) is flagged on <b>HR → Attendance</b>; checking in after it shows as Late.</div>
-      <form id="attendanceForm">
-        <div class="field" style="max-width:220px;"><label for="att-cutoff">Check in by</label><input type="time" id="att-cutoff" required></div>
-        <button type="submit">Save deadline</button>
-        <div class="msg" id="attendanceMsg"></div>
       </form>
     </div>
 
@@ -420,7 +406,6 @@
           (u.breakdown ? ' <span class="tag">In breakdown</span>' : "") +
           (u.leadership ? ' <span class="tag">Leadership</span>' : "") +
           (u.itNotebook ? ' <span class="tag">IT notebook</span>' : "") +
-          (u.attendance === false ? ' <span class="tag">No check-in</span>' : "") +
           ((u.extraMailboxes || []).length ? ' <span class="tag" title="' + escapeHtml(u.extraMailboxes.join(", ")) + '">+' + u.extraMailboxes.length + (u.extraMailboxes.length === 1 ? " inbox" : " inboxes") + "</span>" : "");
         tr.innerHTML =
           "<td>" + escapeHtml(u.username) + "</td>" +
@@ -485,7 +470,6 @@
     document.getElementById("u-breakdown").checked = !!user.breakdown;
     document.getElementById("u-leadership").checked = !!user.leadership;
     document.getElementById("u-itnotebook").checked = !!user.itNotebook;
-    document.getElementById("u-attendance").checked = user.attendance !== false;
     document.getElementById("u-calnames").value = (user.calendarNames || []).join(", ");
     var fullAccessBox = document.getElementById("u-fullaccess");
     fullAccessBox.checked = !!user.fullAccess;
@@ -503,7 +487,6 @@
     document.getElementById("editingBanner").style.display = "none";
     document.getElementById("u-name").disabled = false;
     document.getElementById("userForm").reset();
-    document.getElementById("u-attendance").checked = true;
     document.querySelectorAll('#deptChecks input[type="checkbox"]').forEach(function (el) { el.disabled = false; });
     document.getElementById("deptField").style.opacity = "1";
     document.getElementById("deptHint").style.display = "none";
@@ -548,7 +531,6 @@
       breakdown: document.getElementById("u-breakdown").checked,
       leadership: document.getElementById("u-leadership").checked,
       itNotebook: document.getElementById("u-itnotebook").checked,
-      attendance: document.getElementById("u-attendance").checked,
       calendarNames: document.getElementById("u-calnames").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean),
       departments: departments
     };
@@ -666,27 +648,12 @@
       .catch(function (err) { msg.textContent = err.message; });
   });
 
-  // ---------- Attendance deadline ----------
-  function loadAttendance() {
-    return api("/api/admin/attendance").then(function (d) { document.getElementById("att-cutoff").value = d.cutoff; })
-      .catch(function (err) { document.getElementById("attendanceMsg").textContent = err.message; });
-  }
-  document.getElementById("attendanceForm").addEventListener("submit", function (e) {
-    e.preventDefault();
-    var msg = document.getElementById("attendanceMsg");
-    msg.textContent = ""; msg.className = "msg";
-    api("/api/admin/attendance", { method: "PUT", body: JSON.stringify({ cutoff: document.getElementById("att-cutoff").value }) })
-      .then(function () { msg.textContent = "Saved."; msg.className = "msg ok"; })
-      .catch(function (err) { msg.textContent = err.message; });
-  });
-
   function start() {
     showPanel();
     Promise.all([loadCompanies(), loadDepartments()]).then(function () {
       loadClaudeProjects();
       loadSharedCalendar();
       loadDefaults();
-      loadAttendance();
       return loadUsers();
     });
   }
