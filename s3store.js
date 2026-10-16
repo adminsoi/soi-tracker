@@ -108,6 +108,10 @@ function getFinance() {
 function getSettings() {
   return readJson("settings", {});
 }
+// Department SOPs: { sops: [...], qa: [...] } (PDFs themselves via putFile).
+function getSops() {
+  return readJson("sops", {});
+}
 // Private IT notebook: ticket write-ups and knowledge base articles.
 function getItNotebook() {
   return readJson("it_notebook", {});
@@ -127,6 +131,7 @@ let settingsQueue = Promise.resolve();
 let financeQueue = Promise.resolve();
 let itRequestsQueue = Promise.resolve();
 let itNotebookQueue = Promise.resolve();
+let sopsQueue = Promise.resolve();
 
 function withUsers(mutator) {
   usersQueue = usersQueue.then(async () => {
@@ -212,7 +217,19 @@ function withItNotebook(mutator) {
   return itNotebookQueue;
 }
 
+function withSops(mutator) {
+  sopsQueue = sopsQueue.then(async () => {
+    const doc = await getSops();
+    const result = await mutator(doc);
+    await writeJson("sops", doc);
+    return result;
+  });
+  return sopsQueue;
+}
+
 module.exports = {
+  getSops,
+  withSops,
   putFile,
   getFile,
   deleteFile,

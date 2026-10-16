@@ -136,6 +136,24 @@ form (a call, a walk-up, a Teams message): who it's for, company, priority
 and the issue. It starts as New, is marked "Added by hand", and goes on
 IT → Tasks for the IT default person, like form tickets.
 
+## SOPs (every department)
+
+Each department has an **SOPs** tab, readable by everyone in that department
+(managers add and change things):
+
+- **Quick answers** — the "our manager is out, how do we…?" questions. Click
+  a question to see the answer; *Find a question* filters them. Each can
+  link to an SOP. **+ Add question**, or **Paste a list** in one go (each
+  as `Q:` … `A:` …, or a question line ending in `?` with the answer
+  underneath). An answer can be shown in **every department**.
+- **SOP documents** — upload the PDFs (up to 20 MB each). The number, title
+  and version come from the file name (`SOP-WH002_v01.pdf` → WH-002 ·
+  Receiving · v01) and can be fixed in the table. An SOP can be shown in
+  every department (e.g. CUST-001). **Open** shows the PDF in a new tab.
+
+PDFs are stored privately in S3 under `sop_files/`, the rest in `sops.json`.
+Nothing here uses AI.
+
 ## Calendar
 
 The **Calendar** page (sidebar → Tools) has up to three tabs:
