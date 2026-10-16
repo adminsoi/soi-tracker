@@ -2724,6 +2724,7 @@
     data.people.forEach(function (p) {
       var st = p.days[day] || {};
       if (p.error) groups.unknown.push({ p: p, note: "Calendar not readable" });
+      else if (st.status === "unknown") return; // HR-calendar-only person with no entry that day
       else if (st.partial) groups.part.push({ p: p, note: (st.status === "out" ? "Out " : "Remote ") + (st.note || "") });
       else (groups[st.status] || groups.in).push({ p: p, note: "" });
     });
@@ -2767,6 +2768,7 @@
         return data.people.filter(function (p) { return !p.error && p.days[d].status === "in"; }).length;
       });
       var cell = function (s) {
+        if (s.status === "unknown") return '<span class="dim" title="Not in the tracker yet, so only HR calendar entries are known">—</span>';
         if (s.status === "in") return '<span class="who in">In office</span>';
         var label = s.status === "out" ? "Out" : "Remote";
         return '<span class="who ' + s.status + '">' + label + (s.partial ? " · " + E(s.note) : "") + "</span>" +
@@ -2781,10 +2783,12 @@
           return '<th class="' + (d === today ? "who-today" : "") + '">' + E(label) + '<br><span style="text-transform:none;letter-spacing:0;font-weight:400;">' + counts[i] + " in office</span></th>";
         }).join("") + "</tr></thead><tbody>" +
         data.people.map(function (p) {
-          return "<tr><td><strong>" + E(p.username) + "</strong>" + (p.error ? '<span class="co-note" style="padding:2px 0 0;color:var(--danger)">' + E(p.error) + "</span>" : "") + "</td>" +
+          return "<tr><td><strong>" + E(p.username) + "</strong>" +
+            (p.hrOnly ? '<span class="co-note" style="padding:2px 0 0">From the HR calendar · no login yet</span>' : "") + (p.error ? '<span class="co-note" style="padding:2px 0 0;color:var(--danger)">' + E(p.error) + "</span>" : "") + "</td>" +
             data.days.map(function (d) { return '<td class="' + (d === today ? "who-today" : "") + '">' + (p.error && p.days[d].status === "in" ? '<span class="dim">—</span>' : cell(p.days[d])) + "</td>"; }).join("") + "</tr>";
         }).join("") + "</tbody></table></div>" +
-        '<p class="small-note" style="margin-top:12px;">In office = nothing marked Out of office or Working elsewhere on their Outlook, and no matching entry on the HR calendar. Days are in ' + E(data.timeZone) + ". Updates every few minutes.</p>";
+        '<p class="small-note" style="margin-top:12px;">In office = nothing marked Out of office or Working elsewhere on their Outlook, and no matching entry on the HR calendar. ' +
+        "People named on the HR calendar without a login are listed too, from the HR calendar only (— on days it doesn't mention them). Days are in " + E(data.timeZone) + ". Updates every few minutes.</p>";
   }
   document.addEventListener("click", function (e) {
     var b = e.target.closest && e.target.closest("[data-who-day]");
