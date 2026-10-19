@@ -21,7 +21,8 @@ if (!configured) {
   );
 }
 
-// replyTo: where replies go (e.g. the person who resolved a ticket).
+// replyTo: where replies go — one address or a list (e.g. the person who
+// resolved a ticket and the IT mailbox the tracker reads).
 // Returns true when sent, false when email isn't set up.
 async function sendMail({ to, subject, html, replyTo, saveCopy }) {
   if (!configured || !to) return false;
@@ -36,7 +37,8 @@ async function sendMail({ to, subject, html, replyTo, saveCopy }) {
     },
     saveToSentItems: !!saveCopy,
   };
-  if (replyTo) payload.message.replyTo = [{ emailAddress: { address: replyTo } }];
+  const replyList = [...new Set([].concat(replyTo || []).map((a) => String(a || "").trim().toLowerCase()).filter(Boolean))];
+  if (replyList.length) payload.message.replyTo = replyList.map((address) => ({ emailAddress: { address } }));
 
   const res = await fetch(url, {
     method: "POST",

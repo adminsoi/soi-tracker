@@ -219,6 +219,18 @@
   .rs-modal { position: fixed; inset: 0; background: rgba(40, 32, 26, .35); display: flex; align-items: center; justify-content: center; z-index: 60; padding: 16px; }
   .rs-card { background: var(--card); border-radius: 14px; padding: 22px 24px; width: 100%; max-width: 480px; box-shadow: 0 20px 60px rgba(0,0,0,.18); }
   .rs-card h3 { font: 22px/1.2 'Libre Caslon Display', Georgia, serif; margin: 0 0 8px; }
+  .rs-card.rs-wide { width: min(560px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; }
+  .rs-card.rs-wide textarea { min-height: 0; }
+  .rs-card.rs-wide .nb-field { margin-bottom: 10px; }
+  .rs-card .opt { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted, #8a8172); }
+  .rs-preview { margin-top: 12px; padding: 12px 14px; border: 1px solid #e6dfd3; border-radius: 6px; background: #fff; font: 13px/1.5 "Segoe UI", Arial, sans-serif; color: #222; }
+  .rs-preview p { margin: 0 0 8px; }
+  .rs-pv-head { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #8a8172; margin-bottom: 4px; }
+  .rs-pv-subj { font-weight: 600; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #eee; }
+  .rs-pv-box { border-left: 3px solid #9fbf8f; padding: 2px 0 0 12px; margin: 10px 0; }
+  .itr-reply { border-left-color: #c9b48f; }
+  .itr-reply.pending { border-left-color: #d08a3a; background: #fdf3e6; }
+  .itr-reply-acts { display: flex; gap: 10px; align-items: center; margin-top: 6px; }
   /* Column filters */
   .filter-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 12px; flex-basis: 100%; }
   .fchip { display: inline-flex; align-items: center; gap: 6px; background: #fbeef2; color: var(--rose-ink); border: 1px solid #ecd2db; border-radius: 999px; padding: 4px 6px 4px 11px; font-size: 12px; }
@@ -1526,7 +1538,10 @@
         '<span class="grow"></span><button type="button" class="text-button" data-itr-clear>Clear</button></div>'
       : "";
 
-    return itSyncLine(itr.data.sync, can) + '<div class="summary-cards four">' +
+    var replied = all.filter(function (r) { return r.replyPending; });
+    var replyBanner = replied.length ? '<div class="banner itr-reply-banner"><b>' + replied.length + (replied.length === 1 ? " person" : " people") + " replied to a resolved ticket</b> — " +
+      E(replied.slice(0, 3).map(itrPerson).join(", ")) + (replied.length > 3 ? " and more" : "") + '. <button type="button" class="text-button" data-itr-replied>Show them</button></div>' : "";
+    return itSyncLine(itr.data.sync, can) + replyBanner + '<div class="summary-cards four">' +
         metric("Requests", all.length, (first ? "Since " + fmtDate(first) + " · " : "") + all.filter(function (r) { return r.submittedAt >= since30; }).length + " in the last 30 days") +
         metric("New", count("new"), "Just came in from the form", count("new") > 0) +
         metric("In progress", count("progress"), unrated ? unrated + " open ones not rated yet" : "All rated") +
@@ -1560,7 +1575,8 @@
           '<td><div class="itr-issue" title="' + E(r.issue) + '">' + E(r.issue || "—") + "</div>" +
             (r.notes ? '<span class="itr-note"><b>Note:</b> ' + E(r.notes) + "</span>" : "") +
             (r.source === "manual" ? '<span class="co-note">Added by hand' + (r.addedBy ? " · " + E(r.addedBy) : "") + "</span>" : "") +
-            (r.status === "done" && r.resolution ? '<span class="itr-note" style="border-left-color:#9fbf8f;"><b>Resolved:</b> ' + E(r.resolution) + (r.notifiedAt ? '<br><span class="small-note">Emailed ' + E(r.email) + " " + E(new Date(r.notifiedAt).toLocaleDateString()) + "</span>" : "") + "</span>" : "") +
+            (r.status === "done" && (r.resolution || r.notifiedAt) ? '<span class="itr-note" style="border-left-color:#9fbf8f;"><b>Resolved' + (r.resolution ? ":</b> " + E(r.resolution) : "</b>") + (r.notifiedAt ? '<br><span class="small-note">Emailed ' + E(r.email) + " " + E(new Date(r.notifiedAt).toLocaleDateString()) + (r.ref ? " · " + E(r.ref) : "") + "</span>" : "") + "</span>" : "") +
+            itrReplies(r, can) +
             (r.taskId ? '<span class="co-note">On IT → Tasks' + (r.taskOwner ? " · " + E(r.taskOwner) : "") + "</span>" : "") + dupCell(r) + "</td>" +
           "<td>" + E(r.urgency || "—") + "</td><td>" + prioCell(r) + "</td><td>" + statusCell(r) + "</td>" +
           "<td>" + E(r.contact || "—") + (r.phone ? '<span class="co-note">' + E(r.phone) + "</span>" : "") + (r.email ? '<span class="co-note">' + E(r.email) + "</span>" : "") + "</td></tr>";
@@ -1574,6 +1590,18 @@
       '<p class="small-note" style="margin-top:12px;">Priority is your internal rating: ' + IT_PRIOS.map(function (p) { return p.id + " " + p.note; }).join(" · ") +
       ". On a request that's on the IT board, priority and Resolved carry over to that task." +
       " New form answers arrive every few minutes as New.</p>";
+  }
+  // Replies to the "Resolved" email. A new one is flagged until someone
+  // reopens the ticket or keeps it resolved.
+  function itrReplies(r, can) {
+    var rs = r.replies || [];
+    if (!rs.length) return "";
+    return rs.map(function (x, i) {
+      var last = i === rs.length - 1;
+      return '<span class="itr-note itr-reply' + (last && r.replyPending ? " pending" : "") + '"><b>↩ ' + E(x.name || x.from || "Reply") + "</b> replied " + E(new Date(x.at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })) +
+        "<br>" + E(x.text || "(no text)") +
+        (last && r.replyPending && can ? '<span class="itr-reply-acts"><button type="button" class="st-btn st-progress" data-itr-reopen="' + E(r.id) + '">Reopen</button><button type="button" class="text-button" data-itr-keep="' + E(r.id) + '">Keep resolved</button></span>' : "") + "</span>";
+    }).join("");
   }
   // A ticket that didn't come through the form (a call, a walk-up, Teams).
   function itrAddForm(plist) {
@@ -1614,28 +1642,58 @@
   function resolveDialog(ids) {
     var list = itr.data.requests.filter(function (r) { return ids.indexOf(r.id) !== -1; });
     var withEmail = list.filter(function (r) { return r.email; });
+    var one = list.length === 1 ? list[0] : null;
+    var who = (me && (me.name || me.username)) || "IT";
+    who = who.charAt(0).toUpperCase() + who.slice(1);
+    var fld = function (id, label, rows, ph, val) {
+      return '<div class="nb-field"><label for="rs-' + id + '">' + label + '</label><textarea id="rs-' + id + '" data-rs-part="' + id + '" rows="' + rows + '" placeholder="' + E(ph) + '">' + E(val || "") + "</textarea></div>";
+    };
     var box = document.createElement("div");
     box.className = "rs-modal";
-    box.innerHTML = '<div class="rs-card" role="dialog" aria-modal="true" aria-labelledby="rsTitle"><h3 id="rsTitle">Resolve ' + (list.length === 1 ? "this ticket" : list.length + " tickets") + "</h3>" +
-      (list.length === 1 ? '<p class="small-note" style="margin:0 0 10px;">' + E(itrPerson(list[0])) + " — " + E(String(list[0].issue || "").slice(0, 140)) + "</p>" : "") +
-      '<div class="nb-field"><label for="rsNote">How was it resolved?</label><textarea id="rsNote" rows="4" placeholder="e.g. Reset the Outlook profile and cleared saved passwords."></textarea></div>' +
-      (withEmail.length ? '<label class="small-note" style="display:flex;gap:7px;align-items:flex-start;"><input type="checkbox" class="check" id="rsNotify" checked> <span>Email ' + (withEmail.length === 1 ? E(withEmail[0].email) : withEmail.length + " requesters") + ' that it\'s resolved, with this note, asking them to reply if they still have the issue (replies come to you).</span></label>' +
-          (withEmail.length < list.length ? '<p class="small-note" style="margin:6px 0 0;">' + (list.length - withEmail.length) + " without an email won't be emailed.</p>" : "")
-        : '<p class="small-note">No email on ' + (list.length === 1 ? "this ticket" : "these tickets") + ", so nobody will be emailed.</p>") +
+    box.innerHTML = '<div class="rs-card rs-wide" role="dialog" aria-modal="true" aria-labelledby="rsTitle"><h3 id="rsTitle">Resolve ' + (one ? "this ticket" : list.length + " tickets") + "</h3>" +
+      (one ? '<p class="small-note" style="margin:0 0 10px;">' + E(itrPerson(one)) + (one.submittedAt ? " · " + E(fmtDate(one.submittedAt)) : "") + "</p>" : "") +
+      fld("issue", "What was the issue?", 2, one ? "" : "Leave blank to use each ticket's own description", one ? String(one.issue || "").slice(0, 600) : "") +
+      fld("cause", 'What caused it? <span class="opt">optional</span>', 2, "e.g. A saved password from before the reset.") +
+      fld("fix", "How did you fix it?", 3, "e.g. Cleared the saved password and signed back in to Outlook.") +
+      fld("action", 'Anything they need to do? <span class="opt">optional</span>', 2, "e.g. Restart your laptop once before signing in.") +
+      (withEmail.length ? '<label class="small-note" style="display:flex;gap:7px;align-items:flex-start;margin-top:4px;"><input type="checkbox" class="check" id="rsNotify" checked> <span>Email ' + (withEmail.length === 1 ? E(withEmail[0].email) : withEmail.length + " requesters") + " — replies come to you and show up on the ticket here.</span></label>" +
+          (withEmail.length < list.length ? '<p class="small-note" style="margin:6px 0 0;">' + (list.length - withEmail.length) + " without an email won't be emailed.</p>" : "") +
+          '<div class="rs-preview" id="rsPreview" aria-live="polite"></div>'
+        : '<p class="small-note">No email on ' + (one ? "this ticket" : "these tickets") + ", so nobody will be emailed.</p>") +
       '<div class="nb-foot" style="margin-top:14px;"><span class="grow"></span><button type="button" class="text-button" data-rs-cancel>Cancel</button><button type="button" class="primary" data-rs-ok>Resolve</button></div></div>';
     document.body.appendChild(box);
+    var parts = function () {
+      var o = {};
+      box.querySelectorAll("[data-rs-part]").forEach(function (t) { var v = t.value.trim(); if (v) o[t.dataset.rsPart] = v; });
+      return o;
+    };
+    // What the email will look like, for the first ticket with an email.
+    var preview = function () {
+      var pv = $("#rsPreview"), n = $("#rsNotify");
+      if (!pv) return;
+      pv.hidden = !(n && n.checked);
+      var r = withEmail[0], p = parts();
+      var sec = function (label, t) { return t ? "<p><b>" + label + "</b><br>" + E(t).replace(/\n/g, "<br>") + "</p>" : ""; };
+      pv.innerHTML = '<div class="rs-pv-head">Preview' + (withEmail.length > 1 ? " (first of " + withEmail.length + ")" : "") + '</div><div class="rs-pv-subj">Resolved: your IT request — ' + E(String(r.issue || "").replace(/\s+/g, " ").slice(0, 60)) + "</div>" +
+        "<p>Hi " + E((r.name || "").split(" ")[0] || "there") + ",</p><p>Good news — your IT request" + (r.submittedAt ? " from " + E(String(r.submittedAt).slice(0, 10)) : "") + " has been <b>resolved</b>.</p>" +
+        '<div class="rs-pv-box">' + sec("The issue", p.issue || r.issue) + sec("What caused it", p.cause) + sec("How it was fixed", p.fix || "…") + sec("What you need to do", p.action) + "</div>" +
+        "<p>If you're still having this issue, just reply to this email and it'll come straight to " + E(who) + ".</p><p>Thanks,<br>" + E(who) + "<br>SOI Aviation IT</p>";
+    };
+    preview();
+    box.addEventListener("input", preview);
+    box.addEventListener("change", preview);
     var close = function () { box.remove(); render(); };
     box.addEventListener("click", function (e) {
       if (e.target === box || e.target.closest("[data-rs-cancel]")) { close(); return; }
       if (e.target.closest("[data-rs-ok]")) {
-        var note = $("#rsNote").value.trim(), notify = !!($("#rsNotify") && $("#rsNotify").checked);
-        if (notify && !note && !confirm("Send the email without saying how it was resolved?")) return;
+        var p = parts(), notify = !!($("#rsNotify") && $("#rsNotify").checked);
+        if (notify && !p.fix && !confirm("Send the email without saying how it was fixed?")) return;
         box.remove();
-        changeItRequests(ids, { status: "done", resolution: note, notify: notify });
+        changeItRequests(ids, { status: "done", parts: p, notify: notify });
       }
     });
     box.addEventListener("keydown", function (e) { if (e.key === "Escape") close(); });
-    setTimeout(function () { var n = $("#rsNote"); if (n) n.focus(); }, 0);
+    setTimeout(function () { var n = $(one ? "#rs-fix" : "#rs-issue"); if (n) n.focus(); }, 0);
   }
   function changeItRequests(ids, change) {
     var set = {}; ids.forEach(function (id) { set[id] = 1; });
@@ -1654,16 +1712,20 @@
         var probs = res.emailProblems || [];
         toast((res.emailed ? "Resolved — emailed " + res.emailed + " requester" + (res.emailed === 1 ? "" : "s") + "." : "Resolved.") + (probs.length ? " Not emailed: " + probs.join("; ") : ""), !!probs.length && !res.emailed);
         itr.at = 0; requestRender();
-      } else if (change.status && ids.length > 1) toast(ids.length + " requests marked " + IT_STATUS_LABEL[change.status] + ".");
+      } else if (change.parts) { itr.at = 0; requestRender(); if (ids.length > 1) toast(ids.length + " requests marked Resolved."); }
+      else if (change.status && ids.length > 1) toast(ids.length + " requests marked " + IT_STATUS_LABEL[change.status] + ".");
       if (change.duplicateOf) toast(ids.length === 1 ? "Marked as a duplicate." : ids.length + " requests merged as duplicates.");
       if ("duplicateOf" in change) { itr.at = 0; requestRender(); }
       nb.at = 0; // the Resolved tab picks it up next time
     }, function (err) { toast(err.message, true); itr.at = 0; render(); });
   }
   document.addEventListener("click", function (e) {
-    var t = e.target.closest && e.target.closest("[data-itr-tab],[data-itr-who],[data-itr-bulk],[data-itr-clear],[data-itr-merge],[data-itr-dup],[data-itr-notdup],[data-itr-undup],[data-itr-main],[data-itr-checknow],[data-itr-add],[data-itr-save],[data-itr-cancel],#itrImport");
+    var t = e.target.closest && e.target.closest("[data-itr-reopen],[data-itr-keep],[data-itr-replied],[data-itr-tab],[data-itr-who],[data-itr-bulk],[data-itr-clear],[data-itr-merge],[data-itr-dup],[data-itr-notdup],[data-itr-undup],[data-itr-main],[data-itr-checknow],[data-itr-add],[data-itr-save],[data-itr-cancel],#itrImport");
     if (!t) return;
     var ds = t.dataset;
+    if ("itrReopen" in ds) { changeItRequests([ds.itrReopen], { status: "progress", replySeen: true, replyPending: false }); toast("Reopened — it's In progress again."); return; }
+    if ("itrKeep" in ds) { changeItRequests([ds.itrKeep], { replySeen: true, replyPending: false }); return; }
+    if ("itrReplied" in ds) { itr.tab = "done"; itr.person = ""; render(); return; }
     if (t.id === "itrImport") { $("#itrFile").click(); return; }
     if ("itrAdd" in ds) { itr.adding = true; render(); var n = $("#itf-name"); if (n) n.focus(); return; }
     if ("itrCancel" in ds) { itr.adding = false; itr.form = {}; render(); return; }

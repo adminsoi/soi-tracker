@@ -415,13 +415,21 @@ department (or full access); only managers change things.
   Resolving the request ticks the task done, and ticking the task done
   resolves the request.
 - **Resolve with a note and email:** marking a request **Resolved** (one at
-  a time or in bulk) asks how it was resolved. The note is saved on the
-  request (and copied into the Resolved notebook's fix when that's empty).
-  If the requester gave an email, tick **Email them** to send "Resolved: your
-  IT request" with the note, asking them to reply if they still have the
-  issue. It's sent from `MS_FROM_EMAIL` (needs Graph **Mail.Send**, the same
-  as assignment emails) with Reply-To set to your email, so replies come
-  straight to you. The request shows who was emailed and when.
+  a time or in bulk) opens a short form: what the issue was (filled in from
+  the request), what caused it, how you fixed it and anything they need to
+  do. Only the fix really matters; the rest is optional. It's saved on the
+  request and copied into the Resolved notebook's fix when that's empty. If
+  the requester gave an email, tick **Email them** and the form turns into a
+  formatted "Resolved: your IT request [Ticket IT-XXXXX]" email (there's a
+  preview), asking them to reply if they still have the issue. It's sent from
+  `MS_FROM_EMAIL` (needs Graph **Mail.Send**, application permission, with
+  admin consent).
+- **Replies show up on the ticket:** the email's Reply-To is you *and*
+  `IT_REQUESTS_MAILBOX`. You get the reply in Outlook, and the tracker picks
+  it up from the IT mailbox on its next check (every few minutes) by the
+  ticket number in the subject. The reply shows on the ticket, and a banner
+  on Requests says who replied, with **Reopen** (back to In progress) or
+  **Keep resolved**.
 - **By person:** filter or sort by person, or click a name; the **By
   person** table shows requests, open, P1/P2 and last request for everyone.
 - **Overview** shows requests per week (last 12 weeks) and open requests
