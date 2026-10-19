@@ -12,7 +12,6 @@ const { WINDOWS_TO_IANA } = require("./hrcal");
 const MAILBOX = String(process.env.IT_REQUESTS_MAILBOX || "").trim();
 const TAG = "[IT Request]";
 const LOOKBACK_DAYS = 14;
-const FROM_EMAIL = String(process.env.MS_FROM_EMAIL || "").trim().toLowerCase();
 
 const itRequestsConfigured = graphConfigured && !!MAILBOX;
 
@@ -77,9 +76,10 @@ async function graphJson(url, token, extraHeaders) {
  * common words like "it" and can lag, so it isn't used. Only messages not in
  * `skipIds` are opened to read the body. Returns { matched, items }.
  */
-async function fetchItRequests(skipIds) {
+async function fetchItRequests(skipIds, skipReplyIds) {
   if (!itRequestsConfigured) return { matched: 0, items: [] };
   const skip = skipIds || new Set();
+  const skipReply = skipReplyIds || new Set();
   const token = await getAccessToken();
   const base = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(MAILBOX)}`;
   let sentId = "";
@@ -133,12 +133,15 @@ async function fetchItRequests(skipIds) {
 
   // Replies to resolved tickets: just the new part of each (uniqueBody
   // leaves out the quoted email below it).
-  const replies = [];
+  const replies = [], repliesChecked = [];
   for (const m of replyMatches) {
-    if (skip.has(m.id)) continue;
-    checked.push(m.id);
+    if (skipReply.has(m.id)) continue;
+    repliesChecked.push(m.id);
     const from = (m.from && m.from.emailAddress) || {};
-    if (FROM_EMAIL && String(from.address || "").toLowerCase() === FROM_EMAIL) continue; // our own email
+    // The "Resolved" email itself (when it lands in this mailbox), not a reply.
+    // Matched on the subject, not the sender: the sender can be the same
+    // person as the requester or the mailbox.
+    if (/^\s*resolved\s*:/i.test(m.subject || "")) continue;
     const full = await graphJson(`${base}/messages/${encodeURIComponent(m.id)}?$select=id,uniqueBody,body,receivedDateTime`, token, { Prefer: 'outlook.body-content-type="text"' });
     const text = String((full.uniqueBody && full.uniqueBody.content) || (full.body && full.body.content) || m.bodyPreview || "")
       .replace(/\r/g, "").split(/\n\s*(?:From:|-{2,}\s*Original Message|On .{5,80} wrote:)/i)[0]
@@ -146,7 +149,7 @@ async function fetchItRequests(skipIds) {
     replies.push({ messageId: m.id, ref: ticketRefOf(m.subject), from: String(from.address || "").toLowerCase(), fromName: from.name || "", text, at: full.receivedDateTime || m.receivedDateTime });
   }
   replies.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
-  return { matched: matches.length, items, checked, replies };
+  return { matched: matches.length, items, checked, replies, repliesChecked };
 }
 
 // ---- Request history (the IT page's Requests tab) ----
