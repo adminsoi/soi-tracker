@@ -1507,23 +1507,66 @@ app.put(
     if (!leadershipOnly(req, res)) return;
     const range = quarterRange(req.params.quarter);
     if (!range) return res.status(400).json({ error: "Quarter looks like 2026-Q3" });
-    const b = req.body || {};
-    const out = await withQbr((doc) => {
-      doc.quarters = doc.quarters || {};
-      const q = (doc.quarters[range.quarter] = doc.quarters[range.quarter] || {});
-      q.overrides = q.overrides || {}; q.notes = q.notes || {};
-      for (const [k, v] of Object.entries(b.overrides || {})) {
-        if (!QBR_KEYS.includes(k)) continue;
-        if (v === null || v === "") delete q.overrides[k];
-        else { const n = qbrNum(v); if (n === null) return { error: `${k}: enter a number` }; q.overrides[k] = n; }
-      }
-      for (const [k, v] of Object.entries(b.notes || {})) if (QBR_NOTES.includes(k)) q.notes[k] = String(v || "").slice(0, 3000);
-      if (Array.isArray(b.rejections)) q.rejections = b.rejections.slice(0, 100).map((x) => ({
-        part: String(x.part || "").slice(0, 120), party: String(x.party || "").slice(0, 120), reason: String(x.reason || "").slice(0, 400), date: /^\d{4}-\d{2}-\d{2}$/.test(x.date || "") ? x.date : "",
-      })).filter((x) => x.part || x.reason);
-      q.updatedAt = Date.now(); q.updatedBy = req.user.username;
-      return { ok: true };
+    const out = await qbrUpdate(range, req.body || {}, QBR_KEYS, QBR_NOTES, req.user);
+    if (out.error) return res.status(400).json(out);
+    res.json(out);
+  })
+);
+
+// Save typed-in numbers / notes / manual rejections — only the given keys.
+function qbrUpdate(range, b, keys, notes, user) {
+  return withQbr((doc) => {
+    doc.quarters = doc.quarters || {};
+    const q = (doc.quarters[range.quarter] = doc.quarters[range.quarter] || {});
+    q.overrides = q.overrides || {}; q.notes = q.notes || {};
+    for (const [k, v] of Object.entries(b.overrides || {})) {
+      if (!keys.includes(k)) continue;
+      if (v === null || v === "") delete q.overrides[k];
+      else { const n = qbrNum(v); if (n === null) return { error: `${k}: enter a number` }; q.overrides[k] = n; }
+    }
+    for (const [k, v] of Object.entries(b.notes || {})) if (notes.includes(k)) q.notes[k] = String(v || "").slice(0, 3000);
+    if (Array.isArray(b.rejections)) q.rejections = b.rejections.slice(0, 100).map((x) => ({
+      part: String(x.part || "").slice(0, 120), party: String(x.party || "").slice(0, 120), reason: String(x.reason || "").slice(0, 400), date: /^\d{4}-\d{2}-\d{2}$/.test(x.date || "") ? x.date : "",
+    })).filter((x) => x.part || x.reason);
+    q.updatedAt = Date.now(); q.updatedBy = user.username;
+    return { ok: true };
+  });
+}
+
+// Warehouse → Insights: just the warehouse panel, for the Warehouse
+// department (and leadership). Managers can type numbers in and keep the
+// rejections list; it's the same data the Overview's review shows.
+const QBR_WAREHOUSE_KEYS = ["linesReceived", "supplierOnTime", "linesShipped", "customerOnTime", "rejections"];
+function canSeeWarehouseInsights(user) { return !!user.leadership || inDepartment(user, "Warehouse"); }
+app.get(
+  "/api/qbr-warehouse",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!canSeeWarehouseInsights(req.user)) return res.status(403).json({ error: "Warehouse insights are for the Warehouse department" });
+    const range = quarterRange(req.query.quarter || currentQuarter());
+    if (!range) return res.status(400).json({ error: "Quarter looks like 2026-Q3" });
+    const [computed, doc] = await Promise.all([qbrCompute(range), getQbr()]);
+    const saved = ((doc.quarters || {})[range.quarter]) || {};
+    const pick = (o, ks) => Object.fromEntries(ks.filter((k) => o && o[k] != null).map((k) => [k, o[k]]));
+    res.json({
+      range, scope: "warehouse",
+      canEdit: isManager(req.user) || !!req.user.leadership,
+      metrics: Object.assign(pick(computed.metrics, QBR_WAREHOUSE_KEYS), computed.metrics.rejectionList ? { rejectionList: computed.metrics.rejectionList } : {}),
+      status: pick(computed.status, ["warehouse", "rejections"]),
+      overrides: pick(saved.overrides || {}, QBR_WAREHOUSE_KEYS),
+      notes: pick(saved.notes || {}, ["warehouse"]),
+      manualRejections: saved.rejections || [],
     });
+  })
+);
+app.put(
+  "/api/qbr-warehouse/:quarter",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!canSeeWarehouseInsights(req.user) || !(isManager(req.user) || req.user.leadership)) return res.status(403).json({ error: "Only managers can change warehouse insights" });
+    const range = quarterRange(req.params.quarter);
+    if (!range) return res.status(400).json({ error: "Quarter looks like 2026-Q3" });
+    const out = await qbrUpdate(range, req.body || {}, QBR_WAREHOUSE_KEYS, ["warehouse"], req.user);
     if (out.error) return res.status(400).json(out);
     res.json(out);
   })

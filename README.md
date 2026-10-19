@@ -298,7 +298,10 @@ Every query gets `:date_from` and `:date_to` (the quarter's first and last
 day). Columns a query doesn't return just show "No data yet". Any number can
 be **typed in** for the quarter (marked "Typed in", with *use Pentagon* to go
 back), and while there's no rejections query the list can be kept by hand.
-Each panel has a notes box. Targets (quarterly and annual, for Procurement
+Each panel has a notes box. The Warehouse panel is also on **Warehouse →
+Insights** for everyone in the Warehouse department (warehouse figures only;
+managers can type numbers in and keep the rejections list — the same data
+as the Overview). Targets (quarterly and annual, for Procurement
 sales orders and Purchasing gross profit) are set in `/admin.html` →
 *Quarterly review targets*. Typed numbers and notes are in S3 as `qbr.json`.
 
