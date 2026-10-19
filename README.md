@@ -281,6 +281,27 @@ Development → Ramin). This applies to everyone's new tasks, so a request
 added in IT lands with IT; the person who added it can still edit it, and
 only managers tick things off. A manager can still pick anyone.
 
+## Quarterly business review (Overview, Leadership)
+
+The QBR slides as live numbers on the **Overview**, for leadership logins
+(it includes customer and profit figures). Pick the quarter with ‹ ›.
+
+| Panel | Numbers | Query (Transmute) — columns it returns |
+|---|---|---|
+| Procurement | Total quoted value, total orders won, quote-to-sale conversion, top customers (quoted vs. order value) | `dashboards.qbr_customers` — one row per customer: `CUSTOMER`, `QUOTED_VALUE`, `ORDER_VALUE` |
+| Purchasing | Open POs, new POs issued, avg. PO cycle time, line items received with / without extension | `dashboards.qbr_purchasing` — one row: `OPEN_POS`, `NEW_POS`, `AVG_CYCLE_DAYS`, `RECEIVED_NO_EXT`, `RECEIVED_WITH_EXT` |
+| Warehouse | Lines received, supplier on-time %, lines shipped, customer on-time %, rejections | `dashboards.qbr_warehouse` — one row: `LINES_RECEIVED`, `SUPPLIER_ON_TIME_PCT`, `LINES_SHIPPED`, `CUSTOMER_ON_TIME_PCT`, `REJECTIONS` |
+| Rejections list | Part, customer / supplier, reason, date | `dashboards.qbr_rejections` — rows: `PART`, `PARTY`, `REASON`, `REJECT_DATE` |
+| Target attainment | Procurement: orders won vs. target. Purchasing: gross profit vs. target | `dashboards.qbr_gross_profit` — one row: `GROSS_PROFIT` |
+
+Every query gets `:date_from` and `:date_to` (the quarter's first and last
+day). Columns a query doesn't return just show "No data yet". Any number can
+be **typed in** for the quarter (marked "Typed in", with *use Pentagon* to go
+back), and while there's no rejections query the list can be kept by hand.
+Each panel has a notes box. Targets (quarterly and annual, for Procurement
+sales orders and Purchasing gross profit) are set in `/admin.html` →
+*Quarterly review targets*. Typed numbers and notes are in S3 as `qbr.json`.
+
 ## Business Development
 
 "Operations" was renamed **Business Development**; logins, tasks and
