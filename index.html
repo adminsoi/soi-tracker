@@ -123,8 +123,11 @@
   select.fb-in:disabled { appearance: none; }
   input.fb-in[type=date] { min-width: 132px; }
   .fb-num { text-align: right; min-width: 100px; }
-  .fb-notes { resize: none; overflow: hidden; line-height: 1.5; min-width: 170px; display: block; }
-  .notes-cell { width: 24%; }
+  /* Notes: wide, readable, and tall enough to show everything (scrolls only past ~20 lines). */
+  .fb-notes { resize: vertical; overflow-y: auto; line-height: 1.55; min-width: 260px; display: block; font-size: 12.5px; white-space: pre-wrap; max-height: 440px; }
+  .fb-notes:not(:placeholder-shown) { background: #fbf8f3; border-left: 3px solid #e6d6c3; }
+  .fb-notes:focus { border-left-color: #dca4b8; }
+  .notes-cell { width: 30%; min-width: 270px; }
   .static { padding: 7px 8px; display: block; }
   .static.dim { color: var(--muted); }
   .center { text-align: center; }
@@ -153,7 +156,8 @@
   .prio-P1 { background: #f6dcdb; color: #a03d3a; } .prio-P2 { background: #f7e6cc; color: #8a5a14; }
   .prio-P3 { background: #e6ebf3; color: #3f5f8f; } .prio-P4 { background: var(--soft); color: var(--muted); }
   .prio-none { background: transparent; color: var(--muted); border: 1px dashed var(--line); }
-  .itr-issue { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; max-width: 420px; }
+  .itr-issue { max-width: 460px; white-space: pre-wrap; line-height: 1.5; }
+  .itr-note { display: block; margin-top: 6px; padding: 6px 9px; background: #fbf8f3; border-left: 3px solid #e6d6c3; border-radius: 4px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; max-width: 460px; color: var(--ink); }
   .itr-person { background: none; border: 0; padding: 0; font: inherit; color: var(--ink); text-align: left; cursor: pointer; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
   /* Performance */
   .perf-alerts { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; background: #fff6ec; border: 1px solid #f0d9b8; border-radius: 12px; padding: 12px 16px; margin: 16px 0 18px; }
@@ -1518,7 +1522,7 @@
           '<td><button type="button" class="itr-person" data-itr-who="' + E(r.pkey) + '">' + E(itrPerson(r)) + "</button>" +
             '<span class="co-note">' + E([r.company, r.remote === "Yes" ? "Remote" : ""].filter(Boolean).join(" · ")) + "</span></td>" +
           '<td><div class="itr-issue" title="' + E(r.issue) + '">' + E(r.issue || "—") + "</div>" +
-            (r.notes ? '<span class="co-note" title="' + E(r.notes) + '">Note: ' + E(r.notes.length > 90 ? r.notes.slice(0, 90) + "…" : r.notes) + "</span>" : "") +
+            (r.notes ? '<span class="itr-note"><b>Note:</b> ' + E(r.notes) + "</span>" : "") +
             (r.source === "manual" ? '<span class="co-note">Added by hand' + (r.addedBy ? " · " + E(r.addedBy) : "") + "</span>" : "") +
             (r.taskId ? '<span class="co-note">On IT → Tasks' + (r.taskOwner ? " · " + E(r.taskOwner) : "") + "</span>" : "") + dupCell(r) + "</td>" +
           "<td>" + E(r.urgency || "—") + "</td><td>" + prioCell(r) + "</td><td>" + statusCell(r) + "</td>" +
@@ -3773,7 +3777,7 @@
     }
   }
   function autosize() {
-    document.querySelectorAll("#view .fb-notes").forEach(function (t) { t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 160) + "px"; });
+    document.querySelectorAll("#view .fb-notes").forEach(function (t) { t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight + 2, 440) + "px"; });
   }
 
   // ---------- Writes ----------
@@ -3935,9 +3939,12 @@
   document.addEventListener("input", function (e) {
     if (e.target.classList && e.target.classList.contains("fb-notes")) {
       e.target.style.height = "auto";
-      e.target.style.height = Math.min(e.target.scrollHeight, 160) + "px";
+      e.target.style.height = Math.min(e.target.scrollHeight + 2, 440) + "px";
     }
   });
+
+  var fitTimer = null;
+  window.addEventListener("resize", function () { clearTimeout(fitTimer); fitTimer = setTimeout(autosize, 150); });
 
   // ---------- Init ----------
   function init() {
