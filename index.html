@@ -336,6 +336,15 @@
   .mg-num { font-size: 11px; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; color: var(--ink); }
   .mg-ev { display: block; font-size: 10.5px; line-height: 1.35; padding: 2px 5px; border-left: 2px solid #bbc6ad; background: #f1f3ed; border-radius: 0 4px 4px 0; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .mg-ev.all-day { border-color: #d1a1b3; background: #fcf0f4; }
+  .mg-ev.co-ev, .cal-event.co-ev { border-left-color: var(--co); background: color-mix(in srgb, var(--co) 13%, #fff); }
+  .mg-ev.co-ev { border-left-width: 3px; }
+  .mg-ev.holiday, .cal-event.holiday { font-weight: 700; background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--co) 22%, #fff) 0 6px, color-mix(in srgb, var(--co) 12%, #fff) 6px 12px); border-left-color: var(--co); }
+  .mg-cell.holiday-day { background: #fffaf0; }
+  .cal-event.co-ev { border-left: 3px solid var(--co); padding-left: 10px; }
+  .co-tag { font-size: 10px; font-weight: 700; letter-spacing: .4px; color: var(--muted); text-transform: uppercase; }
+  .cal-legend { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; font-size: 12px; color: var(--muted); margin: 0 0 12px; }
+  .cal-legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+  .cal-legend i.hol { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--co) 45%, #fff) 0 3px, color-mix(in srgb, var(--co) 20%, #fff) 3px 6px); border: 1px solid var(--co); }
   .mg-more { align-self: flex-start; font-size: 10.5px; font-weight: 600; color: var(--rose-ink); padding: 2px 5px; background: none; border: 0; border-radius: 4px; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
   .mg-more:hover { background: #fcf0f4; }
   .mg-cell .mg-extra { display: none; }
@@ -3554,6 +3563,22 @@
   setInterval(quietCalendarRefresh, CAL_POLL_MS);
   document.addEventListener("visibilitychange", function () { if (!document.hidden) quietCalendarRefresh(); });
 
+  // HR calendar entries carry company / holiday tags from the server.
+  var CO_NAME = { SOI: "SOI", CAS: "CAS", RedSun: "Red Sun", NanoTech: "Nanotech" };
+  var calColorsNow = null;
+  function evStyle(e) {
+    if (!calColorsNow || calTab !== "hr") return { cls: "", style: "", tip: "" };
+    var color = e.holiday ? (e.company ? calColorsNow[e.company] : calColorsNow.holiday) : e.company ? calColorsNow[e.company] : "";
+    var tip = e.holiday ? "Holiday" + (e.company ? " · " + CO_NAME[e.company] : "") : e.company ? CO_NAME[e.company] : e.ambiguous ? "Couldn't tell which company — use full names in /admin.html" : "";
+    return { cls: (color ? " co-ev" : "") + (e.holiday ? " holiday" : ""), style: color ? ' style="--co:' + E(color) + '"' : "", tip: tip };
+  }
+  function calLegend() {
+    if (!calColorsNow || calTab !== "hr") return "";
+    return '<div class="cal-legend">' + ["SOI", "CAS", "RedSun", "NanoTech"].map(function (k) {
+      return '<span><i style="background:' + E(calColorsNow[k]) + '"></i>' + E(CO_NAME[k]) + "</span>";
+    }).join("") + '<span><i class="hol" style="--co:' + E(calColorsNow.holiday) + '"></i>Holiday / closed</span></div>';
+  }
+
   // ---- Personal: list ----
   // Personal and HR tabs share the List / Month views; only the source differs.
   function calSource() { return calTab === "hr" ? "/api/calendar/hr" : "/api/calendar/me"; }
@@ -3562,6 +3587,7 @@
     api(calSource() + "?start=" + today + "&days=" + calDays).then(function (data) {
       var box = $("#cal-mine");
       if (!box || unchanged(key, data, quiet)) return;
+      calColorsNow = data.colors || null;
       // An event shows on every day it covers from today on — so something
       // that started earlier and is still going (e.g. a week of OOO) is listed.
       var lastShown = shiftDays(today, calDays - 1);
@@ -3579,7 +3605,7 @@
       });
       $("#cal-note").textContent = events.length + " event" + (events.length === 1 ? "" : "s") + " in the next " + (calDays === 7 ? "week" : calDays / 7 + " weeks") + " · times in your time zone";
       if (!events.length) { box.innerHTML = '<div class="card empty">Nothing on ' + (calTab === "hr" ? "the HR calendar" : "your calendar") + ".</div>"; return; }
-      box.innerHTML = Object.keys(byDay).sort().map(function (day) {
+      box.innerHTML = calLegend() + Object.keys(byDay).sort().map(function (day) {
         var label = new Date(day + "T00:00:00").toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
         return '<div class="card" style="margin-bottom:14px;"><div class="card-label" style="margin-bottom:10px;">' + E(day === today ? "Today · " + label : label) + "</div>" +
           byDay[day].map(function (e) {
@@ -3589,8 +3615,9 @@
               : timeOf(e.start) + " – " + timeOf(e.end);
             var link = safeLink(e.webLink);
             var join = safeLink(e.joinUrl);
-            return '<div class="cal-event' + (e.allDay ? " all-day" : "") + '"><span class="cal-time">' + E(when) + "</span>" +
-              "<strong>" + E(e.subject) + "</strong>" +
+            var st = evStyle(e);
+            return '<div class="cal-event' + (e.allDay ? " all-day" : "") + st.cls + '"' + st.style + (st.tip ? ' title="' + E(st.tip) + '"' : "") + '><span class="cal-time">' + E(when) + "</span>" +
+              "<strong>" + (e.holiday ? "★ " : "") + E(e.subject) + "</strong>" + (st.tip && !e.holiday && e.company ? ' <span class="co-tag">' + E(CO_NAME[e.company]) + "</span>" : "") +
               (e.location ? ' <span class="small-note">· ' + E(e.location) + "</span>" : "") +
               (e.organizer ? ' <span class="small-note">· ' + E(e.organizer) + "</span>" : "") +
               '<span class="cal-links">' + (join ? '<a href="' + E(join) + '" target="_blank" rel="noopener noreferrer">Join ↗</a>' : "") +
@@ -3609,6 +3636,7 @@
     api(calSource() + "?start=" + gridStart + "&days=42").then(function (data) {
       var box = $("#cal-month");
       if (!box || unchanged(key, data, quiet)) return;
+      calColorsNow = data.colors || null;
       var byDay = {};
       data.events.forEach(function (e) {
         // An all-day event can span several days; show it on each.
@@ -3627,13 +3655,15 @@
         var shown = evs.map(function (e, n) {
           var link = safeLink(e.webLink);
           var label = (e.allDay ? "" : timeOf(e.start) + " ") + e.subject;
-          var inner = '<span class="mg-ev' + (e.allDay ? " all-day" : "") + (n >= 3 ? " mg-extra" : "") + '" title="' + E(label) + '">' + E(label) + "</span>";
+          var st = evStyle(e);
+          var inner = '<span class="mg-ev' + (e.allDay ? " all-day" : "") + st.cls + (n >= 3 ? " mg-extra" : "") + '"' + st.style + ' title="' + E(label + (st.tip ? " — " + st.tip : "")) + '">' + (e.holiday ? "★ " : "") + E(label) + "</span>";
           return link ? '<a href="' + E(link) + '" target="_blank" rel="noopener noreferrer"' + (n >= 3 ? ' class="mg-extra"' : "") + ">" + inner + "</a>" : inner;
         }).join("");
         var more = evs.length > 3 ? '<button type="button" class="mg-more" data-mg-more="' + (evs.length - 3) + '" aria-expanded="false">+' + (evs.length - 3) + " more</button>" : "";
-        cells += '<div class="mg-cell' + (day.slice(0, 7) !== month ? " out" : "") + (day === today ? " today" : "") + '"><span class="mg-num">' + Number(day.slice(8)) + "</span>" + shown + more + "</div>";
+        var hol = calTab === "hr" && evs.some(function (e) { return e.holiday; });
+        cells += '<div class="mg-cell' + (day.slice(0, 7) !== month ? " out" : "") + (day === today ? " today" : "") + (hol ? " holiday-day" : "") + '"><span class="mg-num">' + Number(day.slice(8)) + "</span>" + shown + more + "</div>";
       }
-      box.innerHTML = '<div class="month-grid">' + head + cells + "</div>";
+      box.innerHTML = calLegend() + '<div class="month-grid">' + head + cells + "</div>";
     }).catch(function (err) { if (!quiet) calError("#cal-month", err); });
   }
 

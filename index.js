@@ -42,7 +42,7 @@ const {
   withPerformance,
 } = require("./s3store");
 const { sendMail } = require("./mailer");
-const { eventsBetween, whosIn, CalendarError } = require("./calendar");
+const { eventsBetween, whosIn, CalendarError, nameFromTitle } = require("./calendar");
 const { hrEvents, cleanFeedUrl, FeedError } = require("./hrcal");
 const { itRequestsConfigured, fetchItRequests, IT_REQUESTS_MAILBOX, parseFormWorkbook, recordFromEmail, FormFileError, officeStamp } = require("./itrequests");
 const { unreadThreads, MailError } = require("./mail");
@@ -1186,7 +1186,8 @@ app.get(
     if (!u || !u.leadership) {
       return res.status(403).json({ error: "The HR calendar is for leadership logins only" });
     }
-    const shared = (await getSettings()).sharedCalendar || {};
+    const settings = await getSettings();
+    const shared = settings.sharedCalendar || {};
     if (!shared.ics) return res.status(409).json({ error: "No HR calendar feed is set yet.", code: "no_feed" });
     const days = Math.min(Math.max(parseInt(req.query.days, 10) || 14, 1), 45);
     const start = /^\d{4}-\d{2}-\d{2}$/.test(req.query.start || "") ? req.query.start : new Date().toISOString().slice(0, 10);
@@ -1194,11 +1195,100 @@ app.get(
     const from = new Date(Date.parse(`${start}T00:00:00Z`) - 24 * 3600 * 1000);
     const to = new Date(from.getTime() + (days + 2) * 24 * 3600 * 1000);
     try {
-      res.json({ events: await hrEvents(shared.ics, from, to) });
+      const lists = calPeopleLists(settings), logins = users.map(normalizeUser);
+      const events = (await hrEvents(shared.ics, from, to)).map((e) => Object.assign({}, e, tagHrEvent(e, lists, logins)));
+      res.json({ events, colors: calColors(settings) });
     } catch (err) {
       if (err instanceof FeedError) return res.status(409).json({ error: err.message, code: err.code });
       throw err;
     }
+  })
+);
+
+// ---------- HR calendar: company colours and holidays ----------
+// Each HR calendar entry is tagged with the company of the person in it
+// (from the name lists set in /admin.html, then logins' own company; anyone
+// else is SOI) and whether it's a holiday / closure. A first name that's on
+// two companies' lists stays untagged — full names tell them apart.
+const CAL_COMPANIES = ["SOI", "CAS", "RedSun", "NanoTech"];
+const CAL_DEFAULT_COLORS = { SOI: "#354936", CAS: "#2f6fb0", RedSun: "#c0392b", NanoTech: "#7b4fa3", holiday: "#c9a35c" };
+const HOLIDAY_RE = /\b(holiday|holidays|public holiday|bank holiday|closed|closure|office closed|labou?r day|christmas|xmas|boxing day|new year'?s?|thanksgiving|easter|good friday|anzac|waitangi|matariki|king'?s birthday|queen'?s birthday|diwali|deepavali|hari raya|chinese new year|lunar new year|national day|vesak|independence day|memorial day|veterans day|juneteenth|presidents'? day|mlk|martin luther king|columbus day|indigenous peoples|early may|spring bank|summer bank)\b/i;
+
+const AWAY_RE = /\b(ooo|out|off|pto|leave|sick|vacation|annual leave|travel(?:ing|ling)?|trip|away|absent|bereavement|jury|remote|wfh|work(?:ing)? from home|working elsewhere|half day|appointment|appt)\b/i;
+function calColors(settings) {
+  const c = Object.assign({}, CAL_DEFAULT_COLORS, settings.companyColors || {});
+  for (const k of Object.keys(c)) if (!/^#[0-9a-f]{6}$/i.test(c[k])) c[k] = CAL_DEFAULT_COLORS[k];
+  return c;
+}
+function calPeopleLists(settings) {
+  const p = settings.calendarPeople || {};
+  return Object.fromEntries(CAL_COMPANIES.filter((k) => k !== "SOI").map((k) => [k, Array.isArray(p[k]) ? p[k] : []]));
+}
+function companyInTitle(subject) {
+  const s = String(subject || "");
+  if (/\bCAS\b/.test(s)) return "CAS";
+  if (/red\s?sun/i.test(s)) return "RedSun";
+  if (/nano\s?tech/i.test(s)) return "NanoTech";
+  if (/\bSOI\b/.test(s)) return "SOI";
+  return "";
+}
+/** { company, holiday, ambiguous } for one HR calendar entry. */
+function tagHrEvent(e, lists, logins) {
+  const subject = String(e.subject || "");
+  const holiday = HOLIDAY_RE.test(subject);
+  const named = companyInTitle(subject);
+  if (holiday || named) return { company: named, holiday, ambiguous: false };
+  // Only entries about someone being away (OOO, PTO, WFH…) belong to a
+  // person; meetings and the like stay uncoloured.
+  if (!AWAY_RE.test(subject)) return { company: "", holiday: false, ambiguous: false };
+  const name = nameFromTitle(subject).toLowerCase();
+  if (!name) return { company: "", holiday: false, ambiguous: false };
+  const first = name.split(" ")[0];
+  // 1. Full name on a list.
+  const full = Object.keys(lists).filter((k) => lists[k].includes(name));
+  if (full.length === 1) return { company: full[0], holiday: false, ambiguous: false };
+  // 2. First name on the lists (alone, or as the first word of a full name).
+  const byFirst = Object.keys(lists).filter((k) => lists[k].some((n) => n === first || n.split(" ")[0] === first));
+  if (byFirst.length > 1) return { company: "", holiday: false, ambiguous: true };
+  if (byFirst.length === 1) return { company: byFirst[0], holiday: false, ambiguous: false };
+  // 3. A login with that name or nickname.
+  const login = logins.find((u) => [u.username, ...(u.calendarNames || [])].some((n) => { const l = String(n || "").toLowerCase(); return l === name || l === first; }));
+  if (login) return { company: COMPANY_ENTITY[(login.companies || [])[0]] || "SOI", holiday: false, ambiguous: false };
+  // 4. Everyone else is SOI.
+  return { company: "SOI", holiday: false, ambiguous: false };
+}
+
+app.get(
+  "/api/admin/calendar-colors",
+  adminMiddleware,
+  asyncHandler(async (req, res) => {
+    const s = await getSettings();
+    res.json({ colors: calColors(s), people: calPeopleLists(s) });
+  })
+);
+app.put(
+  "/api/admin/calendar-colors",
+  adminMiddleware,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const colors = {};
+    for (const k of [...CAL_COMPANIES, "holiday"]) {
+      const v = String((b.colors || {})[k] || CAL_DEFAULT_COLORS[k]);
+      if (!/^#[0-9a-f]{6}$/i.test(v)) return res.status(400).json({ error: `${k}: pick a colour` });
+      colors[k] = v.toLowerCase();
+    }
+    const people = {};
+    for (const k of CAL_COMPANIES.filter((x) => x !== "SOI")) {
+      const raw = (b.people || {})[k];
+      people[k] = [...new Set((Array.isArray(raw) ? raw : String(raw || "").split(/[,\n;]+/))
+        .map((n) => String(n).trim().toLowerCase().replace(/\s+/g, " ")).filter((n) => n.length >= 2))].slice(0, 300);
+    }
+    await withSettings((s) => { s.companyColors = colors; s.calendarPeople = people; });
+    // First names on more than one list, so the page can say so.
+    const firsts = {};
+    for (const [k, names] of Object.entries(people)) for (const n of names) if (!n.includes(" ")) (firsts[n] = firsts[n] || new Set()).add(k);
+    const clashes = Object.entries(firsts).filter(([, v]) => v.size > 1).map(([n, v]) => ({ name: n, companies: [...v] }));
+    res.json({ colors, people, clashes });
   })
 );
 

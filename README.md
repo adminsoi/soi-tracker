@@ -218,6 +218,15 @@ The **Calendar** page (sidebar → Tools) has up to three tabs:
   `/admin.html`. The link stays on the server; browsers only get the events.
   It needs no Microsoft permission. (An HTML link can be set instead, in
   which case Outlook's own page is embedded.)
+- **Company colours** — on the HR calendar (List and Month), each entry
+  about someone being away (OOO, PTO, WFH…) is coloured by that person's
+  company, with a legend: names listed for CAS, Red Sun and Nanotech under
+  **HR calendar colours** in `/admin.html`, then logins by their own
+  company, and everyone else SOI. An entry that names a company ("CAS
+  CLOSED …") takes that company. **Holidays and closures** (public holiday,
+  closed, Labour Day, Christmas, …) are striped and bold, and the day is
+  tinted. A first name on two companies' lists stays uncoloured — use full
+  names. Colours are set on the same admin card.
 - **Who's in office** — Leadership only. At the top, **Today** at a glance:
   everyone grouped into In the office / Remote / Part of the day / Out as
   name badges (pick another weekday to see that day). Below, one row per
