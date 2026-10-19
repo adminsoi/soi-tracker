@@ -43,7 +43,7 @@ const {
   getQbr,
   withQbr,
 } = require("./s3store");
-const { sendMail } = require("./mailer");
+const { sendMail, mailConfigured } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError, nameFromTitle } = require("./calendar");
 const { hrEvents, cleanFeedUrl, FeedError } = require("./hrcal");
 const { itRequestsConfigured, fetchItRequests, IT_REQUESTS_MAILBOX, parseFormWorkbook, recordFromEmail, FormFileError, officeStamp } = require("./itrequests");
@@ -2701,6 +2701,11 @@ async function changeRequests(req, res, ids) {
     else { change.status = change.status || "progress"; change.notDuplicate = true; }
   }
   if ("notDuplicate" in body) change.notDuplicate = !!body.notDuplicate;
+  // Resolving: an optional note on how it was resolved, and whether to
+  // email the requester (replies go to the person resolving it).
+  const resolution = String(body.resolution || "").trim().slice(0, 2000);
+  if (change.status === "done" && resolution) Object.assign(change, { resolution, resolvedAt: Date.now(), resolvedBy: req.user.username });
+  const notify = change.status === "done" && body.notify === true;
   const makeOriginal = body.makeOriginal === true;
   if (!Object.keys(change).length && !makeOriginal) return res.status(400).json({ error: "Nothing to change" });
   if (makeOriginal && ids.length !== 1) return res.status(400).json({ error: "Pick one request to keep" });
@@ -2765,7 +2770,50 @@ async function changeRequests(req, res, ids) {
       }
     });
   }
-  res.json({ changed: changed.length, requests: changed });
+  // Email the requesters, and copy the note into the IT notebook's write-up.
+  let emailed = 0;
+  const emailProblems = [], sentIds = new Set();
+  if (notify) {
+    const users = await getUsers();
+    const me = users.find((u) => sameUser(u.username, req.user.username));
+    for (const rec of changed) {
+      if (!rec.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rec.email)) { emailProblems.push(`${rec.name || rec.id}: no email on the ticket`); continue; }
+      try {
+        const ok = await sendMail({
+          to: rec.email,
+          replyTo: me && me.email,
+          saveCopy: true,
+          subject: `Resolved: your IT request${rec.issue ? " — " + String(rec.issue).replace(/\s+/g, " ").slice(0, 60) : ""}`,
+          html:
+            `<p>Hi ${escapeHtml((rec.name || "").split(" ")[0] || "there")},</p>` +
+            `<p>Your IT request${rec.submittedAt ? " from " + escapeHtml(String(rec.submittedAt).slice(0, 10)) : ""} has been marked <b>resolved</b>.</p>` +
+            (rec.resolution ? `<p><b>What was done:</b><br>${escapeHtml(rec.resolution).replace(/\n/g, "<br>")}</p>` : "") +
+            (rec.issue ? `<p style="color:#666"><b>Your request:</b><br>${escapeHtml(rec.issue).replace(/\n/g, "<br>")}</p>` : "") +
+            `<p>If you're still having this issue, just reply to this email and it'll come straight to ${escapeHtml((me && me.username) || "IT")}.</p>` +
+            `<p>— SOI Aviation IT</p>`,
+        });
+        if (!ok) { emailProblems.push("Email isn't set up on the server (MS_FROM_EMAIL / Mail.Send)"); break; }
+        emailed++;
+        sentIds.add(rec.id);
+      } catch (err) {
+        console.error("Resolution email failed:", err.message);
+        emailProblems.push(`${rec.email}: couldn't send`);
+      }
+    }
+    if (emailed) await withItRequests((list) => {
+      for (const r of list) if (sentIds.has(r.id)) { r.notifiedAt = Date.now(); r.notifiedBy = req.user.username; }
+    });
+  }
+  if (resolution && change.status === "done") {
+    await withItNotebook((nb) => {
+      nb.tickets = nb.tickets && typeof nb.tickets === "object" ? nb.tickets : {};
+      for (const rec of changed) {
+        const w = (nb.tickets[rec.id] = nb.tickets[rec.id] || { createdAt: Date.now() });
+        if (!w.fix) { w.fix = resolution; w.updatedAt = Date.now(); }
+      }
+    });
+  }
+  res.json({ changed: changed.length, requests: changed, emailed, emailProblems });
 }
 
 app.patch(
