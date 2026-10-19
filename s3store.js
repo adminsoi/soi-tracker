@@ -108,6 +108,10 @@ function getFinance() {
 function getSettings() {
   return readJson("settings", {});
 }
+// Quarterly business review: { quarters: { "2026-Q3": { overrides, notes, rejections } } }.
+function getQbr() {
+  return readJson("qbr", {});
+}
 // Performance records: { people: { username: { manual, hidden, entries, files } } }.
 function getPerformance() {
   return readJson("performance", {});
@@ -137,6 +141,7 @@ let itRequestsQueue = Promise.resolve();
 let itNotebookQueue = Promise.resolve();
 let sopsQueue = Promise.resolve();
 let performanceQueue = Promise.resolve();
+let qbrQueue = Promise.resolve();
 
 function withUsers(mutator) {
   usersQueue = usersQueue.then(async () => {
@@ -242,7 +247,19 @@ function withPerformance(mutator) {
   return performanceQueue;
 }
 
+function withQbr(mutator) {
+  qbrQueue = qbrQueue.then(async () => {
+    const doc = await getQbr();
+    const result = await mutator(doc);
+    await writeJson("qbr", doc);
+    return result;
+  });
+  return qbrQueue;
+}
+
 module.exports = {
+  getQbr,
+  withQbr,
   getPerformance,
   withPerformance,
   getSops,

@@ -40,6 +40,8 @@ const {
   withSops,
   getPerformance,
   withPerformance,
+  getQbr,
+  withQbr,
 } = require("./s3store");
 const { sendMail } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError, nameFromTitle } = require("./calendar");
@@ -1380,6 +1382,167 @@ app.put(
       settings.sharedCalendar = shared;
     });
     res.json(shared);
+  })
+);
+
+// ---------- Quarterly business review (Overview, Leadership) ----------
+// The QBR slides as live numbers: Procurement (quoted vs. ordered by
+// customer), Purchasing, Warehouse (with rejections) and target attainment.
+// Each panel reads a dashboards.qbr_* Transmute query for the quarter's
+// dates; any number without a query (or that needs correcting) can be typed
+// in for that quarter. Targets are set in /admin.html. Leadership only — it
+// includes customer and profit figures.
+const QBR_QUERIES = {
+  customers: "dashboards.qbr_customers",
+  purchasing: "dashboards.qbr_purchasing",
+  warehouse: "dashboards.qbr_warehouse",
+  rejections: "dashboards.qbr_rejections",
+  grossProfit: "dashboards.qbr_gross_profit",
+};
+const QBR_KEYS = ["quoted", "orders", "conversion", "openPos", "newPos", "avgCycleDays", "receivedNoExt", "receivedWithExt",
+  "linesReceived", "supplierOnTime", "linesShipped", "customerOnTime", "rejections", "grossProfit"];
+const QBR_NOTES = ["procurement", "purchasing", "warehouse", "targets"];
+const qbrCache = new Map(); // quarter -> { at, value }
+
+function quarterRange(q) {
+  const m = /^(\d{4})-Q([1-4])$/.exec(q || "");
+  if (!m) return null;
+  const y = +m[1], n = +m[2];
+  const from = `${y}-${String((n - 1) * 3 + 1).padStart(2, "0")}-01`;
+  const end = new Date(Date.UTC(y, n * 3, 0)); // last day of the quarter
+  return { quarter: q, year: y, n, from, to: end.toISOString().slice(0, 10) };
+}
+function currentQuarter() {
+  const d = new Date();
+  return `${d.getUTCFullYear()}-Q${Math.floor(d.getUTCMonth() / 3) + 1}`;
+}
+const qbrNum = (v) => { if (v === null || v === undefined || v === "") return null; const n = Number(String(v).replace(/[$,%\s]/g, "")); return Number.isFinite(n) ? n : null; };
+function qbrCol(row, names) {
+  if (!row) return null;
+  const keys = Object.keys(row);
+  for (const n of names) { const k = keys.find((x) => x.toUpperCase() === n); if (k) return row[k]; }
+  return null;
+}
+async function qbrRun(name, range) {
+  try {
+    const data = await pentagonQuery(name, { params: { date_from: range.from, date_to: range.to }, limit: 500 });
+    return { rows: resultRows(data), error: "" };
+  } catch (err) {
+    const missing = /\((404|400)\)/.test(err.message) && /not.?found|unknown|no such|does not exist/i.test(err.message);
+    return { rows: [], error: missing ? "not_set_up" : err.message.slice(0, 200) };
+  }
+}
+async function qbrCompute(range) {
+  const hit = qbrCache.get(range.quarter);
+  if (hit && Date.now() - hit.at < 5 * 60_000) return hit.value;
+  const entries = await Promise.all(Object.entries(QBR_QUERIES).map(async ([k, name]) => [k, await qbrRun(name, range)]));
+  const r = Object.fromEntries(entries);
+  const status = Object.fromEntries(entries.map(([k, v]) => [k, { query: QBR_QUERIES[k], ok: !v.error, error: v.error }]));
+  const m = {};
+  // Procurement: quoted vs. ordered per customer.
+  if (!r.customers.error) {
+    const cust = r.customers.rows.map((row) => ({
+      customer: String(qbrCol(row, ["CUSTOMER", "ACCOUNT_NAME", "NAME"]) || "—"),
+      quoted: qbrNum(qbrCol(row, ["QUOTED_VALUE", "QUOTED"])) || 0,
+      ordered: qbrNum(qbrCol(row, ["ORDER_VALUE", "ORDERED"])) || 0,
+    }));
+    m.quoted = cust.reduce((s, c) => s + c.quoted, 0);
+    m.orders = cust.reduce((s, c) => s + c.ordered, 0);
+    m.conversion = m.quoted ? (m.orders / m.quoted) * 100 : null;
+    m.topCustomers = cust.filter((c) => c.ordered > 0).sort((a, b) => b.ordered - a.ordered).slice(0, 10)
+      .map((c) => Object.assign(c, { conversion: c.quoted ? (c.ordered / c.quoted) * 100 : null }));
+  }
+  const one = (k) => (!r[k].error && r[k].rows[0]) || null;
+  const p = one("purchasing");
+  if (p) Object.assign(m, {
+    openPos: qbrNum(qbrCol(p, ["OPEN_POS"])), newPos: qbrNum(qbrCol(p, ["NEW_POS"])), avgCycleDays: qbrNum(qbrCol(p, ["AVG_CYCLE_DAYS"])),
+    receivedNoExt: qbrNum(qbrCol(p, ["RECEIVED_NO_EXT"])), receivedWithExt: qbrNum(qbrCol(p, ["RECEIVED_WITH_EXT"])),
+  });
+  const w = one("warehouse");
+  if (w) Object.assign(m, {
+    linesReceived: qbrNum(qbrCol(w, ["LINES_RECEIVED"])), supplierOnTime: qbrNum(qbrCol(w, ["SUPPLIER_ON_TIME_PCT"])),
+    linesShipped: qbrNum(qbrCol(w, ["LINES_SHIPPED"])), customerOnTime: qbrNum(qbrCol(w, ["CUSTOMER_ON_TIME_PCT"])),
+    rejections: qbrNum(qbrCol(w, ["REJECTIONS"])),
+  });
+  if (!r.rejections.error) {
+    m.rejectionList = r.rejections.rows.slice(0, 100).map((row) => ({
+      part: String(qbrCol(row, ["PART", "PARTNUMBER", "PN"]) || ""), party: String(qbrCol(row, ["PARTY", "CUSTOMER_SUPPLIER", "ACCOUNT_NAME"]) || ""),
+      reason: String(qbrCol(row, ["REASON"]) || ""), date: String(qbrCol(row, ["REJECT_DATE", "DATE"]) || "").slice(0, 10),
+    }));
+    if (m.rejections == null) m.rejections = m.rejectionList.length;
+  }
+  const g = one("grossProfit");
+  if (g) m.grossProfit = qbrNum(qbrCol(g, ["GROSS_PROFIT"]));
+  const value = { metrics: m, status };
+  qbrCache.set(range.quarter, { at: Date.now(), value });
+  return value;
+}
+async function qbrTargets() {
+  const t = (await getSettings()).qbrTargets || {};
+  const n = (v) => (qbrNum(v) && qbrNum(v) > 0 ? qbrNum(v) : null);
+  return { procurementQuarter: n(t.procurementQuarter), procurementYear: n(t.procurementYear), purchasingQuarter: n(t.purchasingQuarter), purchasingYear: n(t.purchasingYear) };
+}
+function leadershipOnly(req, res) {
+  if (!req.user.leadership) { res.status(403).json({ error: "The quarterly review is for leadership logins" }); return false; }
+  return true;
+}
+
+app.get(
+  "/api/qbr",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!leadershipOnly(req, res)) return;
+    const range = quarterRange(req.query.quarter || currentQuarter());
+    if (!range) return res.status(400).json({ error: "Quarter looks like 2026-Q3" });
+    const [computed, doc, targets] = await Promise.all([qbrCompute(range), getQbr(), qbrTargets()]);
+    const saved = ((doc.quarters || {})[range.quarter]) || {};
+    res.json(Object.assign({ range, targets, overrides: saved.overrides || {}, notes: saved.notes || {}, manualRejections: saved.rejections || [] }, computed));
+  })
+);
+// Type in / correct a number, write a note, or keep a manual rejections list.
+app.put(
+  "/api/qbr/:quarter",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!leadershipOnly(req, res)) return;
+    const range = quarterRange(req.params.quarter);
+    if (!range) return res.status(400).json({ error: "Quarter looks like 2026-Q3" });
+    const b = req.body || {};
+    const out = await withQbr((doc) => {
+      doc.quarters = doc.quarters || {};
+      const q = (doc.quarters[range.quarter] = doc.quarters[range.quarter] || {});
+      q.overrides = q.overrides || {}; q.notes = q.notes || {};
+      for (const [k, v] of Object.entries(b.overrides || {})) {
+        if (!QBR_KEYS.includes(k)) continue;
+        if (v === null || v === "") delete q.overrides[k];
+        else { const n = qbrNum(v); if (n === null) return { error: `${k}: enter a number` }; q.overrides[k] = n; }
+      }
+      for (const [k, v] of Object.entries(b.notes || {})) if (QBR_NOTES.includes(k)) q.notes[k] = String(v || "").slice(0, 3000);
+      if (Array.isArray(b.rejections)) q.rejections = b.rejections.slice(0, 100).map((x) => ({
+        part: String(x.part || "").slice(0, 120), party: String(x.party || "").slice(0, 120), reason: String(x.reason || "").slice(0, 400), date: /^\d{4}-\d{2}-\d{2}$/.test(x.date || "") ? x.date : "",
+      })).filter((x) => x.part || x.reason);
+      q.updatedAt = Date.now(); q.updatedBy = req.user.username;
+      return { ok: true };
+    });
+    if (out.error) return res.status(400).json(out);
+    res.json(out);
+  })
+);
+app.get("/api/admin/qbr-targets", adminMiddleware, asyncHandler(async (req, res) => res.json(await qbrTargets())));
+app.put(
+  "/api/admin/qbr-targets",
+  adminMiddleware,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {}, t = {};
+    for (const k of ["procurementQuarter", "procurementYear", "purchasingQuarter", "purchasingYear"]) {
+      if (b[k] === "" || b[k] == null) { t[k] = null; continue; }
+      const n = qbrNum(b[k]);
+      if (n === null || n < 0) return res.status(400).json({ error: `${k}: enter an amount` });
+      t[k] = n;
+    }
+    await withSettings((s) => { s.qbrTargets = t; });
+    qbrCache.clear();
+    res.json(t);
   })
 );
 

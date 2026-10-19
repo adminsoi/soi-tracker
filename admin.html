@@ -234,6 +234,19 @@
     </div>
 
     <div class="card">
+      <h2>Quarterly review targets</h2>
+      <div class="hint" style="margin-bottom:12px;">Used by <b>Target attainment</b> on the Overview's quarterly review (Leadership). Procurement is measured on new entered sales orders; Purchasing on gross profit.</div>
+      <form id="qbrForm">
+        <div class="field" style="max-width:300px;"><label for="qt-pq">Procurement — quarterly sales order target ($)</label><input id="qt-pq" inputmode="decimal" placeholder="e.g. 10000000"></div>
+        <div class="field" style="max-width:300px;"><label for="qt-py">Procurement — annual sales order target ($)</label><input id="qt-py" inputmode="decimal"></div>
+        <div class="field" style="max-width:300px;"><label for="qt-uq">Purchasing — quarterly gross profit target ($)</label><input id="qt-uq" inputmode="decimal"></div>
+        <div class="field" style="max-width:300px;"><label for="qt-uy">Purchasing — annual gross profit target ($)</label><input id="qt-uy" inputmode="decimal"></div>
+        <button type="submit">Save targets</button>
+        <div class="msg" id="qbrMsg"></div>
+      </form>
+    </div>
+
+    <div class="card">
       <h2>HR calendar colours</h2>
       <div class="hint" style="margin-bottom:12px;">Entries on the HR calendar are coloured by the company of the person in them, and holidays / closures get their own colour. List people as their names appear on the HR calendar (commas or one per line) under their company, or under <b>Global</b> if they work across all four. Anyone not on a list counts by their login's company, or SOI. If a first name is at two companies (e.g. two Chrises), use full names.</div>
       <form id="calColorForm">
@@ -686,6 +699,21 @@
       .catch(function (err) { msg.textContent = err.message; });
   });
 
+  // ---------- Quarterly review targets ----------
+  var QT = { "qt-pq": "procurementQuarter", "qt-py": "procurementYear", "qt-uq": "purchasingQuarter", "qt-uy": "purchasingYear" };
+  function loadQbrTargets() {
+    return api("/api/admin/qbr-targets").then(function (d) { Object.keys(QT).forEach(function (id) { document.getElementById(id).value = d[QT[id]] == null ? "" : d[QT[id]]; }); })
+      .catch(function (err) { document.getElementById("qbrMsg").textContent = err.message; });
+  }
+  document.getElementById("qbrForm").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var msg = document.getElementById("qbrMsg"), body = {};
+    msg.textContent = ""; msg.className = "msg";
+    Object.keys(QT).forEach(function (id) { body[QT[id]] = document.getElementById(id).value.replace(/[$,\s]/g, ""); });
+    api("/api/admin/qbr-targets", { method: "PUT", body: JSON.stringify(body) }).then(function () { msg.textContent = "Saved."; msg.className = "msg ok"; loadQbrTargets(); })
+      .catch(function (err) { msg.textContent = err.message; });
+  });
+
   // ---------- HR calendar colours ----------
   var CC_LABEL = { SOI: "SOI", CAS: "CAS", RedSun: "Red Sun", NanoTech: "Nanotech", Global: "Global", holiday: "Holidays" };
   var CC_LISTS = ["SOI", "CAS", "RedSun", "NanoTech", "Global"];
@@ -739,6 +767,7 @@
       loadDefaults();
       loadPerfSettings();
       loadCalColors();
+      loadQbrTargets();
       return loadUsers();
     });
   }
