@@ -876,11 +876,12 @@
     var subs = [];
     if (dept === "Accounting & Finance" && canSeeFinance()) subs.push({ id: "finance", label: "Finance" });
     if (dept === "Business Development" && (activeCompany === "SOI Aviation" || (activeCompany === ALL && hasSOI()))) subs.push({ id: "analytics", label: "Analytics" });
+    // Warehouse opens on Insights (the first tab is where a department lands).
+    if (dept === "Warehouse" && (me.leadership || me.fullAccess || me.departments.indexOf("Warehouse") !== -1)) subs.push({ id: "insights", label: "Insights" });
     subs.push({ id: "tasks", label: "Tasks" });
     subs.push({ id: "projects", label: "Projects" });
     if (dept === "IT" && canSeeItRequests()) subs.push({ id: "requests", label: "Requests" });
     if (dept === "IT" && me.itNotebook) subs.push({ id: "resolved", label: "Resolved" });
-    if (dept === "Warehouse" && (me.leadership || me.fullAccess || me.departments.indexOf("Warehouse") !== -1)) subs.push({ id: "insights", label: "Insights" });
     subs.push({ id: "sops", label: "SOPs" });
     views.forEach(function (v) { subs.push({ id: v.id, label: v.label }); });
     var sub = subView[dept];
