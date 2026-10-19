@@ -216,6 +216,9 @@
   .step-dot.on { background: #4c6b3c; color: #fff; } .step-dot.next { background: #c0504d; color: #fff; }
   .step-card > summary::before { display: none; }
   @media (max-width: 900px) { .pcard-head { grid-template-columns: 1fr auto; } .pc-count, .pc-next, .pc-flags { grid-column: 1 / -1; } .pc-chev { grid-row: 1; grid-column: 2; } }
+  .rs-modal { position: fixed; inset: 0; background: rgba(40, 32, 26, .35); display: flex; align-items: center; justify-content: center; z-index: 60; padding: 16px; }
+  .rs-card { background: var(--card); border-radius: 14px; padding: 22px 24px; width: 100%; max-width: 480px; box-shadow: 0 20px 60px rgba(0,0,0,.18); }
+  .rs-card h3 { font: 22px/1.2 'Libre Caslon Display', Georgia, serif; margin: 0 0 8px; }
   /* Column filters */
   .filter-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 12px; flex-basis: 100%; }
   .fchip { display: inline-flex; align-items: center; gap: 6px; background: #fbeef2; color: var(--rose-ink); border: 1px solid #ecd2db; border-radius: 999px; padding: 4px 6px 4px 11px; font-size: 12px; }
@@ -1557,6 +1560,7 @@
           '<td><div class="itr-issue" title="' + E(r.issue) + '">' + E(r.issue || "—") + "</div>" +
             (r.notes ? '<span class="itr-note"><b>Note:</b> ' + E(r.notes) + "</span>" : "") +
             (r.source === "manual" ? '<span class="co-note">Added by hand' + (r.addedBy ? " · " + E(r.addedBy) : "") + "</span>" : "") +
+            (r.status === "done" && r.resolution ? '<span class="itr-note" style="border-left-color:#9fbf8f;"><b>Resolved:</b> ' + E(r.resolution) + (r.notifiedAt ? '<br><span class="small-note">Emailed ' + E(r.email) + " " + E(new Date(r.notifiedAt).toLocaleDateString()) + "</span>" : "") + "</span>" : "") +
             (r.taskId ? '<span class="co-note">On IT → Tasks' + (r.taskOwner ? " · " + E(r.taskOwner) : "") + "</span>" : "") + dupCell(r) + "</td>" +
           "<td>" + E(r.urgency || "—") + "</td><td>" + prioCell(r) + "</td><td>" + statusCell(r) + "</td>" +
           "<td>" + E(r.contact || "—") + (r.phone ? '<span class="co-note">' + E(r.phone) + "</span>" : "") + (r.email ? '<span class="co-note">' + E(r.email) + "</span>" : "") + "</td></tr>";
@@ -1604,6 +1608,35 @@
       (ago == null ? "first check in progress" : "checked " + (ago < 1 ? "just now" : ago + " min ago") + " · " + st.matched + " form email" + (st.matched === 1 ? "" : "s") + " in the last 2 weeks" + (st.added ? ", " + st.added + " new" : "")) +
       " · every " + st.everyMinutes + " minutes" + btn + "</p>";
   }
+  // Resolving asks how it was resolved and offers to email the requester
+  // (the email asks them to reply if the issue is still there; replies come
+  // to you).
+  function resolveDialog(ids) {
+    var list = itr.data.requests.filter(function (r) { return ids.indexOf(r.id) !== -1; });
+    var withEmail = list.filter(function (r) { return r.email; });
+    var box = document.createElement("div");
+    box.className = "rs-modal";
+    box.innerHTML = '<div class="rs-card" role="dialog" aria-modal="true" aria-labelledby="rsTitle"><h3 id="rsTitle">Resolve ' + (list.length === 1 ? "this ticket" : list.length + " tickets") + "</h3>" +
+      (list.length === 1 ? '<p class="small-note" style="margin:0 0 10px;">' + E(itrPerson(list[0])) + " — " + E(String(list[0].issue || "").slice(0, 140)) + "</p>" : "") +
+      '<div class="nb-field"><label for="rsNote">How was it resolved?</label><textarea id="rsNote" rows="4" placeholder="e.g. Reset the Outlook profile and cleared saved passwords."></textarea></div>' +
+      (withEmail.length ? '<label class="small-note" style="display:flex;gap:7px;align-items:flex-start;"><input type="checkbox" class="check" id="rsNotify" checked> <span>Email ' + (withEmail.length === 1 ? E(withEmail[0].email) : withEmail.length + " requesters") + ' that it\'s resolved, with this note, asking them to reply if they still have the issue (replies come to you).</span></label>' +
+          (withEmail.length < list.length ? '<p class="small-note" style="margin:6px 0 0;">' + (list.length - withEmail.length) + " without an email won't be emailed.</p>" : "")
+        : '<p class="small-note">No email on ' + (list.length === 1 ? "this ticket" : "these tickets") + ", so nobody will be emailed.</p>") +
+      '<div class="nb-foot" style="margin-top:14px;"><span class="grow"></span><button type="button" class="text-button" data-rs-cancel>Cancel</button><button type="button" class="primary" data-rs-ok>Resolve</button></div></div>';
+    document.body.appendChild(box);
+    var close = function () { box.remove(); render(); };
+    box.addEventListener("click", function (e) {
+      if (e.target === box || e.target.closest("[data-rs-cancel]")) { close(); return; }
+      if (e.target.closest("[data-rs-ok]")) {
+        var note = $("#rsNote").value.trim(), notify = !!($("#rsNotify") && $("#rsNotify").checked);
+        if (notify && !note && !confirm("Send the email without saying how it was resolved?")) return;
+        box.remove();
+        changeItRequests(ids, { status: "done", resolution: note, notify: notify });
+      }
+    });
+    box.addEventListener("keydown", function (e) { if (e.key === "Escape") close(); });
+    setTimeout(function () { var n = $("#rsNote"); if (n) n.focus(); }, 0);
+  }
   function changeItRequests(ids, change) {
     var set = {}; ids.forEach(function (id) { set[id] = 1; });
     var hit = itr.data ? itr.data.requests.filter(function (x) { return set[x.id]; }) : [];
@@ -1615,9 +1648,13 @@
     var req = ids.length === 1
       ? api("/api/it-requests/" + encodeURIComponent(ids[0]), { method: "PATCH", body: JSON.stringify(change) })
       : api("/api/it-requests/bulk", { method: "POST", body: JSON.stringify(Object.assign({ ids: ids }, change)) });
-    req.then(function () {
+    req.then(function (res) {
       if (hit.some(function (r) { return r.taskId; })) refresh();
-      if (change.status && ids.length > 1) toast(ids.length + " requests marked " + IT_STATUS_LABEL[change.status] + ".");
+      if (change.notify && res) {
+        var probs = res.emailProblems || [];
+        toast((res.emailed ? "Resolved — emailed " + res.emailed + " requester" + (res.emailed === 1 ? "" : "s") + "." : "Resolved.") + (probs.length ? " Not emailed: " + probs.join("; ") : ""), !!probs.length && !res.emailed);
+        itr.at = 0; requestRender();
+      } else if (change.status && ids.length > 1) toast(ids.length + " requests marked " + IT_STATUS_LABEL[change.status] + ".");
       if (change.duplicateOf) toast(ids.length === 1 ? "Marked as a duplicate." : ids.length + " requests merged as duplicates.");
       if ("duplicateOf" in change) { itr.at = 0; requestRender(); }
       nb.at = 0; // the Resolved tab picks it up next time
@@ -1652,7 +1689,13 @@
     }
     if (ds.itrTab) { itr.tab = ds.itrTab; render(); return; }
     if ("itrWho" in ds) { itr.person = itr.person === ds.itrWho ? "" : ds.itrWho; render(); window.scrollTo(0, 0); return; }
-    if (ds.itrBulk) { var ids = Object.keys(itr.picked); itr.picked = {}; if (ids.length) changeItRequests(ids, { status: ds.itrBulk }); return; }
+    if (ds.itrBulk) {
+      var ids = Object.keys(itr.picked);
+      if (!ids.length) return;
+      itr.picked = {};
+      if (ds.itrBulk === "done") resolveDialog(ids); else changeItRequests(ids, { status: ds.itrBulk });
+      return;
+    }
     if ("itrClear" in ds) { itr.picked = {}; render(); }
     if (ds.itrMerge) {
       var sel = itr.data.requests.filter(function (r) { return itr.picked[r.id]; })
@@ -1687,6 +1730,7 @@
     else if (t.dataset && t.dataset.itrSt) {
       var cur = itr.data.requests.filter(function (x) { return x.id === t.dataset.itrSt; })[0];
       if (cur && cur.duplicateOf) { if (t.value !== "dup") changeItRequests([cur.id], { duplicateOf: "", status: t.value }); }
+      else if (t.value === "done") resolveDialog([t.dataset.itrSt]);
       else changeItRequests([t.dataset.itrSt], { status: t.value });
     }
     else if (t.dataset && t.dataset.itrPick) { if (t.checked) itr.picked[t.dataset.itrPick] = 1; else delete itr.picked[t.dataset.itrPick]; render(); }

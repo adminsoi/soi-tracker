@@ -414,6 +414,14 @@ department (or full access); only managers change things.
   rating sets the task's priority too (P1–P2 high, P3 medium, P4 low).
   Resolving the request ticks the task done, and ticking the task done
   resolves the request.
+- **Resolve with a note and email:** marking a request **Resolved** (one at
+  a time or in bulk) asks how it was resolved. The note is saved on the
+  request (and copied into the Resolved notebook's fix when that's empty).
+  If the requester gave an email, tick **Email them** to send "Resolved: your
+  IT request" with the note, asking them to reply if they still have the
+  issue. It's sent from `MS_FROM_EMAIL` (needs Graph **Mail.Send**, the same
+  as assignment emails) with Reply-To set to your email, so replies come
+  straight to you. The request shows who was emailed and when.
 - **By person:** filter or sort by person, or click a name; the **By
   person** table shows requests, open, P1/P2 and last request for everyone.
 - **Overview** shows requests per week (last 12 weeks) and open requests

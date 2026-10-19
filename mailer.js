@@ -21,8 +21,10 @@ if (!configured) {
   );
 }
 
-async function sendMail({ to, subject, html }) {
-  if (!configured || !to) return;
+// replyTo: where replies go (e.g. the person who resolved a ticket).
+// Returns true when sent, false when email isn't set up.
+async function sendMail({ to, subject, html, replyTo, saveCopy }) {
+  if (!configured || !to) return false;
 
   const token = await getAccessToken();
   const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(FROM_EMAIL)}/sendMail`;
@@ -32,8 +34,9 @@ async function sendMail({ to, subject, html }) {
       body: { contentType: "HTML", content: html },
       toRecipients: [{ emailAddress: { address: to } }],
     },
-    saveToSentItems: false,
+    saveToSentItems: !!saveCopy,
   };
+  if (replyTo) payload.message.replyTo = [{ emailAddress: { address: replyTo } }];
 
   const res = await fetch(url, {
     method: "POST",
@@ -44,6 +47,7 @@ async function sendMail({ to, subject, html }) {
     const text = await res.text();
     throw new Error(`Graph sendMail failed (${res.status}): ${text}`);
   }
+  return true;
 }
 
-module.exports = { sendMail };
+module.exports = { sendMail, mailConfigured: configured };
