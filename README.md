@@ -226,7 +226,9 @@ The **Calendar** page (sidebar → Tools) has up to three tabs:
   CLOSED …") takes that company. **Holidays and closures** (public holiday,
   closed, Labour Day, Christmas, …) are striped and bold, and the day is
   tinted. A first name on two companies' lists stays uncoloured — use full
-  names. Colours are set on the same admin card.
+  names. Colours are set on the same admin card. On **Who's in office**,
+  each person's initials (and a dot by their name in the week table) use
+  their company's colour, with the same lists deciding the company.
 - **Who's in office** — Leadership only. At the top, **Today** at a glance:
   everyone grouped into In the office / Remote / Part of the day / Out as
   name badges (pick another weekday to see that day). Below, one row per
