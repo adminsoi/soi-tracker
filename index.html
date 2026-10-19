@@ -1737,7 +1737,11 @@
   }
   // A query that didn't work, with Transmute's own error so it can be fixed.
   function qbrMissing(keys) {
-    var st = qbr.data.status, out = keys.filter(function (k) { return st[k] && !st[k].ok; });
+    // The rejections list query is optional (the list can be typed in), so a
+    // missing one isn't worth a warning.
+    var st = qbr.data.status, out = keys.filter(function (k) {
+      return st[k] && !st[k].ok && !(k === "rejections" && /unknown_query|does not exist/i.test(st[k].error || ""));
+    });
     return out.length ? '<div class="small-note qbr-missing">' + out.map(function (k) {
       return "<div><b>Couldn't read <code>" + E(st[k].query) + "</code></b>" + (st[k].error ? ' — Transmute said: <span class="qbr-err">' + E(st[k].error) + "</span>" : "") + "</div>";
     }).join("") + '<div style="margin-top:4px;">Type the numbers in for now, or fix the query in Transmute and <button type="button" class="text-button" data-qbr-recheck>check again</button>.</div></div>' : "";
