@@ -368,6 +368,8 @@
   .person-chip .av { width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 10.5px; font-weight: 700; color: #fff; }
   .glance-group.in .av { background: #4c6b3c; } .glance-group.remote .av { background: #3f5f8f; } .glance-group.part .av { background: #a26c1c; } .glance-group.out .av { background: #8a8178; } .glance-group.unknown .av { background: #a03d3a; }
   .person-chip small { color: var(--muted); font-size: 11px; }
+  .person-chip .av.by-co { box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgba(0,0,0,.06); }
+  .co-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 7px; vertical-align: 0; }
   .glance-empty { color: var(--muted); font-size: 12px; }
   #cal-who td:first-child { width: 200px; max-width: 200px; }
   @media (max-width: 700px) { .mg-cell { min-height: 70px; } .mg-ev { font-size: 9px; } }
@@ -3721,8 +3723,11 @@
       var parts = String(n).replace(/[._@-]+/g, " ").trim().split(/\s+/);
       return ((parts[0] || "?")[0] + (parts.length > 1 ? parts[parts.length - 1][0] : (parts[0] || "")[1] || "")).toUpperCase();
     };
+    var colors = data.colors || {};
     var chip = function (x) {
-      return '<span class="person-chip" title="' + E(x.p.username + (x.note ? " — " + x.note : "")) + '"><span class="av" aria-hidden="true">' + E(initials(x.p.username)) + "</span>" +
+      var co = x.p.company, bg = co && colors[co];
+      var tip = x.p.username + (co ? " · " + (CO_NAME[co] || co) : x.p.ambiguous ? " · company unclear (same first name at two companies)" : "") + (x.note ? " — " + x.note : "");
+      return '<span class="person-chip" title="' + E(tip) + '"><span class="av' + (bg ? " by-co" : "") + '" aria-hidden="true"' + (bg ? ' style="background:' + E(bg) + '"' : "") + ">" + E(initials(x.p.username)) + "</span>" +
         E(x.p.username) + (x.note ? " <small>" + E(x.note.trim()) + "</small>" : "") + "</span>";
     };
     var group = function (id, label, emptyText) {
@@ -3733,11 +3738,14 @@
         (list.length ? list.map(chip).join("") : '<span class="glance-empty">' + E(emptyText) + "</span>") + "</div></div>";
     };
     var dayLabel = function (d) { return new Date(d + "T00:00:00").toLocaleDateString(undefined, { weekday: "short", day: "numeric" }); };
+    var legend = '<div class="cal-legend" style="margin:0 0 12px;">' + ["SOI", "CAS", "RedSun", "NanoTech"].map(function (k) {
+      return colors[k] ? '<span><i style="background:' + E(colors[k]) + ';border-radius:50%"></i>' + E(CO_NAME[k]) + "</span>" : "";
+    }).join("") + "</div>";
     return '<div class="glance"><div class="glance-head"><h2>' + (day === today ? "Today" : E(new Date(day + "T00:00:00").toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" }))) + "</h2>" +
       '<div class="seg">' + data.days.map(function (d) {
         return '<button type="button" data-who-day="' + d + '" class="' + (d === day ? "active" : "") + '">' + (d === today ? "Today" : E(dayLabel(d))) + "</button>";
       }).join("") + "</div></div>" +
-      '<div class="glance-groups">' + group("in", "In the office", "Nobody yet") + group("remote", "Remote", "Nobody") + group("part", "Part of the day", "") +
+      legend + '<div class="glance-groups">' + group("in", "In the office", "Nobody yet") + group("remote", "Remote", "Nobody") + group("part", "Part of the day", "") +
       group("out", "Out", "Nobody") + group("unknown", "Couldn't check", "") + "</div></div>";
   }
   function drawWhosIn() { if (whoData) drawWhosInData(whoData); }
@@ -3772,7 +3780,9 @@
           return '<th class="' + (d === today ? "who-today" : "") + '">' + E(label) + '<br><span style="text-transform:none;letter-spacing:0;font-weight:400;">' + counts[i] + " in office</span></th>";
         }).join("") + "</tr></thead><tbody>" +
         data.people.map(function (p) {
-          return "<tr><td><strong>" + E(p.username) + "</strong>" +
+          var dot = p.company && data.colors && data.colors[p.company] ? '<span class="co-dot" style="background:' + E(data.colors[p.company]) + '" title="' + E(CO_NAME[p.company]) + '"></span>' : "";
+          return "<tr><td>" + dot + "<strong>" + E(p.username) + "</strong>" +
+            (p.company && p.company !== "SOI" ? ' <span class="co-tag">' + E(CO_NAME[p.company]) + "</span>" : "") +
             (p.hrOnly ? '<span class="co-note" style="padding:2px 0 0">From the HR calendar · no login yet</span>' : "") + (p.error ? '<span class="co-note" style="padding:2px 0 0;color:var(--danger)">' + E(p.error) + "</span>" : "") + "</td>" +
             data.days.map(function (d) { return '<td class="' + (d === today ? "who-today" : "") + '">' + (p.error && p.days[d].status === "in" ? '<span class="dim">—</span>' : cell(p.days[d])) + "</td>"; }).join("") + "</tr>";
         }).join("") + "</tbody></table></div>" +

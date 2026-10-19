@@ -1167,7 +1167,19 @@ app.get(
     const settings = await getSettings();
     const shared = settings.sharedCalendar || {};
     try {
-      res.json(await whosIn(people, shared.ics || "", date));
+      const data = await whosIn(people, shared.ics || "", date);
+      // Each person's company, for the coloured initials.
+      const lists = calPeopleLists(settings);
+      for (const p of data.people) {
+        const login = p.hrOnly ? null : users.find((u) => u.username === p.username);
+        const names = login ? [p.username, ...(login.calendarNames || [])] : [p.username];
+        // A name or nickname on a list wins; then the login's company; else SOI.
+        const listed = names.map((n) => companyForName(n, lists, null)).filter((t) => t.company && t.company !== "SOI" || t.ambiguous);
+        const clear = listed.find((t) => t.company);
+        Object.assign(p, clear || (listed.length ? { company: "", ambiguous: true } : companyForName("", {}, login)));
+      }
+      data.colors = calColors(settings);
+      res.json(data);
     } catch (err) {
       if (err instanceof CalendarError) return res.status(409).json({ error: err.message, code: err.code });
       throw err;
@@ -1243,19 +1255,24 @@ function tagHrEvent(e, lists, logins) {
   if (!AWAY_RE.test(subject)) return { company: "", holiday: false, ambiguous: false };
   const name = nameFromTitle(subject).toLowerCase();
   if (!name) return { company: "", holiday: false, ambiguous: false };
-  const first = name.split(" ")[0];
-  // 1. Full name on a list.
-  const full = Object.keys(lists).filter((k) => lists[k].includes(name));
-  if (full.length === 1) return { company: full[0], holiday: false, ambiguous: false };
-  // 2. First name on the lists (alone, or as the first word of a full name).
-  const byFirst = Object.keys(lists).filter((k) => lists[k].some((n) => n === first || n.split(" ")[0] === first));
-  if (byFirst.length > 1) return { company: "", holiday: false, ambiguous: true };
-  if (byFirst.length === 1) return { company: byFirst[0], holiday: false, ambiguous: false };
-  // 3. A login with that name or nickname.
-  const login = logins.find((u) => [u.username, ...(u.calendarNames || [])].some((n) => { const l = String(n || "").toLowerCase(); return l === name || l === first; }));
-  if (login) return { company: COMPANY_ENTITY[(login.companies || [])[0]] || "SOI", holiday: false, ambiguous: false };
-  // 4. Everyone else is SOI.
-  return { company: "SOI", holiday: false, ambiguous: false };
+  const login = logins.find((u) => [u.username, ...(u.calendarNames || [])].some((n) => { const l = String(n || "").toLowerCase(); return l === name || l === name.split(" ")[0]; }));
+  return Object.assign({ holiday: false }, companyForName(name, lists, login));
+}
+/**
+ * A person's company: 1. their full name on a list, 2. their first name on
+ * exactly one list (two lists = ambiguous), 3. their login's company,
+ * 4. otherwise SOI.
+ */
+function companyForName(name, lists, login) {
+  const n = String(name || "").toLowerCase().replace(/\s+/g, " ").trim();
+  const first = n.split(" ")[0];
+  const full = Object.keys(lists).filter((k) => lists[k].includes(n));
+  if (full.length === 1) return { company: full[0], ambiguous: false };
+  const byFirst = Object.keys(lists).filter((k) => lists[k].some((x) => x === first || x.split(" ")[0] === first));
+  if (byFirst.length > 1) return { company: "", ambiguous: true };
+  if (byFirst.length === 1) return { company: byFirst[0], ambiguous: false };
+  if (login) return { company: COMPANY_ENTITY[(login.companies || [])[0]] || "SOI", ambiguous: false };
+  return { company: "SOI", ambiguous: false };
 }
 
 app.get(
