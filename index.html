@@ -166,7 +166,8 @@
   .qbr-num { width: 30px; height: 30px; border-radius: 50%; background: #1f2a5c; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; }
   .qbr-tile strong { font-size: clamp(22px, 2.3vw, 30px); } .qbr-tile .eyebrow { margin-top: 2px; } .qbr-tile small { display: block; margin-top: 6px; }
   .qbr-panel .summary-cards { margin: 8px 0 12px; } .qbr-panel .grid-2 { gap: 16px; margin-bottom: 12px; }
-  .qbr-missing { background: #fff6ec; border: 1px solid #f0d9b8; border-radius: 8px; padding: 6px 10px; }
+  .qbr-missing { background: #fff6ec; border: 1px solid #f0d9b8; border-radius: 8px; padding: 8px 12px; margin: 0 0 10px; line-height: 1.5; }
+  .qbr-missing > div + div { margin-top: 3px; } .qbr-err { font-family: Menlo, monospace; font-size: 11.5px; word-break: break-word; }
   .qbr-meter { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
   .qbr-big { font: 30px/1.1 'Libre Caslon Display', Georgia, serif; margin: 4px 0 10px; }
   .qbr-bar { position: relative; height: 14px; background: var(--soft); border-radius: 7px; }
@@ -1712,11 +1713,11 @@
   function qbrCan() { return qbr.scope === "full" || !!(qbr.data && qbr.data.canEdit); }
   function qbrNow() { var d = new Date(); return d.getFullYear() + "-Q" + (Math.floor(d.getMonth() / 3) + 1); }
   function qbrShift(q, n) { var m = /^(\d{4})-Q([1-4])$/.exec(q); var i = (+m[1]) * 4 + (+m[2] - 1) + n; return Math.floor(i / 4) + "-Q" + (i % 4 + 1); }
-  function loadQbr() {
+  function loadQbr(fresh) {
     if (qbr.loading) return;
     qbr.loading = true;
     var q = qbr.quarter || qbrNow(), key = qbr.scope + "|" + q;
-    api(qbrUrl() + "?quarter=" + encodeURIComponent(q)).then(function (d) { if (qbr.scope + "|" + q === key) { qbr.data = d; qbr.error = ""; qbr.key = key; } }, function (err) { qbr.error = err.message; })
+    api(qbrUrl() + "?quarter=" + encodeURIComponent(q) + (fresh ? "&fresh=1" : "")).then(function (d) { if (qbr.scope + "|" + q === key) { qbr.data = d; qbr.error = ""; qbr.key = key; } }, function (err) { qbr.error = err.message; })
       .then(function () { qbr.loading = false; qbr.at = Date.now(); if (page === "overview" || page === "departments") requestRender(); });
   }
   function qbrVal(k) { var d = qbr.data; return d.overrides[k] != null ? d.overrides[k] : d.metrics[k] != null ? d.metrics[k] : null; }
@@ -1734,10 +1735,12 @@
       (can ? ' · <button type="button" class="text-button" data-qbr-edit="' + k + '" data-kind="' + (kind || "") + '" data-label="' + E(label) + '">' + (typed ? "change" : "type in") + "</button>" +
         (typed ? ' · <button type="button" class="text-button" data-qbr-clear="' + k + '">use Pentagon</button>' : "") : "") + "</small></div>";
   }
+  // A query that didn't work, with Transmute's own error so it can be fixed.
   function qbrMissing(keys) {
     var st = qbr.data.status, out = keys.filter(function (k) { return st[k] && !st[k].ok; });
-    return out.length ? '<p class="small-note qbr-missing">Not connected yet: ' + out.map(function (k) { return "<code>" + E(st[k].query) + "</code>"; }).join(", ") +
-      " — type the numbers in, or add the query in Transmute.</p>" : "";
+    return out.length ? '<div class="small-note qbr-missing">' + out.map(function (k) {
+      return "<div><b>Couldn't read <code>" + E(st[k].query) + "</code></b>" + (st[k].error ? ' — Transmute said: <span class="qbr-err">' + E(st[k].error) + "</span>" : "") + "</div>";
+    }).join("") + '<div style="margin-top:4px;">Type the numbers in for now, or fix the query in Transmute and <button type="button" class="text-button" data-qbr-recheck>check again</button>.</div></div>' : "";
   }
   function qbrNote(section, placeholder) {
     var v = (qbr.data.notes || {})[section] || "";
@@ -1817,9 +1820,10 @@
     return api(qbrUrl() + "/" + encodeURIComponent(q), { method: "PUT", body: JSON.stringify(body) }).then(function () { qbr.at = 0; loadQbr(); }, function (err) { toast(err.message, true); });
   }
   document.addEventListener("click", function (e) {
-    var t = e.target.closest && e.target.closest("[data-qbr-q],[data-qbr-edit],[data-qbr-clear],[data-qbr-addrej],[data-qbr-rmrej]");
+    var t = e.target.closest && e.target.closest("[data-qbr-q],[data-qbr-edit],[data-qbr-clear],[data-qbr-addrej],[data-qbr-rmrej],[data-qbr-recheck]");
     if (!t) return;
     var ds = t.dataset;
+    if ("qbrRecheck" in ds) { t.textContent = "checking…"; loadQbr(true); return; }
     if (ds.qbrQ !== undefined) { var n = +ds.qbrQ; qbr.quarter = n ? qbrShift(qbr.quarter || qbrNow(), n) : qbrNow(); qbr.data = null; render(); return; }
     if (ds.qbrEdit) {
       var cur = qbrVal(ds.qbrEdit), v = prompt(ds.label + (ds.kind === "pct" ? " (%)" : ds.kind === "money" ? " ($)" : ds.kind === "days" ? " (days)" : "") + " for this quarter:", cur == null ? "" : cur);

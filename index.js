@@ -1428,8 +1428,8 @@ async function qbrRun(name, range) {
     const data = await pentagonQuery(name, { params: { date_from: range.from, date_to: range.to }, limit: 500 });
     return { rows: resultRows(data), error: "" };
   } catch (err) {
-    const missing = /\((404|400)\)/.test(err.message) && /not.?found|unknown|no such|does not exist/i.test(err.message);
-    return { rows: [], error: missing ? "not_set_up" : err.message.slice(0, 200) };
+    // Keep Transmute's own message so the dashboard can show what's wrong.
+    return { rows: [], error: err.message.replace(/^Pentagon query "[^"]+" failed /, "").slice(0, 300) };
   }
 }
 async function qbrCompute(range) {
@@ -1494,6 +1494,7 @@ app.get(
     if (!leadershipOnly(req, res)) return;
     const range = quarterRange(req.query.quarter || currentQuarter());
     if (!range) return res.status(400).json({ error: "Quarter looks like 2026-Q3" });
+    if (req.query.fresh === "1") qbrCache.delete(range.quarter); // "Check again"
     const [computed, doc, targets] = await Promise.all([qbrCompute(range), getQbr(), qbrTargets()]);
     const saved = ((doc.quarters || {})[range.quarter]) || {};
     res.json(Object.assign({ range, targets, overrides: saved.overrides || {}, notes: saved.notes || {}, manualRejections: saved.rejections || [] }, computed));
@@ -1545,6 +1546,7 @@ app.get(
     if (!canSeeWarehouseInsights(req.user)) return res.status(403).json({ error: "Warehouse insights are for the Warehouse department" });
     const range = quarterRange(req.query.quarter || currentQuarter());
     if (!range) return res.status(400).json({ error: "Quarter looks like 2026-Q3" });
+    if (req.query.fresh === "1") qbrCache.delete(range.quarter);
     const [computed, doc] = await Promise.all([qbrCompute(range), getQbr()]);
     const saved = ((doc.quarters || {})[range.quarter]) || {};
     const pick = (o, ks) => Object.fromEntries(ks.filter((k) => o && o[k] != null).map((k) => [k, o[k]]));
