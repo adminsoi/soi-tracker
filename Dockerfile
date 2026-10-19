@@ -4,8 +4,10 @@ WORKDIR /app
 
 RUN apk add --no-cache openssl
 
-COPY package.json ./
-RUN npm install --omit=dev
+# Exact versions from package-lock.json, so a bad new release of a
+# dependency can't break a redeploy. Update with `npm install` locally.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
 COPY . .
 
