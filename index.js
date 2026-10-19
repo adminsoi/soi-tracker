@@ -1174,7 +1174,7 @@ app.get(
         const login = p.hrOnly ? null : users.find((u) => u.username === p.username);
         const names = login ? [p.username, ...(login.calendarNames || [])] : [p.username];
         // A name or nickname on a list wins; then the login's company; else SOI.
-        const listed = names.map((n) => companyForName(n, lists, null)).filter((t) => t.company && t.company !== "SOI" || t.ambiguous);
+        const listed = names.map((n) => companyForName(n, lists, null)).filter((t) => t.listed);
         const clear = listed.find((t) => t.company);
         Object.assign(p, clear || (listed.length ? { company: "", ambiguous: true } : companyForName("", {}, login)));
       }
@@ -1222,8 +1222,9 @@ app.get(
 // (from the name lists set in /admin.html, then logins' own company; anyone
 // else is SOI) and whether it's a holiday / closure. A first name that's on
 // two companies' lists stays untagged — full names tell them apart.
-const CAL_COMPANIES = ["SOI", "CAS", "RedSun", "NanoTech"];
-const CAL_DEFAULT_COLORS = { SOI: "#354936", CAS: "#2f6fb0", RedSun: "#c0392b", NanoTech: "#7b4fa3", holiday: "#c9a35c" };
+// "Global" is for people who work across all four companies.
+const CAL_COMPANIES = ["SOI", "CAS", "RedSun", "NanoTech", "Global"];
+const CAL_DEFAULT_COLORS = { SOI: "#354936", CAS: "#2f6fb0", RedSun: "#c0392b", NanoTech: "#7b4fa3", Global: "#1f8a8a", holiday: "#c9a35c" };
 const HOLIDAY_RE = /\b(holiday|holidays|public holiday|bank holiday|closed|closure|office closed|labou?r day|christmas|xmas|boxing day|new year'?s?|thanksgiving|easter|good friday|anzac|waitangi|matariki|king'?s birthday|queen'?s birthday|diwali|deepavali|hari raya|chinese new year|lunar new year|national day|vesak|independence day|memorial day|veterans day|juneteenth|presidents'? day|mlk|martin luther king|columbus day|indigenous peoples|early may|spring bank|summer bank)\b/i;
 
 const AWAY_RE = /\b(ooo|out|off|pto|leave|sick|vacation|annual leave|travel(?:ing|ling)?|trip|away|absent|bereavement|jury|remote|wfh|work(?:ing)? from home|working elsewhere|half day|appointment|appt)\b/i;
@@ -1234,7 +1235,7 @@ function calColors(settings) {
 }
 function calPeopleLists(settings) {
   const p = settings.calendarPeople || {};
-  return Object.fromEntries(CAL_COMPANIES.filter((k) => k !== "SOI").map((k) => [k, Array.isArray(p[k]) ? p[k] : []]));
+  return Object.fromEntries(CAL_COMPANIES.map((k) => [k, Array.isArray(p[k]) ? p[k] : []]));
 }
 function companyInTitle(subject) {
   const s = String(subject || "");
@@ -1259,18 +1260,18 @@ function tagHrEvent(e, lists, logins) {
   return Object.assign({ holiday: false }, companyForName(name, lists, login));
 }
 /**
- * A person's company: 1. their full name on a list, 2. their first name on
- * exactly one list (two lists = ambiguous), 3. their login's company,
- * 4. otherwise SOI.
+ * A person's company: 1. their full name on a list (SOI, CAS, Red Sun,
+ * Nanotech or Global), 2. their first name on exactly one list (two lists =
+ * ambiguous), 3. their login's company, 4. otherwise SOI.
  */
 function companyForName(name, lists, login) {
   const n = String(name || "").toLowerCase().replace(/\s+/g, " ").trim();
   const first = n.split(" ")[0];
   const full = Object.keys(lists).filter((k) => lists[k].includes(n));
-  if (full.length === 1) return { company: full[0], ambiguous: false };
+  if (full.length === 1) return { company: full[0], ambiguous: false, listed: true };
   const byFirst = Object.keys(lists).filter((k) => lists[k].some((x) => x === first || x.split(" ")[0] === first));
-  if (byFirst.length > 1) return { company: "", ambiguous: true };
-  if (byFirst.length === 1) return { company: byFirst[0], ambiguous: false };
+  if (byFirst.length > 1) return { company: "", ambiguous: true, listed: true };
+  if (byFirst.length === 1) return { company: byFirst[0], ambiguous: false, listed: true };
   if (login) return { company: COMPANY_ENTITY[(login.companies || [])[0]] || "SOI", ambiguous: false };
   return { company: "SOI", ambiguous: false };
 }
@@ -1295,7 +1296,7 @@ app.put(
       colors[k] = v.toLowerCase();
     }
     const people = {};
-    for (const k of CAL_COMPANIES.filter((x) => x !== "SOI")) {
+    for (const k of CAL_COMPANIES) {
       const raw = (b.people || {})[k];
       people[k] = [...new Set((Array.isArray(raw) ? raw : String(raw || "").split(/[,\n;]+/))
         .map((n) => String(n).trim().toLowerCase().replace(/\s+/g, " ")).filter((n) => n.length >= 2))].slice(0, 300);

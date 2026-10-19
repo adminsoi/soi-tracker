@@ -235,12 +235,14 @@
 
     <div class="card">
       <h2>HR calendar colours</h2>
-      <div class="hint" style="margin-bottom:12px;">Entries on the HR calendar are coloured by the company of the person in them, and holidays / closures get their own colour. List the people at CAS, Red Sun and Nanotech as their names appear on the HR calendar (commas or one per line). Everyone else — and anyone with a login, by their login's company — counts as SOI. If a first name is at two companies (e.g. two Chrises), use full names.</div>
+      <div class="hint" style="margin-bottom:12px;">Entries on the HR calendar are coloured by the company of the person in them, and holidays / closures get their own colour. List people as their names appear on the HR calendar (commas or one per line) under their company, or under <b>Global</b> if they work across all four. Anyone not on a list counts by their login's company, or SOI. If a first name is at two companies (e.g. two Chrises), use full names.</div>
       <form id="calColorForm">
         <div class="cc-row" id="ccColors"></div>
+        <div class="field"><label for="cc-SOI">SOI Aviation (California)</label><textarea id="cc-SOI" rows="2" placeholder="Optional — anyone not on another list already counts as SOI"></textarea></div>
         <div class="field"><label for="cc-CAS">CAS (New Zealand)</label><textarea id="cc-CAS" rows="2" placeholder="e.g. Lexi, Yukine"></textarea></div>
         <div class="field"><label for="cc-RedSun">Red Sun Aviation (Singapore)</label><textarea id="cc-RedSun" rows="2"></textarea></div>
         <div class="field"><label for="cc-NanoTech">Nanotech Aviation (UK)</label><textarea id="cc-NanoTech" rows="2"></textarea></div>
+        <div class="field"><label for="cc-Global">Global (people who work across all four companies)</label><textarea id="cc-Global" rows="2" placeholder="e.g. Global Chief of Staff, Global Operations Manager"></textarea></div>
         <button type="submit">Save calendar colours</button>
         <div class="msg" id="calColorMsg"></div>
       </form>
@@ -685,13 +687,14 @@
   });
 
   // ---------- HR calendar colours ----------
-  var CC_LABEL = { SOI: "SOI", CAS: "CAS", RedSun: "Red Sun", NanoTech: "Nanotech", holiday: "Holidays" };
+  var CC_LABEL = { SOI: "SOI", CAS: "CAS", RedSun: "Red Sun", NanoTech: "Nanotech", Global: "Global", holiday: "Holidays" };
+  var CC_LISTS = ["SOI", "CAS", "RedSun", "NanoTech", "Global"];
   function loadCalColors() {
     return api("/api/admin/calendar-colors").then(function (d) {
       document.getElementById("ccColors").innerHTML = Object.keys(CC_LABEL).map(function (k) {
         return '<label class="cc-color"><input type="color" id="ccc-' + k + '" value="' + escapeHtml(d.colors[k]) + '"> ' + escapeHtml(CC_LABEL[k]) + "</label>";
       }).join("");
-      ["CAS", "RedSun", "NanoTech"].forEach(function (k) { document.getElementById("cc-" + k).value = (d.people[k] || []).join(", "); });
+      CC_LISTS.forEach(function (k) { document.getElementById("cc-" + k).value = (d.people[k] || []).join(", "); });
     }).catch(function (err) { document.getElementById("calColorMsg").textContent = err.message; });
   }
   document.getElementById("calColorForm").addEventListener("submit", function (e) {
@@ -699,7 +702,7 @@
     var msg = document.getElementById("calColorMsg");
     msg.textContent = ""; msg.className = "msg";
     var colors = {}; Object.keys(CC_LABEL).forEach(function (k) { colors[k] = document.getElementById("ccc-" + k).value; });
-    var people = {}; ["CAS", "RedSun", "NanoTech"].forEach(function (k) { people[k] = document.getElementById("cc-" + k).value; });
+    var people = {}; CC_LISTS.forEach(function (k) { people[k] = document.getElementById("cc-" + k).value; });
     api("/api/admin/calendar-colors", { method: "PUT", body: JSON.stringify({ colors: colors, people: people }) })
       .then(function (d) {
         msg.className = "msg ok";
