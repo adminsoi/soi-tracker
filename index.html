@@ -1634,6 +1634,8 @@
     var ago = st.at ? Math.max(0, Math.round((Date.now() - st.at) / 60000)) : null;
     return '<p class="small-note" style="margin:14px 0 0;">Form emails: <b>' + E(st.mailbox) + "</b> · " +
       (ago == null ? "first check in progress" : "checked " + (ago < 1 ? "just now" : ago + " min ago") + " · " + st.matched + " form email" + (st.matched === 1 ? "" : "s") + " in the last 2 weeks" + (st.added ? ", " + st.added + " new" : "")) +
+      (st.replies ? " · " + st.replies + " ticket repl" + (st.replies === 1 ? "y" : "ies") + " picked up" : "") +
+      (st.unmatched ? " · " + st.unmatched + " repl" + (st.unmatched === 1 ? "y" : "ies") + " with a ticket number that isn't here" : "") +
       " · every " + st.everyMinutes + " minutes" + btn + "</p>";
   }
   // Resolving asks how it was resolved and offers to email the requester

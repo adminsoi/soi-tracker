@@ -3089,7 +3089,9 @@ async function syncItRequests() {
     const settings = await getSettings();
     const seen = new Set(settings.itRequestsSeen || []);
     const seenMessages = new Set(settings.itRequestsSeenMessages || []);
-    const { matched, items, checked, replies } = await fetchItRequests(seenMessages);
+    // Replies have their own seen list, separate from form emails.
+    const seenReplies = new Set(settings.itRepliesSeen || []);
+    const { matched, items, checked, replies, repliesChecked } = await fetchItRequests(seenMessages, seenReplies);
     // Replies to "Resolved" emails go on their ticket, flagged until someone
     // reopens it or keeps it resolved.
     let replied = 0;
@@ -3143,16 +3145,17 @@ async function syncItRequests() {
     }
     // Remember responses and messages already handled (messages so their
     // bodies aren't re-read every few minutes).
-    if (fresh.length || checked.length) {
+    if (fresh.length || checked.length || (repliesChecked || []).length) {
       await withSettings((s) => {
+        if ((repliesChecked || []).length) s.itRepliesSeen = [...repliesChecked, ...(s.itRepliesSeen || [])].slice(0, 2000);
         s.itRequestsSeen = [...fresh.map((r) => r.responseId || r.messageId), ...(s.itRequestsSeen || [])].slice(0, 2000);
         s.itRequestsSeenMessages = [...checked, ...(s.itRequestsSeenMessages || [])].slice(0, 2000);
       });
     }
-    itSync = { at: Date.now(), ok: true, error: "", matched, added: added.length };
+    itSync = { at: Date.now(), ok: true, error: "", matched, added: added.length, replies: (itSync.replies || 0) + replied, unmatched: (itSync.unmatched || 0) + ((replies || []).length - replied) };
     if (added.length) console.log(`IT requests: added ${added.length} task(s) from ${IT_REQUESTS_MAILBOX}.`);
   } catch (err) {
-    itSync = { at: Date.now(), ok: false, error: err.message, matched: 0, added: 0 };
+    itSync = { at: Date.now(), ok: false, error: err.message, matched: 0, added: 0, replies: itSync.replies || 0, unmatched: itSync.unmatched || 0 };
     console.error("IT request sync failed (will retry):", err.message);
   } finally {
     itRequestsRunning = false;
