@@ -336,7 +336,10 @@
   .mg-num { font-size: 11px; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; color: var(--ink); }
   .mg-ev { display: block; font-size: 10.5px; line-height: 1.35; padding: 2px 5px; border-left: 2px solid #bbc6ad; background: #f1f3ed; border-radius: 0 4px 4px 0; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .mg-ev.all-day { border-color: #d1a1b3; background: #fcf0f4; }
-  .mg-more { font-size: 10px; color: var(--muted); padding-left: 5px; }
+  .mg-more { align-self: flex-start; font-size: 10.5px; font-weight: 600; color: var(--rose-ink); padding: 2px 5px; background: none; border: 0; border-radius: 4px; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+  .mg-more:hover { background: #fcf0f4; }
+  .mg-cell .mg-extra { display: none; }
+  .mg-cell.expanded .mg-extra { display: block; }
   .who { display: inline-block; border-radius: 4px; font-size: 11px; padding: 3px 8px; white-space: nowrap; }
   .who.in { background: #eef0e8; color: #697957; }
   .who.out { background: #f6e1e8; color: #a96b82; font-weight: 600; }
@@ -3620,18 +3623,28 @@
       for (var i = 0; i < 42; i++) {
         var day = shiftDays(gridStart, i);
         var evs = byDay[day] || [];
-        var shown = evs.slice(0, 3).map(function (e) {
+        // First three show; the rest are there but hidden until "+N more".
+        var shown = evs.map(function (e, n) {
           var link = safeLink(e.webLink);
           var label = (e.allDay ? "" : timeOf(e.start) + " ") + e.subject;
-          var inner = '<span class="mg-ev' + (e.allDay ? " all-day" : "") + '" title="' + E(label) + '">' + E(label) + "</span>";
-          return link ? '<a href="' + E(link) + '" target="_blank" rel="noopener noreferrer">' + inner + "</a>" : inner;
+          var inner = '<span class="mg-ev' + (e.allDay ? " all-day" : "") + (n >= 3 ? " mg-extra" : "") + '" title="' + E(label) + '">' + E(label) + "</span>";
+          return link ? '<a href="' + E(link) + '" target="_blank" rel="noopener noreferrer"' + (n >= 3 ? ' class="mg-extra"' : "") + ">" + inner + "</a>" : inner;
         }).join("");
-        var more = evs.length > 3 ? '<span class="mg-more">+' + (evs.length - 3) + " more</span>" : "";
+        var more = evs.length > 3 ? '<button type="button" class="mg-more" data-mg-more="' + (evs.length - 3) + '" aria-expanded="false">+' + (evs.length - 3) + " more</button>" : "";
         cells += '<div class="mg-cell' + (day.slice(0, 7) !== month ? " out" : "") + (day === today ? " today" : "") + '"><span class="mg-num">' + Number(day.slice(8)) + "</span>" + shown + more + "</div>";
       }
       box.innerHTML = '<div class="month-grid">' + head + cells + "</div>";
     }).catch(function (err) { if (!quiet) calError("#cal-month", err); });
   }
+
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest && e.target.closest("[data-mg-more]");
+    if (!b) return;
+    var cell = b.closest(".mg-cell"), open = !cell.classList.contains("expanded");
+    cell.classList.toggle("expanded", open);
+    b.setAttribute("aria-expanded", String(open));
+    b.textContent = open ? "Show less" : "+" + b.dataset.mgMore + " more";
+  });
 
   // ---- HR global calendar (Leadership) ----
   function loadHrName() {
