@@ -73,6 +73,9 @@
   .empty { color: var(--text-faint); font-size: 13px; padding: 14px 0; }
   h2 { font: 22px 'Libre Caslon Display', Georgia, serif; font-weight: 400; margin: 0 0 4px; }
   .hint { font-size: 11.5px; color: var(--text-faint); margin-top: -8px; margin-bottom: 14px; }
+  .cc-row { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 14px; }
+  .cc-color { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+  .cc-color input { width: 34px; height: 26px; padding: 0; border: 1px solid #ddd; border-radius: 5px; background: none; }
 </style>
 </head>
 <body>
@@ -227,6 +230,19 @@
         </div>
         <button type="submit">Save HR calendar</button>
         <div class="msg" id="calendarMsg"></div>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>HR calendar colours</h2>
+      <div class="hint" style="margin-bottom:12px;">Entries on the HR calendar are coloured by the company of the person in them, and holidays / closures get their own colour. List the people at CAS, Red Sun and Nanotech as their names appear on the HR calendar (commas or one per line). Everyone else — and anyone with a login, by their login's company — counts as SOI. If a first name is at two companies (e.g. two Chrises), use full names.</div>
+      <form id="calColorForm">
+        <div class="cc-row" id="ccColors"></div>
+        <div class="field"><label for="cc-CAS">CAS (New Zealand)</label><textarea id="cc-CAS" rows="2" placeholder="e.g. Lexi, Yukine"></textarea></div>
+        <div class="field"><label for="cc-RedSun">Red Sun Aviation (Singapore)</label><textarea id="cc-RedSun" rows="2"></textarea></div>
+        <div class="field"><label for="cc-NanoTech">Nanotech Aviation (UK)</label><textarea id="cc-NanoTech" rows="2"></textarea></div>
+        <button type="submit">Save calendar colours</button>
+        <div class="msg" id="calColorMsg"></div>
       </form>
     </div>
 
@@ -668,6 +684,31 @@
       .catch(function (err) { msg.textContent = err.message; });
   });
 
+  // ---------- HR calendar colours ----------
+  var CC_LABEL = { SOI: "SOI", CAS: "CAS", RedSun: "Red Sun", NanoTech: "Nanotech", holiday: "Holidays" };
+  function loadCalColors() {
+    return api("/api/admin/calendar-colors").then(function (d) {
+      document.getElementById("ccColors").innerHTML = Object.keys(CC_LABEL).map(function (k) {
+        return '<label class="cc-color"><input type="color" id="ccc-' + k + '" value="' + escapeHtml(d.colors[k]) + '"> ' + escapeHtml(CC_LABEL[k]) + "</label>";
+      }).join("");
+      ["CAS", "RedSun", "NanoTech"].forEach(function (k) { document.getElementById("cc-" + k).value = (d.people[k] || []).join(", "); });
+    }).catch(function (err) { document.getElementById("calColorMsg").textContent = err.message; });
+  }
+  document.getElementById("calColorForm").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var msg = document.getElementById("calColorMsg");
+    msg.textContent = ""; msg.className = "msg";
+    var colors = {}; Object.keys(CC_LABEL).forEach(function (k) { colors[k] = document.getElementById("ccc-" + k).value; });
+    var people = {}; ["CAS", "RedSun", "NanoTech"].forEach(function (k) { people[k] = document.getElementById("cc-" + k).value; });
+    api("/api/admin/calendar-colors", { method: "PUT", body: JSON.stringify({ colors: colors, people: people }) })
+      .then(function (d) {
+        msg.className = "msg ok";
+        msg.textContent = "Saved." + (d.clashes.length ? " Heads up: " + d.clashes.map(function (c) { return c.name + " is on " + c.companies.map(function (x) { return CC_LABEL[x]; }).join(" and "); }).join("; ") + " — entries with just that first name stay uncoloured, so use full names." : "");
+        loadCalColors();
+      })
+      .catch(function (err) { msg.textContent = err.message; });
+  });
+
   // ---------- Performance escalation ----------
   function loadPerfSettings() {
     return api("/api/admin/performance").then(function (d) {
@@ -694,6 +735,7 @@
       loadSharedCalendar();
       loadDefaults();
       loadPerfSettings();
+      loadCalColors();
       return loadUsers();
     });
   }
