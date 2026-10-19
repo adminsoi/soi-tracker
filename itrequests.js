@@ -12,6 +12,7 @@ const { WINDOWS_TO_IANA } = require("./hrcal");
 const MAILBOX = String(process.env.IT_REQUESTS_MAILBOX || "").trim();
 const TAG = "[IT Request]";
 const LOOKBACK_DAYS = 14;
+const FROM_EMAIL = String(process.env.MS_FROM_EMAIL || "").trim().toLowerCase();
 
 const itRequestsConfigured = graphConfigured && !!MAILBOX;
 
@@ -21,6 +22,13 @@ const RESPONSE_LINE = /^\s*response id\s*:\s*\S+/i;
 const SUBJECT_RE = /^\s*\[?\s*it\s+request\s*\]?\s*[:\-—]?\s*/i;
 function isItRequestSubject(subject) {
   return SUBJECT_RE.test(String(subject || ""));
+}
+// Replies to a "Resolved" email carry the ticket number in the subject,
+// e.g. "RE: Resolved: your IT request [Ticket IT-4K2QF]".
+const TICKET_RE = /\[\s*ticket\s*#?\s*(IT-[A-Z0-9]{4,8})\s*\]/i;
+function ticketRefOf(subject) {
+  const m = String(subject || "").match(TICKET_RE);
+  return m ? m[1].toUpperCase() : "";
 }
 
 // "Label: value" lines from the email body (plain text). Lines without a
@@ -81,14 +89,15 @@ async function fetchItRequests(skipIds) {
   const list = new URL(`${base}/messages`);
   list.searchParams.set("$filter", `receivedDateTime ge ${since}`);
   list.searchParams.set("$orderby", "receivedDateTime desc");
-  list.searchParams.set("$select", "id,subject,receivedDateTime,parentFolderId,bodyPreview");
+  list.searchParams.set("$select", "id,subject,receivedDateTime,parentFolderId,bodyPreview,from");
   list.searchParams.set("$top", "100");
-  const matches = [];
+  const matches = [], replyMatches = [];
   let next = list.toString(), pages = 0;
   while (next && pages < 10) {
     const page = await graphJson(next, token);
     for (const m of page.value || []) {
       if (m.parentFolderId && m.parentFolderId === sentId) continue;
+      if (ticketRefOf(m.subject)) { replyMatches.push(m); continue; }
       // The subject, or — if the flow's subject came through empty — a body
       // that starts with the flow's "Response ID:" line.
       if (isItRequestSubject(m.subject) || RESPONSE_LINE.test(m.bodyPreview || "")) matches.push(m);
@@ -121,7 +130,23 @@ async function fetchItRequests(skipIds) {
     });
   }
   items.sort((a, b) => Date.parse(b.receivedAt) - Date.parse(a.receivedAt));
-  return { matched: matches.length, items, checked };
+
+  // Replies to resolved tickets: just the new part of each (uniqueBody
+  // leaves out the quoted email below it).
+  const replies = [];
+  for (const m of replyMatches) {
+    if (skip.has(m.id)) continue;
+    checked.push(m.id);
+    const from = (m.from && m.from.emailAddress) || {};
+    if (FROM_EMAIL && String(from.address || "").toLowerCase() === FROM_EMAIL) continue; // our own email
+    const full = await graphJson(`${base}/messages/${encodeURIComponent(m.id)}?$select=id,uniqueBody,body,receivedDateTime`, token, { Prefer: 'outlook.body-content-type="text"' });
+    const text = String((full.uniqueBody && full.uniqueBody.content) || (full.body && full.body.content) || m.bodyPreview || "")
+      .replace(/\r/g, "").split(/\n\s*(?:From:|-{2,}\s*Original Message|On .{5,80} wrote:)/i)[0]
+      .replace(/\n{3,}/g, "\n\n").trim().slice(0, 2000);
+    replies.push({ messageId: m.id, ref: ticketRefOf(m.subject), from: String(from.address || "").toLowerCase(), fromName: from.name || "", text, at: full.receivedDateTime || m.receivedDateTime });
+  }
+  replies.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  return { matched: matches.length, items, checked, replies };
 }
 
 // ---- Request history (the IT page's Requests tab) ----
@@ -311,6 +336,6 @@ function recordFromEmail(r) {
 }
 
 module.exports = {
-  itRequestsConfigured, fetchItRequests, isItRequestSubject, parseFields, IT_REQUESTS_MAILBOX: MAILBOX,
+  itRequestsConfigured, fetchItRequests, isItRequestSubject, ticketRefOf, parseFields, IT_REQUESTS_MAILBOX: MAILBOX,
   parseFormWorkbook, recordFromEmail, FormFileError, officeStamp,
 };

@@ -2677,6 +2677,31 @@ app.get(
 
 // Change one or several requests (status and / or priority). Linked IT
 // tasks follow: Resolved ticks the task done, New / In progress reopen it.
+const RESOLUTION_PARTS = ["issue", "cause", "fix", "action"];
+const RESOLUTION_LABEL = { issue: "The issue", cause: "What caused it", fix: "How it was fixed", action: "What you need to do" };
+// A short ticket number for the email subject, so replies find their way back.
+function ticketRef(id) {
+  return "IT-" + parseInt(require("crypto").createHash("sha1").update(String(id)).digest("hex").slice(0, 10), 16).toString(36).toUpperCase().slice(0, 5);
+}
+function resolvedEmailHtml(rec, me) {
+  const p = rec.resolutionParts || {};
+  const who = (me && (me.name || me.username)) || "IT";
+  const whoName = who.charAt(0).toUpperCase() + who.slice(1);
+  const para = (t) => escapeHtml(t).replace(/\n/g, "<br>");
+  const section = (label, text) => text ? `<p style="margin:0 0 14px;"><b>${label}</b><br>${para(text)}</p>` : "";
+  const issue = p.issue || rec.issue || "";
+  const fix = p.fix || (Object.keys(p).length ? "" : rec.resolution) || "";
+  return `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.5;color:#222;max-width:600px;">` +
+    `<p>Hi ${escapeHtml((rec.name || "").split(" ")[0] || "there")},</p>` +
+    `<p>Good news — your IT request${rec.submittedAt ? " from " + escapeHtml(String(rec.submittedAt).slice(0, 10)) : ""} has been <b>resolved</b>.</p>` +
+    `<div style="border-left:3px solid #9fbf8f;padding:4px 0 2px 14px;margin:16px 0;">` +
+    section("The issue", issue) + section("What caused it", p.cause) + section("How it was fixed", fix) + section("What you need to do", p.action) +
+    `</div>` +
+    `<p>If you're still having this issue, just reply to this email and it'll come straight to ${escapeHtml(whoName)}.</p>` +
+    `<p>Thanks,<br>${escapeHtml(whoName)}<br>SOI Aviation IT</p>` +
+    `<p style="color:#888;font-size:12px;">Ticket ${escapeHtml(rec.ref || ticketRef(rec.id))}</p></div>`;
+}
+
 async function changeRequests(req, res, ids) {
   if (!canSeeItRequests(req.user) || !isManager(req.user)) return res.status(403).json({ error: "Only managers can change requests" });
   const body = req.body || {};
@@ -2701,11 +2726,19 @@ async function changeRequests(req, res, ids) {
     else { change.status = change.status || "progress"; change.notDuplicate = true; }
   }
   if ("notDuplicate" in body) change.notDuplicate = !!body.notDuplicate;
-  // Resolving: an optional note on how it was resolved, and whether to
-  // email the requester (replies go to the person resolving it).
-  const resolution = String(body.resolution || "").trim().slice(0, 2000);
-  if (change.status === "done" && resolution) Object.assign(change, { resolution, resolvedAt: Date.now(), resolvedBy: req.user.username });
+  // Resolving: what the issue was, what caused it, how it was fixed and
+  // anything they need to do (all optional), and whether to email the
+  // requester. The parts are also joined into one note for the ticket.
+  const rp = body.parts && typeof body.parts === "object" ? body.parts : {};
+  const parts = {};
+  for (const k of RESOLUTION_PARTS) { const v = String(rp[k] || "").trim().slice(0, 1500); if (v) parts[k] = v; }
+  const resolution = Object.keys(parts).length
+    ? RESOLUTION_PARTS.filter((k) => parts[k] && k !== "issue").map((k) => `${RESOLUTION_LABEL[k]}: ${parts[k]}`).join("\n")
+    : String(body.resolution || "").trim().slice(0, 2000);
+  if (change.status === "done" && (resolution || parts.issue)) Object.assign(change, { resolution, resolutionParts: parts, resolvedAt: Date.now(), resolvedBy: req.user.username });
   const notify = change.status === "done" && body.notify === true;
+  // A reply to a resolved email has been looked at (Reopen or Keep resolved).
+  if (body.replySeen === true) change.replyPending = false;
   const makeOriginal = body.makeOriginal === true;
   if (!Object.keys(change).length && !makeOriginal) return res.status(400).json({ error: "Nothing to change" });
   if (makeOriginal && ids.length !== 1) return res.status(400).json({ error: "Pick one request to keep" });
@@ -2772,44 +2805,42 @@ async function changeRequests(req, res, ids) {
   }
   // Email the requesters, and copy the note into the IT notebook's write-up.
   let emailed = 0;
-  const emailProblems = [], sentIds = new Set();
+  const emailProblems = [], sentIds = new Map();
   if (notify) {
     const users = await getUsers();
     const me = users.find((u) => sameUser(u.username, req.user.username));
     for (const rec of changed) {
       if (!rec.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rec.email)) { emailProblems.push(`${rec.name || rec.id}: no email on the ticket`); continue; }
       try {
+        const ref = rec.ref || ticketRef(rec.id);
+        rec.ref = ref;
         const ok = await sendMail({
           to: rec.email,
-          replyTo: me && me.email,
+          // Replies go to the person who resolved it and to the IT mailbox,
+          // where the tracker picks them up and shows them on the ticket.
+          replyTo: [me && me.email, IT_REQUESTS_MAILBOX],
           saveCopy: true,
-          subject: `Resolved: your IT request${rec.issue ? " — " + String(rec.issue).replace(/\s+/g, " ").slice(0, 60) : ""}`,
-          html:
-            `<p>Hi ${escapeHtml((rec.name || "").split(" ")[0] || "there")},</p>` +
-            `<p>Your IT request${rec.submittedAt ? " from " + escapeHtml(String(rec.submittedAt).slice(0, 10)) : ""} has been marked <b>resolved</b>.</p>` +
-            (rec.resolution ? `<p><b>What was done:</b><br>${escapeHtml(rec.resolution).replace(/\n/g, "<br>")}</p>` : "") +
-            (rec.issue ? `<p style="color:#666"><b>Your request:</b><br>${escapeHtml(rec.issue).replace(/\n/g, "<br>")}</p>` : "") +
-            `<p>If you're still having this issue, just reply to this email and it'll come straight to ${escapeHtml((me && me.username) || "IT")}.</p>` +
-            `<p>— SOI Aviation IT</p>`,
+          subject: `Resolved: your IT request${rec.issue ? " — " + String(rec.issue).replace(/\s+/g, " ").slice(0, 60) : ""} [Ticket ${ref}]`,
+          html: resolvedEmailHtml(rec, me),
         });
         if (!ok) { emailProblems.push("Email isn't set up on the server (MS_FROM_EMAIL / Mail.Send)"); break; }
         emailed++;
-        sentIds.add(rec.id);
+        sentIds.set(rec.id, rec.ref);
       } catch (err) {
         console.error("Resolution email failed:", err.message);
         emailProblems.push(`${rec.email}: couldn't send`);
       }
     }
     if (emailed) await withItRequests((list) => {
-      for (const r of list) if (sentIds.has(r.id)) { r.notifiedAt = Date.now(); r.notifiedBy = req.user.username; }
+      for (const r of list) if (sentIds.has(r.id)) { r.notifiedAt = Date.now(); r.notifiedBy = req.user.username; r.ref = sentIds.get(r.id); }
     });
   }
-  if (resolution && change.status === "done") {
+  if ((parts.fix || resolution) && change.status === "done") {
     await withItNotebook((nb) => {
       nb.tickets = nb.tickets && typeof nb.tickets === "object" ? nb.tickets : {};
       for (const rec of changed) {
         const w = (nb.tickets[rec.id] = nb.tickets[rec.id] || { createdAt: Date.now() });
-        if (!w.fix) { w.fix = resolution; w.updatedAt = Date.now(); }
+        if (!w.fix) { w.fix = parts.fix ? (parts.cause ? `Cause: ${parts.cause}\n\n${parts.fix}` : parts.fix) : resolution; w.updatedAt = Date.now(); }
       }
     });
   }
@@ -3058,7 +3089,26 @@ async function syncItRequests() {
     const settings = await getSettings();
     const seen = new Set(settings.itRequestsSeen || []);
     const seenMessages = new Set(settings.itRequestsSeenMessages || []);
-    const { matched, items, checked } = await fetchItRequests(seenMessages);
+    const { matched, items, checked, replies } = await fetchItRequests(seenMessages);
+    // Replies to "Resolved" emails go on their ticket, flagged until someone
+    // reopens it or keeps it resolved.
+    let replied = 0;
+    if (replies && replies.length) {
+      await withItRequests((list) => {
+        for (const rp of replies) {
+          const rec = list.find((x) => x.ref === rp.ref) || list.find((x) => ticketRef(x.id) === rp.ref);
+          if (!rec) continue;
+          rec.ref = rp.ref;
+          rec.replies = Array.isArray(rec.replies) ? rec.replies : [];
+          if (rec.replies.some((x) => x.messageId === rp.messageId)) continue;
+          rec.replies.push({ messageId: rp.messageId, at: Date.parse(rp.at) || Date.now(), from: rp.from, name: rp.fromName, text: rp.text });
+          rec.replies = rec.replies.slice(-20);
+          rec.replyPending = true;
+          replied++;
+        }
+      });
+      if (replied) console.log(`IT requests: ${replied} repl${replied === 1 ? "y" : "ies"} to resolved tickets.`);
+    }
     const fresh = items.filter((r) => !seen.has(r.responseId || r.messageId));
     let added = [];
     if (fresh.length) {
