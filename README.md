@@ -527,6 +527,14 @@ department's tab once its link is saved under **Claude projects** in
 - **No audit log beyond `createdBy` on each task.** If you need a change
   history (who moved what, when), that'd be a follow-up addition.
 
+## Dependencies
+
+`package-lock.json` pins the exact version of every package, and the Docker
+build installs exactly those (`npm ci`), so a broken new release of a
+dependency can't break a redeploy. To update packages on purpose, run
+`npm install` (or `npm update`) locally, check the app still works, and
+commit the new `package-lock.json`.
+
 ## Local testing (optional, before you deploy)
 
 ```
