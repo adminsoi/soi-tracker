@@ -1069,7 +1069,9 @@ app.get(
 );
 
 // Per-person counts for the Overview page, managers only. People appear here
-// when "Show in team breakdown" is ticked on their login in /admin.html.
+// when "Show in team breakdown" is ticked on their login in /admin.html, and
+// only under their own departments (Procurement people under Procurement,
+// Purchasing people under Purchasing).
 app.get(
   "/api/team-breakdown",
   authMiddleware,
@@ -1090,7 +1092,7 @@ app.get(
       if (!taskViews.length) continue;
       departments[department] = {
         columns: taskViews.map((v) => ({ id: v.id, label: v.label })).concat([{ id: "tasks", label: "Tasks created" }]),
-        people: users.map((u) => {
+        people: users.filter((u) => (u.departments || []).includes(department)).map((u) => {
           const counts = {};
           for (const v of taskViews) {
             // Counted by who did it in Pentagon (their Pentagon code).
@@ -2423,7 +2425,11 @@ app.get(
     const from = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
     const users = (await getUsers()).map(normalizeUser);
     const codeToUser = new Map();
-    users.forEach((u) => { if (u.pentagonCode) codeToUser.set(u.pentagonCode.trim().toLowerCase(), u.username); });
+    users.forEach((u) => { if (u.pentagonCode) codeToUser.set(u.pentagonCode.trim().toLowerCase(), u); });
+    // By person only counts people in the department that owns each list
+    // (RFQs / quotes → Procurement, SOs / POs → Purchasing).
+    const viewDept = {};
+    for (const [dept, list] of Object.entries(PENTAGON_VIEWS)) for (const v of list) viewDept[v.id] = dept;
     const cell = (v) => (v === null || v === undefined ? "" : String(v));
     const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
@@ -2459,8 +2465,9 @@ app.get(
           slot.value += amount;
         }
         const code = f.person ? cell(row[f.person]).trim() : "";
-        if (code) {
-          const who = codeToUser.get(code.toLowerCase()) || code;
+        const u = code ? codeToUser.get(code.toLowerCase()) : null;
+        if (u && (!viewDept[view.id] || (u.departments || []).includes(viewDept[view.id]))) {
+          const who = u.username;
           const p = (people[who] = people[who] || {});
           p[view.id] = (p[view.id] || 0) + 1;
         }
