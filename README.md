@@ -332,15 +332,20 @@ query's `TOP 200` limit is hit for the range, the page says so.
 
 ## Work inbox
 
-**Work inbox** (sidebar → You) shows the signed-in person's own unread Outlook
-mail from the last day / 3 days / week, one card per conversation, newest
-first. There's no AI: each card shows Outlook's own preview text, and
-conversations are sorted into **Needs you** (flagged, high importance, or
-sent to you directly) and **FYI** (CC'd, group or list mail). **Done** is
-remembered on that device and a conversation comes back if a newer message
-arrives. It's read-only — replying happens in Outlook via **Open in Outlook**.
-The mailbox is the email on the person's login; nothing is stored (results
-are cached in memory for a minute).
+**Work inbox** (sidebar → You) shows the signed-in person's own Outlook inbox
+from the last day / 3 days / week, one row per conversation. **Unread** and
+**Read** tabs follow Outlook: open a conversation in Outlook and it moves to
+Read on the next check (every few minutes). Inside each tab, rows are grouped
+by day (Today, Yesterday, then the date), newest first. Click a row to see
+the preview, who it went to and **Open in Outlook**.
+
+There's no AI. Each conversation is marked by simple rules: **Needs you**
+(pink dot) when it was sent to you directly (you're on the To line), it's
+flagged, or it's marked high importance; otherwise **FYI** (grey dot), meaning
+you're only CC'd or it went to a group or list. The **Everything / Needs you /
+FYI** switch filters by that. The sidebar count is unread conversations that
+need you. It's read-only; the mailbox is the email on the person's login, and
+nothing is stored (results are cached in memory for a minute).
 
 **Shared inboxes:** in `/admin.html`, a login's **Extra inboxes** field
 adds shared mailboxes (for example `it@` or `info@`), separated by commas and
