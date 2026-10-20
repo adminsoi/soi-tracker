@@ -49,7 +49,7 @@ const { sendMail, mailConfigured } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError, nameFromTitle } = require("./calendar");
 const { hrEvents, cleanFeedUrl, FeedError } = require("./hrcal");
 const { itRequestsConfigured, fetchItRequests, IT_REQUESTS_MAILBOX, parseFormWorkbook, recordFromEmail, FormFileError, officeStamp } = require("./itrequests");
-const { unreadThreads, MailError } = require("./mail");
+const { inboxThreads, MailError } = require("./mail");
 const { pentagonQuery } = require("./pentagon");
 const {
   PENTAGON_VIEWS,
@@ -1125,7 +1125,7 @@ app.get(
   })
 );
 
-// Work inbox: unread Outlook mail (last 1–14 days), one card per
+// Work inbox: Outlook inbox mail, read and unread (last 1–14 days), one row per
 // conversation, Outlook's preview text, no AI. Always the email on the
 // person's login, plus any shared mailboxes an admin added to it ("Extra
 // inboxes" in /admin.html) — never a mailbox named by the browser. Each item
@@ -1139,11 +1139,11 @@ app.get(
     const u = (await getUsers()).map(normalizeUser).find((x) => sameUser(x.username, req.user.username));
     const own = u && u.email ? u.email.toLowerCase() : "";
     try {
-      const mine = await unreadThreads(own, days); // problems with your own mailbox stop here
+      const mine = await inboxThreads(own, days); // problems with your own mailbox stop here
       const items = mine.items.map((t) => Object.assign({}, t, { mailbox: own }));
       const errors = [];
       const extras = (u.extraMailboxes || []).filter((m) => m.split("@")[1] === own.split("@")[1]);
-      const results = await Promise.allSettled(extras.map((m) => unreadThreads(m, days)));
+      const results = await Promise.allSettled(extras.map((m) => inboxThreads(m, days)));
       results.forEach((r, i) => {
         const box = extras[i];
         if (r.status === "fulfilled") r.value.items.forEach((t) => items.push(Object.assign({}, t, { id: `${box}|${t.id}`, mailbox: box })));

@@ -1,4 +1,4 @@
-// Work inbox: a person's own unread Outlook mail, read-only, through
+// Work inbox: a person's own Outlook inbox (read and unread), read-only, through
 // Microsoft Graph with the app registration in graph.js. Needs the Mail.Read
 // application permission (admin consent), ideally scoped to SOI staff
 // mailboxes. The mailbox is always the email on the signed-in person's login
@@ -48,10 +48,11 @@ async function graphGet(url) {
 }
 
 /**
- * Unread messages in the Inbox from the last `days` days, one entry per
- * conversation (latest message first), each marked needsYou with a reason.
+ * Inbox messages (read and unread) from the last `days` days, one entry per
+ * conversation (latest message first), each marked needsYou with a reason
+ * and isRead (false while any message in it is unread in Outlook).
  */
-async function unreadThreads(email, days) {
+async function inboxThreads(email, days) {
   if (!graphConfigured) {
     throw new MailError("not_configured", "Microsoft 365 isn't connected to the tracker yet (MS_TENANT_ID / MS_CLIENT_ID / MS_CLIENT_SECRET).");
   }
@@ -65,14 +66,14 @@ async function unreadThreads(email, days) {
   const since = new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
   const url = new URL(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(email)}/mailFolders/inbox/messages`);
   // Graph wants $orderby properties to lead the $filter, in the same order.
-  url.searchParams.set("$filter", `receivedDateTime ge ${since} and isRead eq false`);
+  url.searchParams.set("$filter", `receivedDateTime ge ${since}`);
   url.searchParams.set("$orderby", "receivedDateTime desc");
-  url.searchParams.set("$select", "id,subject,from,toRecipients,ccRecipients,receivedDateTime,bodyPreview,importance,flag,hasAttachments,webLink,conversationId");
+  url.searchParams.set("$select", "id,subject,from,toRecipients,ccRecipients,receivedDateTime,bodyPreview,importance,flag,hasAttachments,webLink,conversationId,isRead");
   url.searchParams.set("$top", "100");
 
   let next = url.toString();
   const messages = [];
-  while (next && messages.length < 300) {
+  while (next && messages.length < 500) {
     const page = await graphGet(next);
     messages.push(...(page.value || []));
     next = page["@odata.nextLink"] || null;
@@ -85,7 +86,8 @@ async function unreadThreads(email, days) {
     const id = m.conversationId || m.id;
     const t = threads.get(id);
     if (t) {
-      t.unread += 1;
+      t.messages += 1;
+      if (!m.isRead) t.unread += 1;
       if (m.hasAttachments) t.attachments = true;
       if (m.flag && m.flag.flagStatus === "flagged") t.flagged = true;
       if (m.importance === "high") t.important = true;
@@ -105,7 +107,8 @@ async function unreadThreads(email, days) {
       flagged: !!(m.flag && m.flag.flagStatus === "flagged"),
       attachments: !!m.hasAttachments,
       webLink: m.webLink || "",
-      unread: 1,
+      messages: 1,
+      unread: m.isRead ? 0 : 1,
       toYou: to.some((r) => sameAddress(r.email, email)),
     });
   }
@@ -116,7 +119,7 @@ async function unreadThreads(email, days) {
     if (t.flagged) reasons.push("Flagged");
     if (t.important) reasons.push("High importance");
     if (t.toYou) reasons.push("Sent to you");
-    return Object.assign(t, { needsYou: reasons.length > 0, reason: reasons.join(" · ") || (t.cc.some((r) => sameAddress(r.email, email)) ? "You're CC'd" : "Group or list mail") });
+    return Object.assign(t, { isRead: t.unread === 0, needsYou: reasons.length > 0, reason: reasons.join(" · ") || (t.cc.some((r) => sameAddress(r.email, email)) ? "You're CC'd" : "Group or list mail") });
   });
 
   const value = { mailbox: email, days, since, items };
@@ -124,4 +127,4 @@ async function unreadThreads(email, days) {
   return value;
 }
 
-module.exports = { unreadThreads, MailError };
+module.exports = { inboxThreads, MailError };
