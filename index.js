@@ -17,6 +17,8 @@ const {
   authMiddleware,
   adminMiddleware,
   isManager,
+  passwordStamp,
+  setUserCheck,
 } = require("./auth");
 const {
   getUsers,
@@ -95,6 +97,19 @@ function normalizeUser(u) {
     pentagonCode: u.pentagonCode || "",
   };
 }
+
+// Every signed-in request is checked against the saved logins (read at most
+// every 30 seconds): a deleted login or a changed password ends the
+// sign-in, and access changes in /admin.html apply without signing out.
+let usersSnap = { at: 0, list: null };
+setUserCheck(async (payload) => {
+  if (!usersSnap.list || Date.now() - usersSnap.at > 30000) usersSnap = { at: Date.now(), list: await getUsers() };
+  const raw = usersSnap.list.find((u) => String(u.username).toLowerCase() === String(payload.sub || "").toLowerCase());
+  if (!raw) return null;
+  if (payload.pv && payload.pv !== passwordStamp(raw)) return null;
+  const u = normalizeUser(raw);
+  return { username: u.username, companies: u.companies, departments: u.departments, fullAccess: u.fullAccess, manager: u.manager, leadership: u.leadership, pentagonCode: u.pentagonCode };
+});
 
 function sameUser(a, b) {
   return String(a || "").toLowerCase() === String(b || "").toLowerCase();
@@ -181,7 +196,7 @@ function asyncHandler(fn) {
 app.post(
   "/api/login",
   asyncHandler(async (req, res) => {
-    const { username, password } = req.body || {};
+    const { username, password, remember } = req.body || {};
     if (!username || !password) {
       return res.status(400).json({ error: "Username and password are required" });
     }
@@ -195,7 +210,7 @@ app.post(
     if (!ok) return res.status(401).json({ error: "Invalid username or password" });
 
     const user = normalizeUser(rawUser);
-    const token = signUserToken(user);
+    const token = signUserToken(user, remember === true);
     res.json({
       token,
       username: user.username,

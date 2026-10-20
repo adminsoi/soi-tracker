@@ -34,7 +34,14 @@ function verifyPassword(password, hash) {
   return bcrypt.compare(password, hash);
 }
 
-function signUserToken(user) {
+// A short fingerprint of the password hash, so changing a password ends
+// every sign-in made with the old one.
+function passwordStamp(user) {
+  return require("crypto").createHash("sha256").update(String(user.passwordHash || "")).digest("base64url").slice(0, 12);
+}
+
+// remember: "Remember me" — 30 days instead of 12 hours.
+function signUserToken(user, remember) {
   return jwt.sign(
     {
       sub: user.username,
@@ -44,10 +51,12 @@ function signUserToken(user) {
       manager: !!user.manager,
       leadership: !!user.leadership,
       pentagonCode: user.pentagonCode || "",
+      pv: passwordStamp(user),
+      rm: !!remember,
       kind: "user",
     },
     JWT_SECRET,
-    { expiresIn: "12h" }
+    { expiresIn: remember ? "30d" : "12h" }
   );
 }
 
@@ -59,6 +68,12 @@ function readBearer(req) {
   const header = req.headers.authorization || "";
   return header.startsWith("Bearer ") ? header.slice(7) : null;
 }
+
+// index.js plugs in a check against the saved logins (see setUserCheck):
+// it returns the login's current access, or null when the login was
+// deleted or its password changed.
+let userCheck = null;
+function setUserCheck(fn) { userCheck = fn; }
 
 function authMiddleware(req, res, next) {
   const token = readBearer(req);
@@ -77,10 +92,21 @@ function authMiddleware(req, res, next) {
       leadership: !!payload.leadership,
       pentagonCode: payload.pentagonCode || "",
     };
-    next();
   } catch (e) {
     return res.status(401).json({ error: "Invalid or expired session" });
   }
+  if (!userCheck) return next();
+  const payload = jwt.decode(token);
+  Promise.resolve(userCheck(payload)).then((fresh) => {
+    if (!fresh) return res.status(401).json({ error: "Please sign in again" });
+    Object.assign(req.user, fresh);
+    next();
+  }, (err) => {
+    // Can't read the saved logins right now: go by the token rather than
+    // signing everyone out.
+    console.error("Sign-in check skipped:", err.message);
+    next();
+  });
 }
 
 // Managers assign tasks to other people and are the only ones who can change
@@ -111,6 +137,8 @@ module.exports = {
   verifyPassword,
   signUserToken,
   signAdminToken,
+  passwordStamp,
+  setUserCheck,
   authMiddleware,
   adminMiddleware,
   isManager,
