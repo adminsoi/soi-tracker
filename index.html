@@ -596,6 +596,14 @@
   function shortDept(d) { return DEPT_SHORT[d] || d; }
   function isOps(d) { return OPS_DEPTS.indexOf(d) !== -1; }
   function isCard(t) { return t.source === "pentagon"; }
+  // "Added by alice · Oct 19, 2026, 2:15 PM" under a task's name.
+  function addedNote(t) {
+    if (t.draft || isCard(t) || !(t.createdAt > 1e11)) return "";
+    var by = t.createdBy && t.createdBy !== "IT request form" ? t.createdBy : "";
+    var d = new Date(t.createdAt);
+    return '<span class="co-note" title="' + E(d.toLocaleString()) + '">Added ' + (by ? "by " + E(by) + " · " : "") +
+      E(d.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })) + "</span>";
+  }
   // Tasks are quick one-off items; projects are long-term and hold sub-tasks.
   // Older rows have no kind: Procurement / Purchasing / Warehouse rows and
   // IT form tickets are tasks, everything else was a project.
@@ -1137,7 +1145,7 @@
       ? '<span class="static"><strong>' + E(t.docLabel + " " + t.docNo) + '</strong><span class="src">PENTAGON</span></span>'
       : input(t, "title", t.title, "text", "Task", ed);
     return '<tr class="' + cls + '">' +
-      "<td>" + nameCell + coNote(t) + "</td>" +
+      "<td>" + nameCell + coNote(t) + addedNote(t) + "</td>" +
       "<td>" + (card ? staticCell(t.part) : input(t, "part", t.part, "text", "Part number", ed)) + "</td>" +
       "<td>" + (card ? staticCell("") : input(t, "platform", t.platform, "text", "Aircraft", ed)) + "</td>" +
       "<td>" + (card ? staticCell(t.party) : input(t, "customer", t.customer, "text", "Customer", ed)) + "</td>" +
@@ -1173,7 +1181,7 @@
     var cls = "project " + (isDone(p) ? "done " : "") + (isOverdue(p) ? "overdue " : "") + (p.draft ? "draft" : "");
     var tools = (!p.draft && ed ? '<button type="button" class="text-button" data-add-sub="' + E(p.id) + '">+ Sub-task</button>' : "") + delButton(p);
     return '<tr class="' + cls + '"><td>' + input(p, "title", p.title, "text", "Project name", ed) +
-      '<span class="co-note">' + (subs.length ? doneSubs + "/" + subs.length + " sub-tasks done" : "No sub-tasks yet") + (activeCompany === ALL && p.company ? " · " + E(shortCo(p.company)) : "") + "</span></td>" +
+      '<span class="co-note">' + (subs.length ? doneSubs + "/" + subs.length + " sub-tasks done" : "No sub-tasks yet") + (activeCompany === ALL && p.company ? " · " + E(shortCo(p.company)) : "") + "</span>" + addedNote(p) + "</td>" +
       "<td>" + responsibleCell(p) + "</td><td>" + input(p, "dueDate", p.dueDate, "date", "", ed) + "</td>" +
       '<td class="center">' + doneToggle(p) + '</td><td class="notes-cell">' + input(p, "notes", p.notes, "textarea", "", ed) + "</td>" +
       '<td class="row-tools">' + tools + "</td></tr>";
@@ -1181,7 +1189,7 @@
   function subRow(s) {
     var ed = s.draft || canEditTask(s);
     var cls = (isDone(s) ? "done " : "") + (isOverdue(s) ? "overdue " : "") + (s.draft ? "draft" : "");
-    return '<tr class="' + cls + '"><td><div class="name-cell"><span class="indent">↳</span>' + input(s, "title", s.title, "text", "Sub-task", ed) + "</div></td>" +
+    return '<tr class="' + cls + '"><td><div class="name-cell"><span class="indent">↳</span>' + input(s, "title", s.title, "text", "Sub-task", ed) + "</div>" + addedNote(s) + "</td>" +
       "<td>" + responsibleCell(s) + "</td><td>" + input(s, "dueDate", s.dueDate, "date", "", ed) + "</td>" +
       '<td class="center">' + doneToggle(s) + '</td><td class="notes-cell">' + input(s, "notes", s.notes, "textarea", "", ed) + "</td>" +
       '<td class="row-tools">' + delButton(s) + "</td></tr>";
@@ -1239,7 +1247,7 @@
   function taskRow(t) {
     var ed = t.draft || canEditTask(t);
     var cls = (isDone(t) ? "done " : "") + (isOverdue(t) ? "overdue " : "") + (t.draft ? "draft" : "");
-    return '<tr class="' + cls + '"><td>' + input(t, "title", t.title, "text", "Task", ed) + srcNote(t) + "</td>" +
+    return '<tr class="' + cls + '"><td>' + input(t, "title", t.title, "text", "Task", ed) + srcNote(t) + addedNote(t) + "</td>" +
       "<td>" + responsibleCell(t) + "</td><td>" + input(t, "dueDate", t.dueDate, "date", "", ed) + "</td>" +
       '<td class="center">' + doneToggle(t) + '</td><td class="notes-cell">' + input(t, "notes", t.notes, "textarea", "", ed) + "</td>" +
       '<td class="row-tools">' + delButton(t) + "</td></tr>";
