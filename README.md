@@ -97,6 +97,15 @@ department for each person. Each person then signs in at
 `https://<your-private-ip>/` with that username and password (over VPN or
 the office network — this server isn't reachable from outside either).
 
+### Signing in and "Remember me"
+
+A normal sign-in lasts 12 hours and ends when the browser closes. Ticking
+**Remember me for 30 days** keeps you signed in on that computer for 30 days
+and fills in your username next time (never the password). Every request is
+checked against the saved logins (at most 30 seconds behind), so deleting a
+login or changing its password in `/admin.html` signs it out everywhere, and
+access changes apply without signing out. Don't tick it on shared computers.
+
 ## Layout (the "Daily Edit" look)
 
 A left sidebar (Departments, Overview, Mentions you, Calendar, Global,

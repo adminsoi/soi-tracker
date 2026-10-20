@@ -325,6 +325,8 @@
   .pill.rose { background: #f6e1e8; color: #a96b82; }
 
   /* Forms */
+  .remember { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); margin: 2px 0 14px; cursor: pointer; }
+  .remember input { width: auto; margin: 0; }
   .field label { display: block; font-size: 10px; font-weight: 600; color: var(--muted); margin-bottom: 5px; letter-spacing: .5px; }
   .field input, .field select, .field textarea { width: 100%; padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; background: #fff; font-size: 13px; }
   .field { min-width: 130px; }
@@ -451,6 +453,7 @@
     <form id="loginForm">
       <div class="field"><label for="li-user">Username</label><input id="li-user" autocomplete="username" required></div>
       <div class="field"><label for="li-pass">Password</label><input id="li-pass" type="password" autocomplete="current-password" required></div>
+      <label class="remember"><input type="checkbox" id="li-remember"> Remember me for 30 days</label>
       <button type="submit" class="primary">Sign in</button>
       <div class="login-msg" id="loginMsg"></div>
     </form>
@@ -489,6 +492,7 @@
 
   // ---------- Constants ----------
   var TOKEN_KEY = "soi_tracker_token";
+  var REMEMBER_KEY = "soi_tracker_remember_user";
   var COMPANY_KEY = "soi_tracker_company";
   var ALL = "AOG"; // "All companies" (full-access accounts with more than one company)
   var COMPANY_ORDER = ["SOI Aviation", "CAS", "RedSun Aviation", "NanoTech Aviation"];
@@ -579,9 +583,22 @@
     });
   }
   function sameUser(a, b) { return String(a || "").toLowerCase() === String(b || "").toLowerCase(); }
-  function token() { try { return localStorage.getItem(TOKEN_KEY); } catch (e) { return null; } }
-  function setToken(t) { try { localStorage.setItem(TOKEN_KEY, t); } catch (e) {} }
-  function clearToken() { try { localStorage.removeItem(TOKEN_KEY); } catch (e) {} }
+  // "Remember me" keeps the sign-in in localStorage (30 days, survives
+  // closing the browser); otherwise it's in sessionStorage and ends when the
+  // browser closes.
+  function token() {
+    try { return sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem(TOKEN_KEY); } catch (e) { return null; }
+  }
+  function setToken(t, remember) {
+    try {
+      clearToken();
+      (remember ? localStorage : sessionStorage).setItem(TOKEN_KEY, t);
+    } catch (e) {}
+  }
+  function clearToken() {
+    try { localStorage.removeItem(TOKEN_KEY); } catch (e) {}
+    try { sessionStorage.removeItem(TOKEN_KEY); } catch (e) {}
+  }
   function fmtDate(s) {
     if (!s) return "";
     var d = new Date(String(s).slice(0, 10) + "T00:00:00");
@@ -683,6 +700,12 @@
   function showLogin() {
     $("#loginScreen").style.display = "flex";
     $("#app").classList.add("app-hidden");
+    // Fill in the remembered username and keep "Remember me" ticked.
+    var saved = ""; try { saved = localStorage.getItem(REMEMBER_KEY) || ""; } catch (x) {}
+    if (saved) {
+      $("#li-remember").checked = true;
+      if (!$("#li-user").value) { $("#li-user").value = saved; setTimeout(function () { $("#li-pass").focus(); }, 0); }
+    }
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   }
   function signOut() { clearToken(); me = null; showLogin(); }
@@ -695,11 +718,14 @@
     fetch("/api/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: $("#li-user").value.trim(), password: $("#li-pass").value })
+      body: JSON.stringify({ username: $("#li-user").value.trim(), password: $("#li-pass").value, remember: $("#li-remember").checked })
     }).then(function (res) {
       return res.json().then(function (data) { if (!res.ok) throw new Error(data.error || "Sign-in failed"); return data; });
     }).then(function (data) {
-      setToken(data.token);
+      var remember = $("#li-remember").checked;
+      setToken(data.token, remember);
+      // Remember the username (never the password) for next time.
+      try { if (remember) localStorage.setItem(REMEMBER_KEY, $("#li-user").value.trim()); else localStorage.removeItem(REMEMBER_KEY); } catch (x) {}
       me = data;
       $("#li-pass").value = "";
       onSignedIn();
