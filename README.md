@@ -133,8 +133,13 @@ whichever tab you add them on.
 
 **IT → Requests → + Add ticket** adds a ticket that didn't come through the
 form (a call, a walk-up, a Teams message): who it's for, company, priority
-and the issue. It starts as New, is marked "Added by hand", and goes on
-IT → Tasks for the IT default person, like form tickets.
+and the issue. It starts as New and is marked "Added by hand".
+
+**IT opens on Requests.** Requests stay on IT → Requests and aren't added to
+IT → Tasks (older ones that were are hidden). On IT, **Tasks** and
+**Projects** show only your own: ones you're responsible for or added, plus
+sub-tasks under your projects and projects holding one of your sub-tasks.
+Managers can switch between **Mine** and **Everyone's**.
 
 ## Performance (Tools → Performance)
 
@@ -344,10 +349,8 @@ permission hasn't been granted.
 
 ## IT requests from the Microsoft Form
 
-Each response to the IT request form becomes a task on the **IT** page,
-assigned to the IT default person (see above), marked "From the IT form" with
-who asked. Urgent requests come in as **high** priority. Everything the
-person answered goes into the task's notes.
+Each response to the IT request form becomes a request on **IT → Requests**
+(as New), with everything the person answered.
 
 How it gets there: the server isn't reachable from Microsoft's cloud, so
 the Power Automate flow can't send to it directly. Instead the flow emails
@@ -410,10 +413,7 @@ department (or full access); only managers change things.
 - **Internal priority:** managers rate each request **P1 Critical** (drop
   everything), **P2 High** (today), **P3 Normal** (this week) or **P4 Low**
   (when there's time). This is separate from the form's own urgency, which
-  most people set to Immediate. On a request that's also an IT task, the
-  rating sets the task's priority too (P1–P2 high, P3 medium, P4 low).
-  Resolving the request ticks the task done, and ticking the task done
-  resolves the request.
+  most people set to Immediate.
 - **Resolve with a note and email:** marking a request **Resolved** (one at
   a time or in bulk) opens a short form: what the issue was (filled in from
   the request), what caused it, how you fixed it and anything they need to
@@ -433,7 +433,7 @@ department (or full access); only managers change things.
 - **Archive:** **Archive** under a request's status (or select several and
   choose **Archive**) moves it to the **Archived** tab, out of the other tabs,
   the numbers and the charts. **Restore** puts it back as it was. On Archived,
-  **Delete forever** removes the request, its IT task and its notebook
+  **Delete forever** removes the request, any older linked IT task and its notebook
   write-up for good (after a confirm). Deleted requests are remembered, so the
   form email or an Excel re-import won't bring them back.
 - **By person:** filter or sort by person, or click a name; the **By

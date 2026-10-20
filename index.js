@@ -3113,9 +3113,9 @@ app.post(
 );
 
 // IT requests from the Microsoft Form (see itrequests.js): every few
-// minutes, each new "[IT Request]" email becomes an IT task for the IT
-// default person. Handled ones are remembered in settings, so a task that's
-// deleted later doesn't come back.
+// minutes, each new "[IT Request]" email becomes a request on IT → Requests.
+// Handled ones are remembered in settings, so one that's deleted later
+// doesn't come back.
 const IT_REQUESTS_EVERY_MS = 3 * 60 * 1000;
 let itRequestsRunning = false;
 // What the last check found, for the status line on IT → Requests.
@@ -3153,33 +3153,16 @@ async function syncItRequests() {
     const fresh = items.filter((r) => !seen.has(r.responseId || r.messageId));
     let added = [];
     if (fresh.length) {
-      const owner = (settings.departmentDefaults || {}).IT || "";
-      added = fresh.map((r, i) => ({
-        id: Date.now().toString(36) + i + Math.random().toString(36).slice(2, 6),
-        title: r.title.slice(0, 140),
-        company: "SOI Aviation",
-        department: "IT",
-        status: "todo",
-        priority: r.urgent ? "high" : "medium",
-        owner,
-        dueDate: "",
-        notes: r.fields.map((f) => `${f.label}: ${f.value}`).join("\n").slice(0, 500),
-        createdAt: Date.parse(r.receivedAt) || Date.now(),
-        createdBy: "IT request form",
-        source: "form",
-        kind: "task",
-        requester: r.requester.slice(0, 120),
-        formResponseId: r.responseId || r.messageId,
-      }));
-      await withTasks((tasks) => { tasks.unshift(...added.slice().reverse()); });
-      // Also into the Requests history, linked to the task.
+      added = fresh;
+      // Requests live on IT → Requests only, not as IT tasks.
+      // Also into the Requests history.
       await withItRequests((list) => {
-        fresh.forEach((r, i) => {
+        fresh.forEach((r) => {
           const rec = recordFromEmail(r);
           if ((settings.itRequestsDeleted || []).includes(rec.id)) return;
           const have = list.find((x) => x.id === rec.id);
-          if (have) { if (!have.taskId) have.taskId = added[i].id; return; }
-          list.push(Object.assign(rec, { priority: "", status: "new", taskId: added[i].id, addedAt: Date.now() }));
+          if (have) return;
+          list.push(Object.assign(rec, { priority: "", status: "new", taskId: "", addedAt: Date.now() }));
         });
       });
     }
@@ -3204,8 +3187,8 @@ async function syncItRequests() {
 }
 
 // A ticket added by hand on IT → Requests (a call, a walk-up, a Teams
-// message): a request record like a form one, plus a task on IT → Tasks for
-// the IT default person. Anyone who can see Requests can add one.
+// message): a request record like a form one. Anyone who can see Requests
+// can add one.
 app.post(
   "/api/it-requests",
   authMiddleware,
@@ -3218,33 +3201,14 @@ app.post(
     const name = text(b.name, 80), email = text(b.email, 120).toLowerCase();
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "That email doesn't look right" });
     const priority = IT_PRIORITIES.includes(b.priority) ? b.priority : "";
-    const settings = await getSettings();
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    const task = {
-      id: "t" + id,
-      title: issue.split(/[.!?\n]/)[0].trim().slice(0, 140) || "IT ticket",
-      company: "SOI Aviation",
-      department: "IT",
-      status: "todo",
-      priority: priority ? PRIORITY_TO_TASK[priority] : "medium",
-      owner: (settings.departmentDefaults || {}).IT || "",
-      dueDate: "",
-      notes: [name || email ? `Requested by: ${[name, email].filter(Boolean).join(" · ")}` : "", issue].filter(Boolean).join("\n").slice(0, 500),
-      createdAt: Date.now(),
-      createdBy: req.user.username,
-      source: "form",
-      kind: "task",
-      requester: name || email,
-      formResponseId: "manual-" + id,
-    };
     const rec = {
       id: "manual-" + id, formId: null, source: "manual",
       submittedAt: officeStamp(new Date().toISOString()),
       name, email, phone: text(b.phone, 40), company: text(b.company, 40), remote: "", issue, startedOn: "",
       urgency: "", contact: text(b.contact, 60), notes: "",
-      priority, status: "new", taskId: task.id, addedAt: Date.now(), addedBy: req.user.username,
+      priority, status: "new", taskId: "", addedAt: Date.now(), addedBy: req.user.username,
     };
-    await withTasks((tasks) => { tasks.unshift(task); });
     await withItRequests((list) => { list.push(rec); });
     res.status(201).json(rec);
   })
