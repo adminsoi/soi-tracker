@@ -2739,6 +2739,13 @@ async function changeRequests(req, res, ids) {
   const notify = change.status === "done" && body.notify === true;
   // A reply to a resolved email has been looked at (Reopen or Keep resolved).
   if (body.replySeen === true) change.replyPending = false;
+  // Archive: out of every tab, the numbers and the charts, onto Archived.
+  // Nothing else changes, so Restore puts it back as it was.
+  if ("archived" in body) {
+    change.archived = !!body.archived;
+    change.archivedAt = change.archived ? Date.now() : null;
+    change.archivedBy = change.archived ? req.user.username : "";
+  }
   const makeOriginal = body.makeOriginal === true;
   if (!Object.keys(change).length && !makeOriginal) return res.status(400).json({ error: "Nothing to change" });
   if (makeOriginal && ids.length !== 1) return res.status(400).json({ error: "Pick one request to keep" });
@@ -2846,6 +2853,36 @@ async function changeRequests(req, res, ids) {
   }
   res.json({ changed: changed.length, requests: changed, emailed, emailProblems });
 }
+
+// Delete forever: archived requests only. Also removes the linked IT task
+// and the private notebook write-up, and remembers the ids so the form
+// email or an Excel re-import can't bring them back.
+app.post(
+  "/api/it-requests/delete",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!canSeeItRequests(req.user) || !isManager(req.user)) return res.status(403).json({ error: "Only managers can delete requests" });
+    const wanted = new Set((Array.isArray((req.body || {}).ids) ? req.body.ids : []).map(String).slice(0, 1000));
+    if (!wanted.size) return res.status(400).json({ error: "Pick the requests to delete" });
+    const gone = await withItRequests((list) => {
+      const out = list.filter((r) => wanted.has(r.id) && r.archived);
+      if (!out.length) return out;
+      const ids = new Set(out.map((r) => r.id));
+      const keep = list.filter((r) => !ids.has(r.id));
+      // Anything that pointed at a deleted request as its original stands alone.
+      for (const r of keep) if (ids.has(r.duplicateOf)) { r.duplicateOf = ""; r.notDuplicate = true; }
+      list.splice(0, list.length, ...keep);
+      return out.map((r) => ({ id: r.id, taskId: r.taskId || "", formId: r.formId }));
+    });
+    if (!gone.length) return res.status(400).json({ error: "Only archived requests can be deleted — archive them first" });
+    const taskIds = new Set(gone.map((r) => r.taskId).filter(Boolean));
+    if (taskIds.size) await withTasks((tasks) => { const k = tasks.filter((t) => !taskIds.has(t.id) && !taskIds.has(t.parentId)); tasks.splice(0, tasks.length, ...k); });
+    await withItNotebook((nb) => { if (nb.tickets) for (const r of gone) delete nb.tickets[r.id]; });
+    await withSettings((st) => { st.itRequestsDeleted = [...gone.map((r) => r.id), ...(st.itRequestsDeleted || [])].slice(0, 5000); });
+    console.log(`IT requests: ${req.user.username} deleted ${gone.length} archived request(s).`);
+    res.json({ deleted: gone.length });
+  })
+);
 
 app.patch(
   "/api/it-requests/:id",
@@ -3051,11 +3088,13 @@ app.post(
       if (!(err instanceof FormFileError)) console.error("IT request import failed:", err.message);
       return res.status(400).json({ error: err instanceof FormFileError ? err.message : "That file couldn't be read as an Excel workbook." });
     }
-    const tasks = await getTasks();
+    const [tasks, settings] = await Promise.all([getTasks(), getSettings()]);
     const taskByForm = new Map(tasks.filter((t) => t.formResponseId).map((t) => [`form-${t.formResponseId}`, t]));
+    const deleted = new Set(settings.itRequestsDeleted || []);
     const counts = await withItRequests((list) => {
       let added = 0, updated = 0;
       for (const rec of records) {
+        if (deleted.has(rec.id)) continue; // deleted forever
         const have = list.find((x) => x.id === rec.id);
         if (have) {
           const keep = { priority: have.priority, status: have.status, taskId: have.taskId, addedAt: have.addedAt, source: have.source };
@@ -3137,6 +3176,7 @@ async function syncItRequests() {
       await withItRequests((list) => {
         fresh.forEach((r, i) => {
           const rec = recordFromEmail(r);
+          if ((settings.itRequestsDeleted || []).includes(rec.id)) return;
           const have = list.find((x) => x.id === rec.id);
           if (have) { if (!have.taskId) have.taskId = added[i].id; return; }
           list.push(Object.assign(rec, { priority: "", status: "new", taskId: added[i].id, addedAt: Date.now() }));
