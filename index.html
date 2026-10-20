@@ -373,6 +373,7 @@
   .ib-co { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px 2px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600; color: var(--co); background: color-mix(in srgb, var(--co) 12%, white); border: 1px solid color-mix(in srgb, var(--co) 30%, white); white-space: nowrap; }
   .ib-co::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--co); }
   .ib-swatch { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
+  .ib-more { display: block; margin: 14px auto 0; }
   .fu-tag { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 10.5px; font-weight: 600; white-space: nowrap; }
   .fu-tag.reply { background: #fdebd3; color: #9a5a0c; }
   .fu-tag.overdue { background: #f9dcd7; color: #a3321f; }
@@ -3778,6 +3779,7 @@
   }
   var inboxKind = "all";     // all | needs | fyi
   var inboxOpen = {};        // expanded rows
+  var inboxShow = 200;       // rows drawn; "Show more" adds 200
   var inboxCo = "";          // company filter for shared inboxes ("" = all)
   var INBOX_CO_NAME = { SOI: "SOI", CAS: "CAS", RedSun: "Red Sun", NanoTech: "Nanotech" };
   // A coloured tag for the company address a shared-inbox email was sent to.
@@ -3804,11 +3806,13 @@
   function loadInbox(quiet) {
     api("/api/inbox?days=" + inboxDays).then(function (data) {
       inboxError = null;
-      var sig = JSON.stringify(data.items);
+      var sig = JSON.stringify([data.items, data.followUps, data.followStatus]);
       var same = sig === inboxSig;
       inboxSig = sig;
       inboxData = data;
       updateInboxBadge();
+      // While a follow-up list is being built, check back sooner.
+      if (data.followStatus && data.followStatus.syncing && data.followStatus.syncing.length && page === "inbox") setTimeout(function () { if (page === "inbox") loadInbox(true); }, 30000);
       if (quiet && same) return;
       drawInbox();
     }).catch(function (err) {
@@ -3841,7 +3845,7 @@
     var inBoxAll = inboxData.items.filter(function (t) { return inboxBox === "all" || t.mailbox === inboxBox; });
     // Company filter, when a shared inbox gets mail for more than one company.
     var cosHere = {};
-    inBoxAll.forEach(function (t) { if (t.company) cosHere[t.company] = (cosHere[t.company] || 0) + 1; });
+    inBoxAll.concat(inboxData.followUps || []).filter(function (t) { return inboxBox === "all" || t.mailbox === inboxBox; }).forEach(function (t) { if (t.company) cosHere[t.company] = (cosHere[t.company] || 0) + 1; });
     var coKeys = ["SOI", "CAS", "RedSun", "NanoTech"].filter(function (k) { return cosHere[k]; });
     if (inboxCo && !cosHere[inboxCo]) inboxCo = "";
     var inBox = inBoxAll.filter(function (t) { return !inboxCo || t.company === inboxCo; });
@@ -3856,7 +3860,9 @@
     }
     var problems = (inboxData.errors || []).filter(function (x) { return inboxBox === "all" || x.mailbox === inboxBox; });
     var unread = inBox.filter(function (t) { return !t.isRead && !t.waiting; }), read = inBox.filter(function (t) { return t.isRead && !t.waiting; });
-    var follow = inBox.filter(function (t) { return t.followUp; });
+    // Follow-ups come from the server's follow-up list (last 14 days), not
+    // just the mail in this window.
+    var follow = (inboxData.followUps || []).filter(function (t) { return (inboxBox === "all" || t.mailbox === inboxBox) && (!inboxCo || t.company === inboxCo); });
     var side = inboxRead === "read" ? read : inboxRead === "follow" ? follow : unread;
     var kindOf = function (k) { return side.filter(function (t) { return k === "all" || (k === "needs") === !!t.needsYou; }); };
     var list = kindOf(inboxKind);
@@ -3880,6 +3886,8 @@
     // Group by day (items come newest first). Follow up: waiting on you,
     // then waiting on them, oldest first.
     var groups = [], cur = null;
+    var more = Math.max(0, list.length - inboxShow);
+    list = list.slice(0, inboxShow);
     if (inboxRead === "follow") {
       var oldest = function (a, b) { return String(a.followUp.since).localeCompare(String(b.followUp.since)); };
       var mineW = list.filter(function (t) { return t.followUp.kind === "reply"; }).sort(oldest);
@@ -3898,10 +3906,14 @@
       : inboxRead === "unread"
       ? (inboxKind === "all" ? "No unread mail in the last " + span + ". 🎉" : "Nothing unread here.")
       : "Nothing read in the last " + span + (inboxKind === "all" ? "." : " here.");
-    box.innerHTML = problems.map(function (x) { return '<div class="banner">' + E(boxLabel(x.mailbox)) + " (" + E(x.mailbox) + "): " + E(x.error) + "</div>"; }).join("") + bar +
+    var syncing = ((inboxData.followStatus || {}).syncing || []).filter(function (m) { return inboxBox === "all" || m === inboxBox; });
+    var cappedHere = (inboxData.capped || []).filter(function (m) { return inboxBox === "all" || m === inboxBox; });
+    var notes = (inboxRead === "follow" && syncing.length ? '<div class="banner">Building the follow-up list for ' + E(syncing.map(boxLabel).join(", ")) + ". The first time takes a minute or two for a busy inbox; this page checks again on its own.</div>" : "") +
+      (inboxRead !== "follow" && cappedHere.length ? '<p class="small-note ib-legend">' + E(cappedHere.map(boxLabel).join(", ")) + " had more mail than fits in this window, so only the newest 1,000 are listed" + (inboxDays > 1 ? " — pick <b>Day</b> to see everything recent" : "") + ". Follow up still covers the last 14 days.</p>" : "");
+    box.innerHTML = problems.map(function (x) { return '<div class="banner">' + E(boxLabel(x.mailbox)) + " (" + E(x.mailbox) + "): " + E(x.error) + "</div>"; }).join("") + bar + notes +
       (groups.length ? groups.map(function (g) {
         return '<section class="ib-day"><h3 class="ib-day-h">' + E(g.label) + '<span class="ib-n">' + g.rows.length + "</span></h3>" + g.rows.map(mailRow).join("") + "</section>";
-      }).join("") : '<div class="card empty">' + empty + "</div>");
+      }).join("") + (more ? '<button type="button" class="ib-more" data-inbox-more>Show ' + Math.min(more, 200) + " more (" + more + " left)</button>" : "") : '<div class="card empty">' + empty + "</div>");
 
     function mailRow(t) {
       var open = !!inboxOpen[t.id];
@@ -3913,7 +3925,7 @@
         '<button type="button" class="ib-main" data-inbox-row="' + E(t.id) + '" aria-expanded="' + open + '">' +
           '<span class="ib-dot' + (t.needsYou ? " needs" : "") + '" title="' + E(t.needsYou ? "Needs you — " + t.reason : "FYI — " + t.reason) + '"></span>' +
           '<span class="ib-from">' + (t.waiting ? '<span class="ib-to">To </span>' : "") + E(t.from.name || t.from.email) + (t.messages > 1 ? ' <span class="ib-count">' + t.messages + "</span>" : "") + "</span>" +
-          '<span class="ib-text"><span class="ib-subj">' + E(t.subject) + '</span><span class="ib-prev"> — ' + E(t.preview || "") + "</span></span>" +
+          '<span class="ib-text"><span class="ib-subj">' + E(t.subject) + '</span>' + (t.preview ? '<span class="ib-prev"> — ' + E(t.preview) + "</span>" : "") + "</span>" +
           '<span class="ib-meta">' + fuTag(t) + inboxCoTag(t) + (t.flagged ? '<span title="Flagged">⚑</span>' : "") + (t.important ? '<span title="High importance">!</span>' : "") + (t.attachments ? '<span title="Attachments">📎</span>' : "") +
             '<span class="ib-time">' + E(time) + "</span></span></button>" +
         (open ? '<div class="ib-detail">' +
@@ -3938,7 +3950,9 @@
     var tb = e.target.closest && e.target.closest("[data-inbox-box]");
     if (tb) { inboxBox = tb.dataset.inboxBox; drawInbox(); return; }
     var rd = e.target.closest && e.target.closest("[data-inbox-read]");
-    if (rd) { inboxRead = rd.dataset.inboxRead; drawInbox(); return; }
+    if (rd) { inboxRead = rd.dataset.inboxRead; inboxShow = 200; drawInbox(); return; }
+    var mo = e.target.closest && e.target.closest("[data-inbox-more]");
+    if (mo) { inboxShow += 200; drawInbox(); return; }
     var cb = e.target.closest && e.target.closest("[data-inbox-co]");
     if (cb) { inboxCo = cb.dataset.inboxCo; drawInbox(); return; }
     var kd = e.target.closest && e.target.closest("[data-inbox-kind]");

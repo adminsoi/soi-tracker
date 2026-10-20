@@ -42,6 +42,8 @@ const {
   withSops,
   getPerformance,
   withPerformance,
+  getMailIndex,
+  withMailIndex,
   getQbr,
   withQbr,
 } = require("./s3store");
@@ -49,7 +51,7 @@ const { sendMail, mailConfigured } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError, nameFromTitle } = require("./calendar");
 const { hrEvents, cleanFeedUrl, FeedError } = require("./hrcal");
 const { itRequestsConfigured, fetchItRequests, IT_REQUESTS_MAILBOX, parseFormWorkbook, recordFromEmail, FormFileError, officeStamp } = require("./itrequests");
-const { inboxThreads, followUpData, MailError } = require("./mail");
+const { inboxThreads, syncFollowIndex, MailError } = require("./mail");
 const { pentagonQuery } = require("./pentagon");
 const {
   PENTAGON_VIEWS,
@@ -1176,43 +1178,62 @@ function isCustomer(addr, internal) {
   if (internal.has(domain) || companyOfAddress(domain)) return false;
   return !AUTOMATED_RE.test(local);
 }
-function addFollowUps(items, box, fu, extraSent, internal, now) {
-  const lastOut = new Map(), lastIn = new Map();
-  for (const m of fu.sent.concat(extraSent || [])) if (!lastOut.has(m.conv) || m.at > lastOut.get(m.conv)) lastOut.set(m.conv, m.at);
-  for (const m of fu.inbound) {
-    if (!m.conv || !isCustomer(m.from.email, internal)) continue;
-    const cur = lastIn.get(m.conv);
-    if (!cur || m.at > cur.at) lastIn.set(m.conv, m);
-  }
+// Follow-ups for one inbox from its index (mail.js syncFollowIndex). A
+// shared inbox also counts replies sent from your own mailbox (ownIdx).
+function followUpsFor(box, idx, ownIdx, now) {
   const hours = (at) => Math.max(0, Math.round((now - Date.parse(at)) / 3600000));
-  for (const t of items) {
-    if (t.mailbox !== box || !t.needsYou) continue; // not list / CC mail
-    const inc = lastIn.get(t.conv);
-    if (!inc) continue;
-    const out = lastOut.get(t.conv);
-    if (out && out >= inc.at) continue;
-    const h = hours(inc.at);
-    t.followUp = { kind: "reply", since: inc.at, hours: h, overdue: h >= OVERDUE_HOURS, who: inc.from };
+  const out = [];
+  for (const [conv, e] of Object.entries((idx && idx.convs) || {})) {
+    const ownOut = ownIdx && ownIdx !== idx && ownIdx.convs && ownIdx.convs[conv] && ownIdx.convs[conv].out;
+    const lastOut = [e.out && e.out.at, ownOut && ownOut.at].filter(Boolean).sort().pop() || "";
+    if (e.in && e.in.direct && lastOut < e.in.at) {
+      const h = hours(e.in.at), hit = companyOfAddress(e.in.to);
+      out.push({ id: `${box}|f|${conv}`, conv, mailbox: box, subject: e.in.subject, from: e.in.from, to: [], cc: [], receivedAt: e.in.at, webLink: e.in.link,
+        isRead: true, needsYou: true, preview: "", reason: "Customer email", sentTo: e.in.to, company: hit ? hit.co : undefined,
+        followUp: { kind: "reply", since: e.in.at, hours: h, overdue: h >= OVERDUE_HOURS, who: e.in.from } });
+    } else if (e.out && e.out.cust && (!e.in || e.in.at < e.out.at)) {
+      const h = hours(e.out.at);
+      if (h < WAIT_HOURS) continue;
+      out.push({ id: `${box}|w|${conv}`, conv, mailbox: box, waiting: true, subject: e.out.subject, from: e.out.cust, to: [e.out.cust], cc: [], receivedAt: e.out.at, webLink: e.out.link,
+        isRead: true, needsYou: false, preview: "", reason: "You emailed them",
+        followUp: { kind: "waiting", since: e.out.at, hours: h, who: e.out.cust } });
+    }
   }
-  // Waiting on them: the latest thing sent in each conversation.
-  const latestSent = new Map();
-  for (const m of fu.sent) if (!latestSent.has(m.conv) || m.at > latestSent.get(m.conv).at) latestSent.set(m.conv, m);
-  const waiting = [];
-  for (const [conv, m] of latestSent) {
-    const cust = m.to.concat(m.cc).find((r) => isCustomer(r.email, internal));
-    if (!cust) continue;
-    const back = lastIn.get(conv);
-    if (back && back.at > m.at) continue;
-    const h = hours(m.at);
-    if (h < WAIT_HOURS) continue;
-    waiting.push({
-      id: `${box}|w|${conv}`, conv, mailbox: box, waiting: true, isRead: true, needsYou: false, unread: 0, messages: 1,
-      subject: m.subject, from: cust, to: m.to, cc: m.cc, receivedAt: m.at, preview: m.preview, webLink: m.webLink,
-      reason: "You emailed them", followUp: { kind: "waiting", since: m.at, hours: h, who: cust },
-    });
-  }
-  return waiting;
+  return out;
 }
+
+// Keeps the follow-up index fresh for inboxes someone has opened in the
+// last two days, every few minutes, in the background.
+const FOLLOW_EVERY_MS = 3 * 60 * 1000;
+const followViewed = new Map(); // mailbox -> last time someone opened it
+const followRunning = new Set();
+async function syncFollowUps(boxes) {
+  const todo = boxes.filter((b) => !followRunning.has(b));
+  if (!todo.length) return;
+  todo.forEach((b) => followRunning.add(b));
+  try {
+    const users = await getUsers();
+    const internal = internalDomainSet(users, [...followViewed.keys()]);
+    const isCust = (a) => isCustomer(a, internal);
+    const doc = await getMailIndex();
+    for (const box of todo) {
+      const idx = doc[box] || {};
+      try {
+        await syncFollowIndex(box, idx, isCust);
+        await withMailIndex((d) => { d[box] = idx; });
+      } catch (err) {
+        console.error(`Follow-up sync for ${box} failed (will retry):`, err.message);
+      }
+    }
+  } finally {
+    todo.forEach((b) => followRunning.delete(b));
+  }
+}
+setInterval(() => {
+  const cutoff = Date.now() - 2 * 24 * 3600 * 1000;
+  const boxes = [...followViewed].filter(([, at]) => at > cutoff).map(([b]) => b);
+  if (boxes.length) syncFollowUps(boxes).catch((err) => console.error("Follow-up sync:", err.message));
+}, FOLLOW_EVERY_MS);
 
 app.get(
   "/api/inbox",
@@ -1248,19 +1269,24 @@ app.get(
           errors.push({ mailbox: box, error: why });
         }
       });
-      // Customer follow-ups, per inbox that loaded. A shared inbox also
-      // counts replies sent from your own mailbox.
+      // Customer follow-ups from the background index. The first time an
+      // inbox is opened, its index is built in the background (a minute or
+      // so for a busy inbox); the page says so meanwhile.
       const loaded = [own, ...extras.filter((m, i) => results[i].status === "fulfilled")];
-      const fus = await Promise.allSettled(loaded.map((m) => followUpData(m)));
-      const internal = internalDomainSet((await getUsers()), [own, ...extras]);
-      const ownFu = fus[0].status === "fulfilled" ? fus[0].value : null;
+      loaded.forEach((m) => followViewed.set(m, Date.now()));
+      const doc = await getMailIndex();
+      const fresh = loaded.filter((m) => !doc[m] || !doc[m].syncedAt);
+      if (fresh.length) syncFollowUps(fresh).catch((err) => console.error("Follow-up sync:", err.message));
       const now = Date.now();
-      loaded.forEach((box, i) => {
-        if (fus[i].status !== "fulfilled") { console.error(`Follow-ups for ${box} skipped:`, fus[i].reason && fus[i].reason.message); return; }
-        items.push(...addFollowUps(items, box, fus[i].value, box === own || !ownFu ? [] : ownFu.sent, internal, now));
-      });
+      const followUps = [];
+      loaded.forEach((box) => { if (doc[box] && doc[box].syncedAt) followUps.push(...followUpsFor(box, doc[box], box === own ? null : doc[own], now)); });
+      // Colour the rows in Unread / Read that have a follow-up.
+      const fuByConv = new Map(followUps.map((f) => [f.mailbox + "|" + f.conv, f.followUp]));
+      for (const t of items) { const f = fuByConv.get(t.mailbox + "|" + t.conv); if (f) t.followUp = f; }
+      const followStatus = { syncing: loaded.filter((m) => !doc[m] || !doc[m].syncedAt || followRunning.has(m)) };
+      const capped = [mine.capped ? own : null, ...extras.map((m, i) => results[i].status === "fulfilled" && results[i].value.capped ? m : null)].filter(Boolean);
       items.sort((a, b) => String(b.receivedAt).localeCompare(String(a.receivedAt)));
-      res.json({ mailbox: own, mailboxes: [own, ...extras], days, since: mine.since, items, errors, colors: calColors(await getSettings()) });
+      res.json({ mailbox: own, mailboxes: [own, ...extras], days, since: mine.since, items, errors, capped, followUps, followStatus, colors: calColors(await getSettings()) });
     } catch (err) {
       if (err instanceof MailError) return res.status(409).json({ error: err.message, code: err.code });
       throw err;
