@@ -1131,6 +1131,26 @@ app.get(
 // inboxes" in /admin.html) — never a mailbox named by the browser. Each item
 // says which mailbox it's from; items from extra mailboxes get ids prefixed
 // with the mailbox so "Done" ticks don't collide.
+// Which company address a message was sent to, for shared inboxes that
+// several company addresses deliver into (e.g. a supervisor mailbox for
+// SOI, CAS, Red Sun and Nanotech). Looks at the To / CC addresses, split
+// into words: "nano" / "nanotech" → NanoTech, "redsun" → RedSun, "cas" →
+// CAS, "soi" / "soiaviation" → SOI. An address with the mailbox's own name
+// (e.g. supervisor@…) wins over others on the same message.
+const INBOX_CO_WORDS = [[/^nano(tech)?/, "NanoTech"], [/^red-?sun/, "RedSun"], [/^cas$|^casaviation$/, "CAS"], [/^soi(aviation)?$/, "SOI"]];
+function companyOfAddress(addr) {
+  const words = String(addr || "").toLowerCase().split(/[@.\-_+]+/).filter(Boolean);
+  for (const [re, co] of INBOX_CO_WORDS) if (words.some((w) => re.test(w))) return { co, address: String(addr).toLowerCase() };
+  return null;
+}
+function companyOfMessage(t, mailbox) {
+  const local = String(mailbox || "").split("@")[0].toLowerCase();
+  const addrs = [...(t.to || []), ...(t.cc || [])].map((r) => String(r.email || "").toLowerCase()).filter(Boolean);
+  const hits = addrs.map(companyOfAddress).filter(Boolean);
+  if (!hits.length) return null;
+  return hits.find((h) => local && h.address.split("@")[0].includes(local)) || hits[0];
+}
+
 app.get(
   "/api/inbox",
   authMiddleware,
@@ -1146,7 +1166,17 @@ app.get(
       const results = await Promise.allSettled(extras.map((m) => inboxThreads(m, days)));
       results.forEach((r, i) => {
         const box = extras[i];
-        if (r.status === "fulfilled") r.value.items.forEach((t) => items.push(Object.assign({}, t, { id: `${box}|${t.id}`, mailbox: box })));
+        if (r.status === "fulfilled") r.value.items.forEach((t) => {
+          const hit = companyOfMessage(t, box);
+          const extra = hit ? { company: hit.co, sentTo: hit.address } : {};
+          // Sent straight to one of this inbox's company addresses (e.g.
+          // supervisor@ at any of the four) counts as sent to the inbox.
+          const local = box.split("@")[0].toLowerCase();
+          if (hit && !t.needsYou && local && hit.address.split("@")[0] === local && (t.to || []).some((r) => String(r.email || "").toLowerCase() === hit.address)) {
+            Object.assign(extra, { needsYou: true, reason: "Sent to " + hit.address });
+          }
+          items.push(Object.assign({}, t, { id: `${box}|${t.id}`, mailbox: box }, extra));
+        });
         else {
           const code = r.reason instanceof MailError ? r.reason.code : "";
           const why = code === "not_found" ? `There's no Microsoft 365 mailbox called ${box}.`
@@ -1156,7 +1186,7 @@ app.get(
         }
       });
       items.sort((a, b) => String(b.receivedAt).localeCompare(String(a.receivedAt)));
-      res.json({ mailbox: own, mailboxes: [own, ...extras], days, since: mine.since, items, errors });
+      res.json({ mailbox: own, mailboxes: [own, ...extras], days, since: mine.since, items, errors, colors: calColors(await getSettings()) });
     } catch (err) {
       if (err instanceof MailError) return res.status(409).json({ error: err.message, code: err.code });
       throw err;

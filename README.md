@@ -355,6 +355,15 @@ each card says which inbox it came from. If Mail.Read is limited to certain
 mailboxes, add the shared ones to that policy too, or the page says it
 can't read them.
 
+**Which company it was sent to:** a shared inbox that several company
+addresses deliver into (for example one supervisor mailbox for
+`supervisor@` at SOI, CAS, Red Sun and Nanotech) shows a coloured company tag
+on each email, using the HR calendar's company colours, plus an **All
+companies / SOI / CAS / Red Sun / Nanotech** filter. The company comes from
+the To / CC addresses: a word "nano"/"nanotech", "redsun", "cas" or
+"soi"/"soiaviation" in the address. Email sent straight to one of the inbox's
+own addresses (same name before the @) counts as **Needs you**.
+
 One-time Microsoft 365 setup: add **Microsoft Graph → Application permission
 → `Mail.Read`** to the same app registration as the calendar, grant admin
 consent, and (strongly recommended) limit it to SOI staff mailboxes with

@@ -370,6 +370,9 @@
   .ib-subj { font-weight: 600; }
   .ib-prev { color: var(--muted); }
   .ib-meta { display: flex; gap: 8px; align-items: center; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+  .ib-co { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px 2px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600; color: var(--co); background: color-mix(in srgb, var(--co) 12%, white); border: 1px solid color-mix(in srgb, var(--co) 30%, white); white-space: nowrap; }
+  .ib-co::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--co); }
+  .ib-swatch { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
   .ib-row.is-read .ib-from, .ib-row.is-read .ib-subj { font-weight: 500; }
   .ib-row.is-read .ib-main { color: #6e6255; }
   .ib-row.open { background: #fffaf3; }
@@ -3759,6 +3762,14 @@
   var inboxRead = "unread";  // unread | read
   var inboxKind = "all";     // all | needs | fyi
   var inboxOpen = {};        // expanded rows
+  var inboxCo = "";          // company filter for shared inboxes ("" = all)
+  var INBOX_CO_NAME = { SOI: "SOI", CAS: "CAS", RedSun: "Red Sun", NanoTech: "Nanotech" };
+  // A coloured tag for the company address a shared-inbox email was sent to.
+  function inboxCoTag(t, long) {
+    if (!t.company) return "";
+    var c = (inboxData.colors || {})[t.company] || "#948575";
+    return '<span class="ib-co" style="--co:' + E(c) + '" title="Sent to ' + E(t.sentTo || "") + '">' + E(INBOX_CO_NAME[t.company] || t.company) + (long && t.sentTo ? " · " + E(t.sentTo) : "") + "</span>";
+  }
   function boxLabel(m) { return inboxData && m === inboxData.mailbox ? "Mine" : String(m).split("@")[0] + "@"; }
 
   function renderInbox() {
@@ -3811,7 +3822,13 @@
     if (!box || !inboxData) return;
     var boxes = inboxData.mailboxes || [inboxData.mailbox];
     if (inboxBox !== "all" && boxes.indexOf(inboxBox) === -1) inboxBox = "all";
-    var inBox = inboxData.items.filter(function (t) { return inboxBox === "all" || t.mailbox === inboxBox; });
+    var inBoxAll = inboxData.items.filter(function (t) { return inboxBox === "all" || t.mailbox === inboxBox; });
+    // Company filter, when a shared inbox gets mail for more than one company.
+    var cosHere = {};
+    inBoxAll.forEach(function (t) { if (t.company) cosHere[t.company] = (cosHere[t.company] || 0) + 1; });
+    var coKeys = ["SOI", "CAS", "RedSun", "NanoTech"].filter(function (k) { return cosHere[k]; });
+    if (inboxCo && !cosHere[inboxCo]) inboxCo = "";
+    var inBox = inBoxAll.filter(function (t) { return !inboxCo || t.company === inboxCo; });
     var tabs = $("#inbox-tabs");
     if (tabs) {
       var unreadIn = function (m) { return inboxData.items.filter(function (t) { return (m === "all" || t.mailbox === m) && !t.isRead; }).length; };
@@ -3835,7 +3852,10 @@
       }).join("") + "</div>";
     };
     var bar = '<div class="ib-bar">' + seg(inboxRead, "data-inbox-read", [["unread", "Unread", unread.length], ["read", "Read", read.length]]) +
-      seg(inboxKind, "data-inbox-kind", [["all", "Everything", side.length], ["needs", "Needs you", kindOf("needs").length], ["fyi", "FYI", kindOf("fyi").length]]) + "</div>" +
+      seg(inboxKind, "data-inbox-kind", [["all", "Everything", side.length], ["needs", "Needs you", kindOf("needs").length], ["fyi", "FYI", kindOf("fyi").length]]) +
+      (coKeys.length > 1 ? '<div class="seg ib-cos"><button type="button" data-inbox-co="" class="' + (!inboxCo ? "active" : "") + '">All companies</button>' + coKeys.map(function (k) {
+        return '<button type="button" data-inbox-co="' + k + '" class="' + (inboxCo === k ? "active" : "") + '"><span class="ib-swatch" style="background:' + E((inboxData.colors || {})[k] || "#948575") + '"></span>' + E(INBOX_CO_NAME[k]) + ' <span class="ib-n">' + cosHere[k] + "</span></button>";
+      }).join("") + "</div>" : "") + "</div>" +
       '<p class="small-note ib-legend"><span class="ib-dot needs"></span>Needs you: sent to you directly, flagged or marked important. <span class="ib-dot"></span>FYI: you\'re CC\'d, or it went to a group or list.</p>';
 
     // Group by day (items come newest first).
@@ -3864,12 +3884,13 @@
           '<span class="ib-dot' + (t.needsYou ? " needs" : "") + '" title="' + E(t.needsYou ? "Needs you — " + t.reason : "FYI — " + t.reason) + '"></span>' +
           '<span class="ib-from">' + E(t.from.name || t.from.email) + (t.messages > 1 ? ' <span class="ib-count">' + t.messages + "</span>" : "") + "</span>" +
           '<span class="ib-text"><span class="ib-subj">' + E(t.subject) + '</span><span class="ib-prev"> — ' + E(t.preview || "") + "</span></span>" +
-          '<span class="ib-meta">' + (t.flagged ? '<span title="Flagged">⚑</span>' : "") + (t.important ? '<span title="High importance">!</span>' : "") + (t.attachments ? '<span title="Attachments">📎</span>' : "") +
+          '<span class="ib-meta">' + inboxCoTag(t) + (t.flagged ? '<span title="Flagged">⚑</span>' : "") + (t.important ? '<span title="High importance">!</span>' : "") + (t.attachments ? '<span title="Attachments">📎</span>' : "") +
             '<span class="ib-time">' + E(time) + "</span></span></button>" +
         (open ? '<div class="ib-detail">' +
           '<div class="mail-tags"><span class="pill' + (t.needsYou ? " rose" : "") + '">' + E(t.needsYou ? "Needs you · " + t.reason : "FYI · " + t.reason) + "</span>" +
             (boxes.length > 1 ? '<span class="pill" title="' + E(t.mailbox) + '">' + E(t.mailbox === inboxData.mailbox ? "Your inbox" : t.mailbox) + "</span>" : "") +
             (t.unread ? '<span class="pill">' + t.unread + " unread</span>" : "") + "</div>" +
+          (t.company ? '<div style="margin:2px 0 6px;">' + inboxCoTag(t, true) + "</div>" : "") +
           '<div class="small-note">From ' + E(t.from.email || t.from.name) + " · To: " + E(names(t.to) || "—") + (t.cc.length ? " · cc: " + E(names(t.cc)) : "") + "</div>" +
           (t.preview ? '<p class="mail-preview">' + E(t.preview) + (t.preview.length >= 400 ? "…" : "") + "</p>" : "") +
           (link ? '<a class="mail-open" href="' + E(link) + '" target="_blank" rel="noopener noreferrer">Open in Outlook ↗</a>' : "") + "</div>" : "") +
@@ -3885,6 +3906,8 @@
     if (tb) { inboxBox = tb.dataset.inboxBox; drawInbox(); return; }
     var rd = e.target.closest && e.target.closest("[data-inbox-read]");
     if (rd) { inboxRead = rd.dataset.inboxRead; drawInbox(); return; }
+    var cb = e.target.closest && e.target.closest("[data-inbox-co]");
+    if (cb) { inboxCo = cb.dataset.inboxCo; drawInbox(); return; }
     var kd = e.target.closest && e.target.closest("[data-inbox-kind]");
     if (kd) { inboxKind = kd.dataset.inboxKind; drawInbox(); return; }
     var row = e.target.closest && e.target.closest("[data-inbox-row]");
