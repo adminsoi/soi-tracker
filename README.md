@@ -610,8 +610,11 @@ pick one person.
 Tick **Show in team breakdown** on a login in `/admin.html` (and set their
 Pentagon code). Managers then see, per person, their RFQs, Quotes and tasks
 created (Procurement) and Sales Orders, Purchase Orders and tasks created
-(Purchasing) on Overview. Pentagon counts cover what each query returns (by
-default the last 14 days).
+(Purchasing) on Overview. Each person only shows under their own
+departments: Procurement people under Procurement, Purchasing people under
+Purchasing (someone in both shows in both). Business Development →
+Analytics' **By person** table follows the same rule. Pentagon counts cover
+what each query returns (by default the last 14 days).
 
 Anyone in Procurement or Purchasing can open their own department's lists.
 The server only runs the dashboards' own Pentagon queries (listed in
