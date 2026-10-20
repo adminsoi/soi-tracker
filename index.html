@@ -762,7 +762,9 @@
     var fin = page === "departments" && activeDept === "Accounting & Finance" && canSeeFinance() ? loadFinance() : Promise.resolve();
     loadMineCount().catch(function () {});
     return Promise.all([api(url), pentagon, fin]).then(function (r) {
-      tasks = r[0];
+      // IT requests live on IT → Requests, not as tasks (older ones were
+      // also added as IT tasks; those stay hidden).
+      tasks = r[0].filter(function (t) { return t.source !== "form"; });
       cards = r[1].cards || [];
       pentagonErrors = r[1].errors || [];
       setSync("on", "Live");
@@ -885,10 +887,26 @@
       }).join("") + "</div></div>";
   }
 
+  // On IT, Tasks and Projects show your own: ones you're responsible for or
+  // added. Managers can switch to everyone's.
+  var itScope = "mine";
+  function isMine(t) { return sameUser(t.owner, me.username) || sameUser(t.createdBy, me.username); }
+  function deptTasks(dept) {
+    return tasks.filter(function (t) {
+      if (t.department !== dept) return false;
+      if (dept === "IT" && (itScope === "mine" || !isManager())) {
+        if (isMine(t)) return true;
+        // Sub-tasks under your own project.
+        if (t.parentId && tasks.some(function (p) { return p.id === t.parentId && isMine(p); })) return true;
+        // A project shows when one of your sub-tasks is under it.
+        return tasks.some(function (s) { return s.parentId === t.id && isMine(s); });
+      }
+      return true;
+    });
+  }
   // Everything on a department: tracker tasks and Pentagon cards.
   function deptItems(dept) {
-    return tasks.filter(function (t) { return t.department === dept; })
-      .concat(cards.filter(function (c) { return c.department === dept; }));
+    return deptTasks(dept).concat(cards.filter(function (c) { return c.department === dept; }));
   }
   function openCount(dept) {
     return deptItems(dept).filter(function (t) { return !isDone(t); }).length;
@@ -905,9 +923,10 @@
     if (dept === "Business Development" && (activeCompany === "SOI Aviation" || (activeCompany === ALL && hasSOI()))) subs.push({ id: "analytics", label: "Analytics" });
     // Warehouse opens on Insights (the first tab is where a department lands).
     if (dept === "Warehouse" && (me.leadership || me.fullAccess || me.departments.indexOf("Warehouse") !== -1)) subs.push({ id: "insights", label: "Insights" });
+    // IT opens on Requests.
+    if (dept === "IT" && canSeeItRequests()) subs.push({ id: "requests", label: "Requests" });
     subs.push({ id: "tasks", label: "Tasks" });
     subs.push({ id: "projects", label: "Projects" });
-    if (dept === "IT" && canSeeItRequests()) subs.push({ id: "requests", label: "Requests" });
     if (dept === "IT" && me.itNotebook) subs.push({ id: "resolved", label: "Resolved" });
     subs.push({ id: "sops", label: "SOPs" });
     views.forEach(function (v) { subs.push({ id: v.id, label: v.label }); });
@@ -1071,7 +1090,12 @@
         return '<button type="button" data-source="' + E(s.id) + '" class="' + (s.id === showSource ? "active" : "") + '">' + E(s.label) + "</button>";
       }).join("") + "</div>";
     }
-    if (isManager()) {
+    if (dept === "IT" && isManager()) {
+      html += '<div class="seg">' + [["mine", "Mine"], ["all", "Everyone's"]].map(function (x) {
+        return '<button type="button" data-it-scope="' + x[0] + '" class="' + (itScope === x[0] ? "active" : "") + '">' + x[1] + "</button>";
+      }).join("") + "</div>";
+    }
+    if (isManager() && !(dept === "IT" && itScope === "mine")) {
       var people = {};
       deptItems(dept).forEach(function (t) { if (t.owner) people[t.owner] = 1; if (t.createdBy && !isCard(t)) people[t.createdBy] = 1; });
       var names = Object.keys(people).sort(function (a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); });
@@ -1199,7 +1223,7 @@
       '<td class="row-tools">' + delButton(s) + "</td></tr>";
   }
   function renderProjectTable(dept) {
-    var all = tasks.filter(function (t) { return t.department === dept && itemKind(t) !== "task"; });
+    var all = deptTasks(dept).filter(function (t) { return itemKind(t) !== "task"; });
     var ids = {};
     all.forEach(function (t) { ids[t.id] = true; });
     var tops = all.filter(function (t) { return !t.parentId || !ids[t.parentId]; });
@@ -1257,7 +1281,7 @@
       '<td class="row-tools">' + delButton(t) + "</td></tr>";
   }
   function renderTaskTable(dept) {
-    var all = tasks.filter(function (t) { return t.department === dept && itemKind(t) === "task"; });
+    var all = deptTasks(dept).filter(function (t) { return itemKind(t) === "task"; });
     var fields = taskFields(dept, false), scope = "tasks:" + dept;
     var pre = filtered(all), list = sortRows(applyColFilters(scope, fields, pre));
     var ds = drafts.filter(function (d) { return d.department === dept && !d.parentId && d.kind !== "project"; });
@@ -1605,7 +1629,7 @@
             (r.source === "manual" ? '<span class="co-note">Added by hand' + (r.addedBy ? " · " + E(r.addedBy) : "") + "</span>" : "") +
             (r.status === "done" && (r.resolution || r.notifiedAt) ? '<span class="itr-note" style="border-left-color:#9fbf8f;"><b>Resolved' + (r.resolution ? ":</b> " + E(r.resolution) : "</b>") + (r.notifiedAt ? '<br><span class="small-note">Emailed ' + E(r.email) + " " + E(new Date(r.notifiedAt).toLocaleDateString()) + (r.ref ? " · " + E(r.ref) : "") + "</span>" : "") + "</span>" : "") +
             itrReplies(r, can) +
-            (r.taskId ? '<span class="co-note">On IT → Tasks' + (r.taskOwner ? " · " + E(r.taskOwner) : "") + "</span>" : "") + dupCell(r) + "</td>" +
+            dupCell(r) + "</td>" +
           "<td>" + E(r.urgency || "—") + "</td><td>" + prioCell(r) + "</td><td>" + statusCell(r) + "</td>" +
           "<td>" + E(r.contact || "—") + (r.phone ? '<span class="co-note">' + E(r.phone) + "</span>" : "") + (r.email ? '<span class="co-note">' + E(r.email) + "</span>" : "") + "</td></tr>";
       }).join("") : '<tr><td colspan="' + (can ? 8 : 7) + '" class="empty">' + (itr.tab === "archived" ? "Nothing archived. Select requests and choose Archive, or use Archive under a status." : itr.tab === "dupes" ? "No duplicates." : all.length ? "Nothing here." : can ? "No requests yet — use Import from Excel for past form answers." : "No requests yet.") + "</td></tr>") +
@@ -1616,7 +1640,7 @@
         return '<tr><td><button type="button" class="itr-person" data-itr-who="' + E(p.key) + '">' + E(p.name) + "</button></td><td>" + E(p.company || "—") + "</td><td>" + p.n + "</td><td>" + (p.new || 0) + "</td><td>" + (p.progress || 0) + "</td><td>" + (p.done || 0) + "</td><td>" + p.p12 + "</td><td>" + E(fmtDate(p.last)) + "</td></tr>";
       }).join("") : '<tr><td colspan="8" class="empty">No requests yet.</td></tr>') + "</tbody></table></div>" +
       '<p class="small-note" style="margin-top:12px;">Priority is your internal rating: ' + IT_PRIOS.map(function (p) { return p.id + " " + p.note; }).join(" · ") +
-      ". On a request that's on the IT board, priority and Resolved carry over to that task." +
+      "." +
       " New form answers arrive every few minutes as New.</p>";
   }
   // Replies to the "Resolved" email. A new one is flagged until someone
@@ -1648,7 +1672,7 @@
       "</div>" +
       field("issue", "What's the issue", '<textarea id="itf-issue" rows="3" data-itr-f="issue" placeholder="e.g. Outlook keeps asking for a password">' + E(f.issue || "") + "</textarea>") +
       '<div class="nb-foot"><button type="button" class="primary" data-itr-save' + (itr.saving ? " disabled" : "") + ">" + (itr.saving ? "Adding…" : "Add ticket") + '</button><button type="button" class="text-button" data-itr-cancel>Cancel</button>' +
-      '<span class="small-note">It starts as New and goes on IT → Tasks for the IT default person.</span></div></div>';
+      '<span class="small-note">It starts as New here on Requests.</span></div></div>';
   }
   document.addEventListener("input", function (e) { var k = e.target.dataset && e.target.dataset.itrF; if (k) itr.form[k] = e.target.value; });
   document.addEventListener("change", function (e) { var k = e.target.dataset && e.target.dataset.itrF; if (k) itr.form[k] = e.target.value; });
@@ -4239,6 +4263,8 @@
     if (cmo && $("#view").contains(cmo)) { var dm = +cmo.dataset.calMonth; calMonth = dm ? shiftMonths(calMonth, dm) : today.slice(0, 7) + "-01"; render(); return; }
     var ww = e.target.closest("[data-who-week]");
     if (ww && $("#view").contains(ww)) { var dw = +ww.dataset.whoWeek; whoWeek = dw ? shiftDays(whoWeek, dw) : today; render(); return; }
+    var sc = e.target.closest("[data-it-scope]");
+    if (sc && $("#view").contains(sc)) { itScope = sc.dataset.itScope; showPerson = ""; render(); return; }
     var t = e.target.closest("[data-co],[data-dept],[data-sub],[data-source],[data-add],[data-add-sub],[data-del],[data-cancel],[data-toggle],[data-fin-del]");
     if (!t || !$("#view").contains(t)) return;
     var d = t.dataset;
