@@ -1405,7 +1405,7 @@
         var g = function (id) { return p.data[id] || 0; };
         return "<tr><td>" + E(p.name) + "</td><td>" + g("rfqs") + "</td><td>" + g("quotes") + "</td><td>" + g("sales_orders") + "</td><td>" + g("purchase_orders") + "</td></tr>";
       }).join("") : '<tr><td colspan="5" class="empty">No Pentagon contacts in this range.</td></tr>') + "</tbody></table></div></div>" +
-      '<p class="small-note" style="margin-top:12px;">People are matched by the Pentagon code on their login and only counted in their own department's lists (RFQs and quotes for Procurement, sales and purchase orders for Purchasing). Business Development projects are under <b>Projects</b>.</p>';
+      '<p class="small-note" style="margin-top:12px;">People are matched by the Pentagon code on their login and only counted in their own department\'s lists (RFQs and quotes for Procurement, sales and purchase orders for Purchasing). Business Development projects are under <b>Projects</b>.</p>';
   }
   document.addEventListener("click", function (e) {
     var b = e.target.closest && e.target.closest("[data-bd-days]");
