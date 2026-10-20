@@ -109,6 +109,12 @@ function getSettings() {
   return readJson("settings", {});
 }
 // Quarterly business review: { quarters: { "2026-Q3": { overrides, notes, rejections } } }.
+// Customer follow-up index for the Work inbox: per mailbox, the latest
+// customer email and the latest reply in each open conversation (who, when,
+// subject — never bodies), plus Microsoft's delta links. See mail.js.
+function getMailIndex() {
+  return readJson("mail_followups", {});
+}
 function getQbr() {
   return readJson("qbr", {});
 }
@@ -142,6 +148,7 @@ let itNotebookQueue = Promise.resolve();
 let sopsQueue = Promise.resolve();
 let performanceQueue = Promise.resolve();
 let qbrQueue = Promise.resolve();
+let mailIndexQueue = Promise.resolve();
 
 function withUsers(mutator) {
   usersQueue = usersQueue.then(async () => {
@@ -257,7 +264,19 @@ function withQbr(mutator) {
   return qbrQueue;
 }
 
+function withMailIndex(mutator) {
+  mailIndexQueue = mailIndexQueue.then(async () => {
+    const doc = await getMailIndex();
+    const result = await mutator(doc);
+    await writeJson("mail_followups", doc);
+    return result;
+  });
+  return mailIndexQueue;
+}
+
 module.exports = {
+  getMailIndex,
+  withMailIndex,
   getQbr,
   withQbr,
   getPerformance,

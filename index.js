@@ -42,6 +42,8 @@ const {
   withSops,
   getPerformance,
   withPerformance,
+  getMailIndex,
+  withMailIndex,
   getQbr,
   withQbr,
 } = require("./s3store");
@@ -49,7 +51,7 @@ const { sendMail, mailConfigured } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError, nameFromTitle } = require("./calendar");
 const { hrEvents, cleanFeedUrl, FeedError } = require("./hrcal");
 const { itRequestsConfigured, fetchItRequests, IT_REQUESTS_MAILBOX, parseFormWorkbook, recordFromEmail, FormFileError, officeStamp } = require("./itrequests");
-const { inboxThreads, MailError } = require("./mail");
+const { inboxThreads, syncFollowIndex, MailError } = require("./mail");
 const { pentagonQuery } = require("./pentagon");
 const {
   PENTAGON_VIEWS,
@@ -1151,6 +1153,88 @@ function companyOfMessage(t, mailbox) {
   return hits.find((h) => local && h.address.split("@")[0].includes(local)) || hits[0];
 }
 
+// Follow-ups with customers. "Customer" = anyone outside the company:
+// not on a login's email domain, the inboxes' domains, INTERNAL_DOMAINS, or
+// a domain with soi / cas / redsun / nano in it; automated senders
+// (no-reply, notifications, …) don't count. Per conversation, from Sent
+// Items and the Inbox (last 14 days):
+//  - Needs reply: the latest customer email is newer than anything sent
+//    back (from that inbox, or for a shared inbox, from your own mailbox
+//    too). Overdue after 24 hours.
+//  - Waiting on them: you emailed a customer 2+ days ago and nothing came
+//    back in that conversation since.
+const AUTOMATED_RE = /^(no-?reply|do-?not-?reply|donotreply|notifications?|notify|mailer-daemon|postmaster|alerts?|bounces?|automated|system|news(letter)?|marketing|info-?noreply)\b/i;
+const WAIT_HOURS = 48, OVERDUE_HOURS = 24;
+function internalDomainSet(users, mailboxes) {
+  const set = new Set(String(process.env.INTERNAL_DOMAINS || "").toLowerCase().split(",").map((d) => d.trim()).filter(Boolean));
+  for (const u of users) if (u.email && u.email.includes("@")) set.add(u.email.split("@")[1].toLowerCase());
+  for (const m of mailboxes) if (m && m.includes("@")) set.add(m.split("@")[1].toLowerCase());
+  return set;
+}
+function isCustomer(addr, internal) {
+  const a = String(addr || "").toLowerCase();
+  if (!a.includes("@")) return false;
+  const [local, domain] = a.split("@");
+  if (internal.has(domain) || companyOfAddress(domain)) return false;
+  return !AUTOMATED_RE.test(local);
+}
+// Follow-ups for one inbox from its index (mail.js syncFollowIndex). A
+// shared inbox also counts replies sent from your own mailbox (ownIdx).
+function followUpsFor(box, idx, ownIdx, now) {
+  const hours = (at) => Math.max(0, Math.round((now - Date.parse(at)) / 3600000));
+  const out = [];
+  for (const [conv, e] of Object.entries((idx && idx.convs) || {})) {
+    const ownOut = ownIdx && ownIdx !== idx && ownIdx.convs && ownIdx.convs[conv] && ownIdx.convs[conv].out;
+    const lastOut = [e.out && e.out.at, ownOut && ownOut.at].filter(Boolean).sort().pop() || "";
+    if (e.in && e.in.direct && lastOut < e.in.at) {
+      const h = hours(e.in.at), hit = companyOfAddress(e.in.to);
+      out.push({ id: `${box}|f|${conv}`, conv, mailbox: box, subject: e.in.subject, from: e.in.from, to: [], cc: [], receivedAt: e.in.at, webLink: e.in.link,
+        isRead: true, needsYou: true, preview: "", reason: "Customer email", sentTo: e.in.to, company: hit ? hit.co : undefined,
+        followUp: { kind: "reply", since: e.in.at, hours: h, overdue: h >= OVERDUE_HOURS, who: e.in.from } });
+    } else if (e.out && e.out.cust && (!e.in || e.in.at < e.out.at)) {
+      const h = hours(e.out.at);
+      if (h < WAIT_HOURS) continue;
+      out.push({ id: `${box}|w|${conv}`, conv, mailbox: box, waiting: true, subject: e.out.subject, from: e.out.cust, to: [e.out.cust], cc: [], receivedAt: e.out.at, webLink: e.out.link,
+        isRead: true, needsYou: false, preview: "", reason: "You emailed them",
+        followUp: { kind: "waiting", since: e.out.at, hours: h, who: e.out.cust } });
+    }
+  }
+  return out;
+}
+
+// Keeps the follow-up index fresh for inboxes someone has opened in the
+// last two days, every few minutes, in the background.
+const FOLLOW_EVERY_MS = 3 * 60 * 1000;
+const followViewed = new Map(); // mailbox -> last time someone opened it
+const followRunning = new Set();
+async function syncFollowUps(boxes) {
+  const todo = boxes.filter((b) => !followRunning.has(b));
+  if (!todo.length) return;
+  todo.forEach((b) => followRunning.add(b));
+  try {
+    const users = await getUsers();
+    const internal = internalDomainSet(users, [...followViewed.keys()]);
+    const isCust = (a) => isCustomer(a, internal);
+    const doc = await getMailIndex();
+    for (const box of todo) {
+      const idx = doc[box] || {};
+      try {
+        await syncFollowIndex(box, idx, isCust);
+        await withMailIndex((d) => { d[box] = idx; });
+      } catch (err) {
+        console.error(`Follow-up sync for ${box} failed (will retry):`, err.message);
+      }
+    }
+  } finally {
+    todo.forEach((b) => followRunning.delete(b));
+  }
+}
+setInterval(() => {
+  const cutoff = Date.now() - 2 * 24 * 3600 * 1000;
+  const boxes = [...followViewed].filter(([, at]) => at > cutoff).map(([b]) => b);
+  if (boxes.length) syncFollowUps(boxes).catch((err) => console.error("Follow-up sync:", err.message));
+}, FOLLOW_EVERY_MS);
+
 app.get(
   "/api/inbox",
   authMiddleware,
@@ -1160,7 +1244,7 @@ app.get(
     const own = u && u.email ? u.email.toLowerCase() : "";
     try {
       const mine = await inboxThreads(own, days); // problems with your own mailbox stop here
-      const items = mine.items.map((t) => Object.assign({}, t, { mailbox: own }));
+      const items = mine.items.map((t) => Object.assign({}, t, { mailbox: own, conv: t.id }));
       const errors = [];
       const extras = (u.extraMailboxes || []).filter((m) => m.split("@")[1] === own.split("@")[1]);
       const results = await Promise.allSettled(extras.map((m) => inboxThreads(m, days)));
@@ -1175,7 +1259,7 @@ app.get(
           if (hit && !t.needsYou && local && hit.address.split("@")[0] === local && (t.to || []).some((r) => String(r.email || "").toLowerCase() === hit.address)) {
             Object.assign(extra, { needsYou: true, reason: "Sent to " + hit.address });
           }
-          items.push(Object.assign({}, t, { id: `${box}|${t.id}`, mailbox: box }, extra));
+          items.push(Object.assign({}, t, { id: `${box}|${t.id}`, conv: t.id, mailbox: box }, extra));
         });
         else {
           const code = r.reason instanceof MailError ? r.reason.code : "";
@@ -1185,8 +1269,24 @@ app.get(
           errors.push({ mailbox: box, error: why });
         }
       });
+      // Customer follow-ups from the background index. The first time an
+      // inbox is opened, its index is built in the background (a minute or
+      // so for a busy inbox); the page says so meanwhile.
+      const loaded = [own, ...extras.filter((m, i) => results[i].status === "fulfilled")];
+      loaded.forEach((m) => followViewed.set(m, Date.now()));
+      const doc = await getMailIndex();
+      const fresh = loaded.filter((m) => !doc[m] || !doc[m].syncedAt);
+      if (fresh.length) syncFollowUps(fresh).catch((err) => console.error("Follow-up sync:", err.message));
+      const now = Date.now();
+      const followUps = [];
+      loaded.forEach((box) => { if (doc[box] && doc[box].syncedAt) followUps.push(...followUpsFor(box, doc[box], box === own ? null : doc[own], now)); });
+      // Colour the rows in Unread / Read that have a follow-up.
+      const fuByConv = new Map(followUps.map((f) => [f.mailbox + "|" + f.conv, f.followUp]));
+      for (const t of items) { const f = fuByConv.get(t.mailbox + "|" + t.conv); if (f) t.followUp = f; }
+      const followStatus = { syncing: loaded.filter((m) => !doc[m] || !doc[m].syncedAt || followRunning.has(m)) };
+      const capped = [mine.capped ? own : null, ...extras.map((m, i) => results[i].status === "fulfilled" && results[i].value.capped ? m : null)].filter(Boolean);
       items.sort((a, b) => String(b.receivedAt).localeCompare(String(a.receivedAt)));
-      res.json({ mailbox: own, mailboxes: [own, ...extras], days, since: mine.since, items, errors, colors: calColors(await getSettings()) });
+      res.json({ mailbox: own, mailboxes: [own, ...extras], days, since: mine.since, items, errors, capped, followUps, followStatus, colors: calColors(await getSettings()) });
     } catch (err) {
       if (err instanceof MailError) return res.status(409).json({ error: err.message, code: err.code });
       throw err;

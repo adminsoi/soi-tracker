@@ -355,6 +355,37 @@ each card says which inbox it came from. If Mail.Read is limited to certain
 mailboxes, add the shared ones to that policy too, or the page says it
 can't read them.
 
+**Customer follow-ups:** the **Follow up** tab (and a coloured stripe and
+tag on rows everywhere) shows customer conversations that need chasing. A
+customer is anyone outside the company: not on a login's email domain, the
+inboxes' domains, `INTERNAL_DOMAINS` (optional, comma-separated, set on the
+stack), or a domain with soi / cas / redsun / nano in it. Automated senders
+(no-reply, notifications and so on) are ignored. From the last 14 days of the
+Inbox and Sent Items:
+
+- **Needs reply** (orange): a customer emailed you or the inbox directly and
+  nothing has been sent back in that conversation yet. It turns
+  **Overdue** (red) after a day.
+- **No reply** (blue): you emailed a customer 2+ days ago and nothing came
+  back in that conversation.
+
+For a shared inbox, replies sent from your own mailbox count too, as well as
+replies from the shared inbox's Sent Items (Outlook only copies "send as"
+mail into a shared mailbox's Sent Items when that's turned on, so checking
+both covers either setup).
+
+**Busy inboxes.** Follow-ups don't depend on how much mail is listed. The
+server keeps a small follow-up list per inbox in S3 (`mail_followups.json`:
+for each customer conversation from the last 14 days, who, when, the
+subject and a link, never the email itself). It's built the first time
+someone opens that inbox (a minute or two for a few thousand emails a week;
+the Follow up tab says so meanwhile), then kept up to date every 3 minutes
+using Microsoft's delta queries, which return only what changed. Inboxes
+nobody has opened for two days aren't synced. Uses the same Mail.Read
+permission. The Unread / Read list reads the newest 1,000 emails in the
+window per inbox; when there are more, the page says so (pick **Day**), and
+it draws 200 rows at a time with **Show more**.
+
 **Which company it was sent to:** a shared inbox that several company
 addresses deliver into (for example one supervisor mailbox for
 `supervisor@` at SOI, CAS, Red Sun and Nanotech) shows a coloured company tag
