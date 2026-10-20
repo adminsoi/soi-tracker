@@ -430,6 +430,12 @@ department (or full access); only managers change things.
   ticket number in the subject. The reply shows on the ticket, and a banner
   on Requests says who replied, with **Reopen** (back to In progress) or
   **Keep resolved**.
+- **Archive:** **Archive** under a request's status (or select several and
+  choose **Archive**) moves it to the **Archived** tab, out of the other tabs,
+  the numbers and the charts. **Restore** puts it back as it was. On Archived,
+  **Delete forever** removes the request, its IT task and its notebook
+  write-up for good (after a confirm). Deleted requests are remembered, so the
+  form email or an Excel re-import won't bring them back.
 - **By person:** filter or sort by person, or click a name; the **By
   person** table shows requests, open, P1/P2 and last request for everyone.
 - **Overview** shows requests per week (last 12 weeks) and open requests

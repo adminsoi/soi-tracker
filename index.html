@@ -229,6 +229,10 @@
   .rs-pv-subj { font-weight: 600; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #eee; }
   .rs-pv-box { border-left: 3px solid #9fbf8f; padding: 2px 0 0 12px; margin: 10px 0; }
   .itr-reply { border-left-color: #c9b48f; }
+  .itr-row-acts { display: flex; gap: 10px; margin-top: 4px; }
+  .itr-row-acts .text-button { font-size: 11px; }
+  .text-button.danger, .st-btn.st-del { color: #a33a2a; }
+  .st-archived { background: #ece8e1; color: #6b6458; }
   .itr-reply.pending { border-left-color: #d08a3a; background: #fdf3e6; }
   .itr-reply-acts { display: flex; gap: 10px; align-items: center; margin-top: 6px; }
   /* Column filters */
@@ -1453,7 +1457,9 @@
     if (!itr.data || Date.now() - itr.at > 120000) loadItRequests();
     if (itr.error) return '<div class="banner">' + E(itr.error) + "</div>";
     if (!itr.data) return '<div class="empty">Loading requests…</div>';
-    var every = itr.data.requests, can = itr.data.canRate;
+    // Archived requests sit on their own tab, out of everything else.
+    var archived = itr.data.requests.filter(function (r) { return r.archived; });
+    var every = itr.data.requests.filter(function (r) { return !r.archived; }), can = itr.data.canRate;
     var byId = findRepeats(every);
     var dupes = every.filter(function (r) { return r.duplicateOf; });
     // Duplicates live on their own tab; everything else counts once.
@@ -1479,7 +1485,8 @@
     var mineOnly = function (r) { return !itr.person || r.pkey === itr.person; };
     var inPerson = all.filter(mineOnly);
     var hints = inPerson.filter(function (r) { return r.repeatOf && r.status !== "done"; });
-    var rows = itr.tab === "dupes"
+    var rows = itr.tab === "archived" ? archived.filter(mineOnly)
+      : itr.tab === "dupes"
       ? hints.concat(dupes.filter(mineOnly))
       : inPerson.filter(function (r) { return itr.tab === "all" || r.status === itr.tab; });
     var prank = function (r) { return r.priority ? +r.priority.slice(1) : 9; };
@@ -1502,6 +1509,13 @@
       }).join("") + "</select>";
     };
     var statusCell = function (r) {
+      if (r.archived) {
+        return '<span class="st st-archived">Archived</span><span class="co-note">' + E(r.archivedAt ? fmtDate(new Date(r.archivedAt).toISOString()) : "") + (r.archivedBy ? " · " + E(r.archivedBy) : "") + "</span>" +
+          (can ? '<span class="itr-row-acts"><button type="button" class="text-button" data-itr-restore="' + E(r.id) + '">Restore</button><button type="button" class="text-button danger" data-itr-delete="' + E(r.id) + '">Delete forever</button></span>' : "");
+      }
+      return statusSelect(r) + (can ? '<span class="itr-row-acts"><button type="button" class="text-button" data-itr-archive="' + E(r.id) + '">Archive</button></span>' : "");
+    };
+    var statusSelect = function (r) {
       if (r.duplicateOf) {
         if (!can) return '<span class="st st-dup">Duplicate</span>';
         // Picking a status takes it out of duplicates.
@@ -1517,6 +1531,7 @@
     var when = function (s) { return s ? E(fmtDate(s)) + '<span class="co-note">' + E(String(s).slice(11, 16)) + "</span>" : "—"; };
     var tabCount = function (st) {
       if (st === "dupes") return dupes.filter(mineOnly).length;
+      if (st === "archived") return archived.filter(mineOnly).length;
       return st === "all" ? inPerson.length : inPerson.filter(function (r) { return r.status === st; }).length;
     };
     var short = function (o) { return o ? fmtDate(o.submittedAt) + " — " + (String(o.issue || "").length > 60 ? o.issue.slice(0, 60) + "…" : o.issue || "no description") : "a request that's gone"; };
@@ -1537,12 +1552,16 @@
       return '<option value="' + E(p.key) + '"' + (p.key === itr.person ? " selected" : "") + ">" + E(p.name) + " (" + p.n + ")</option>";
     }).join("");
 
-    var bulk = can && picked.length
+    var bulk = can && picked.length && itr.tab === "archived"
+      ? '<div class="bulk-bar"><b>' + picked.length + ' selected</b><button type="button" class="st-btn st-progress" data-itr-restore>Restore</button>' +
+        '<button type="button" class="st-btn st-del" data-itr-delete>Delete forever</button><span class="grow"></span><button type="button" class="text-button" data-itr-clear>Clear</button></div>'
+      : can && picked.length
       ? '<div class="bulk-bar"><b>' + picked.length + " selected</b><span>Mark as</span>" + IT_STATUSES.map(function (s) {
           return '<button type="button" class="st-btn st-' + s.id + '" data-itr-bulk="' + s.id + '">' + E(s.label) + "</button>";
         }).join("") + (picked.length > 1 ? '<span>Merge as duplicates,</span>' +
           '<button type="button" class="st-btn st-dup" data-itr-merge="newest" title="The most recent one stays; the others become its duplicates">keep newest</button>' +
           '<button type="button" class="st-btn st-dup" data-itr-merge="oldest" title="The earliest one stays; the others become its duplicates">keep oldest</button>' : "") +
+        '<button type="button" class="st-btn" data-itr-archive>Archive</button>' +
         '<span class="grow"></span><button type="button" class="text-button" data-itr-clear>Clear</button></div>'
       : "";
 
@@ -1554,11 +1573,12 @@
         metric("New", count("new"), "Just came in from the form", count("new") > 0) +
         metric("In progress", count("progress"), unrated ? unrated + " open ones not rated yet" : "All rated") +
         metric("Resolved", count("done"), "Fixed and closed") + "</div>" +
-      '<div class="tabs" role="tablist" style="margin-top:4px;">' + [{ id: "all", label: "All" }].concat(IT_STATUSES, [{ id: "dupes", label: "Duplicates" }]).map(function (t) {
+      '<div class="tabs" role="tablist" style="margin-top:4px;">' + [{ id: "all", label: "All" }].concat(IT_STATUSES, [{ id: "dupes", label: "Duplicates" }, { id: "archived", label: "Archived" }]).map(function (t) {
         var n = tabCount(t.id);
         return '<button type="button" role="tab" class="tab ' + (itr.tab === t.id ? "active" : "") + '" aria-selected="' + (itr.tab === t.id) + '" data-itr-tab="' + t.id + '">' +
           E(t.label) + (n ? '<span class="badge">' + n + "</span>" : "") + (t.id === "dupes" && hints.length ? '<span class="badge hint-badge" title="Possible repeats to review">' + hints.length + " to review</span>" : "") + "</button>";
       }).join("") + "</div>" +
+      (itr.tab === "archived" ? '<p class="small-note" style="margin:6px 0 0;">Archived requests stay here, out of the other tabs, the numbers and the charts, until you restore them. <b>Delete forever</b> removes a request, its IT task and its notebook write-up for good.</p>' : "") +
       (itr.tab === "dupes" ? '<p class="small-note" style="margin:6px 0 0;">Possible repeats to review come first (same person, something similar within 7 days), then the ones you\'ve marked. Duplicates don\'t count in the other tabs, the numbers or the charts.</p>' : "") +
       '<div class="table-toolbar"><select id="itrPerson" aria-label="Show one person">' + personOpts + "</select>" +
         '<select id="itrSort" aria-label="Sort by">' + [["newest", "Newest first"], ["oldest", "Oldest first"], ["priority", "Priority"], ["person", "Person A–Z"]].map(function (x) {
@@ -1588,7 +1608,7 @@
             (r.taskId ? '<span class="co-note">On IT → Tasks' + (r.taskOwner ? " · " + E(r.taskOwner) : "") + "</span>" : "") + dupCell(r) + "</td>" +
           "<td>" + E(r.urgency || "—") + "</td><td>" + prioCell(r) + "</td><td>" + statusCell(r) + "</td>" +
           "<td>" + E(r.contact || "—") + (r.phone ? '<span class="co-note">' + E(r.phone) + "</span>" : "") + (r.email ? '<span class="co-note">' + E(r.email) + "</span>" : "") + "</td></tr>";
-      }).join("") : '<tr><td colspan="' + (can ? 8 : 7) + '" class="empty">' + (itr.tab === "dupes" ? "No duplicates." : all.length ? "Nothing here." : can ? "No requests yet — use Import from Excel for past form answers." : "No requests yet.") + "</td></tr>") +
+      }).join("") : '<tr><td colspan="' + (can ? 8 : 7) + '" class="empty">' + (itr.tab === "archived" ? "Nothing archived. Select requests and choose Archive, or use Archive under a status." : itr.tab === "dupes" ? "No duplicates." : all.length ? "Nothing here." : can ? "No requests yet — use Import from Excel for past form answers." : "No requests yet.") + "</td></tr>") +
       "</tbody></table></div>" +
       '<div class="section-title" style="margin-top:26px;"><div><h2>By person</h2><span class="small-note">Click a name to see only their requests.</span></div></div>' +
       '<div class="table-wrap"><table class="plain"><thead><tr><th>Person</th><th>Company</th><th>Requests</th><th>New</th><th>In progress</th><th>Resolved</th><th>P1 / P2</th><th>Last request</th></tr></thead><tbody>' +
@@ -1725,14 +1745,34 @@
       } else if (change.parts) { itr.at = 0; requestRender(); if (ids.length > 1) toast(ids.length + " requests marked Resolved."); }
       else if (change.status && ids.length > 1) toast(ids.length + " requests marked " + IT_STATUS_LABEL[change.status] + ".");
       if (change.duplicateOf) toast(ids.length === 1 ? "Marked as a duplicate." : ids.length + " requests merged as duplicates.");
-      if ("duplicateOf" in change) { itr.at = 0; requestRender(); }
+      if ("duplicateOf" in change || "archived" in change) { itr.at = 0; requestRender(); }
       nb.at = 0; // the Resolved tab picks it up next time
     }, function (err) { toast(err.message, true); itr.at = 0; render(); });
   }
   document.addEventListener("click", function (e) {
-    var t = e.target.closest && e.target.closest("[data-itr-reopen],[data-itr-keep],[data-itr-replied],[data-itr-tab],[data-itr-who],[data-itr-bulk],[data-itr-clear],[data-itr-merge],[data-itr-dup],[data-itr-notdup],[data-itr-undup],[data-itr-main],[data-itr-checknow],[data-itr-add],[data-itr-save],[data-itr-cancel],#itrImport");
+    var t = e.target.closest && e.target.closest("[data-itr-archive],[data-itr-restore],[data-itr-delete],[data-itr-reopen],[data-itr-keep],[data-itr-replied],[data-itr-tab],[data-itr-who],[data-itr-bulk],[data-itr-clear],[data-itr-merge],[data-itr-dup],[data-itr-notdup],[data-itr-undup],[data-itr-main],[data-itr-checknow],[data-itr-add],[data-itr-save],[data-itr-cancel],#itrImport");
     if (!t) return;
     var ds = t.dataset;
+    if ("itrArchive" in ds || "itrRestore" in ds) {
+      var arch = "itrArchive" in ds, aid = arch ? ds.itrArchive : ds.itrRestore;
+      var aids = aid ? [aid] : Object.keys(itr.picked);
+      if (!aids.length) return;
+      itr.picked = {};
+      changeItRequests(aids, { archived: arch });
+      toast(aids.length === 1 ? (arch ? "Archived — it's on the Archived tab." : "Restored.") : aids.length + " requests " + (arch ? "archived." : "restored."));
+      return;
+    }
+    if ("itrDelete" in ds) {
+      var dids = ds.itrDelete ? [ds.itrDelete] : Object.keys(itr.picked);
+      if (!dids.length) return;
+      if (!confirm("Delete " + (dids.length === 1 ? "this request" : dids.length + " requests") + " forever?\n\nIts IT task and notebook write-up go too. This can't be undone.")) return;
+      itr.picked = {};
+      api("/api/it-requests/delete", { method: "POST", body: JSON.stringify({ ids: dids }) }).then(function (r) {
+        toast(r.deleted + " request" + (r.deleted === 1 ? "" : "s") + " deleted forever.");
+        itr.at = 0; nb.at = 0; requestRender(); refresh();
+      }, function (err) { toast(err.message, true); });
+      return;
+    }
     if ("itrReopen" in ds) { changeItRequests([ds.itrReopen], { status: "progress", replySeen: true, replyPending: false }); toast("Reopened — it's In progress again."); return; }
     if ("itrKeep" in ds) { changeItRequests([ds.itrKeep], { replySeen: true, replyPending: false }); return; }
     if ("itrReplied" in ds) { itr.tab = "done"; itr.person = ""; render(); return; }
@@ -3227,7 +3267,7 @@
     var weeks = [];
     for (var i = 0; i < 12; i++) { var w = new Date(start); w.setDate(start.getDate() + 7 * i); weeks.push({ from: w, n: 0 }); }
     (itr.data ? itr.data.requests : []).forEach(function (r) {
-      if (r.duplicateOf) return;
+      if (r.duplicateOf || r.archived) return;
       var d = new Date(String(r.submittedAt).replace(" ", "T"));
       if (isNaN(d) || d < start) return;
       var i = Math.floor((monday(d) - start) / (7 * 864e5));
@@ -3240,7 +3280,7 @@
     var html = '<div class="section-title"><div><h2>IT requests</h2><span class="small-note">From the IT form. Rate and close them on <a href="#dept/IT">IT → Requests</a>.</span></div></div>';
     if (itr.error) return html + '<div class="empty">' + E(itr.error) + "</div>";
     if (!itr.data) return html + '<div class="empty">Loading…</div>';
-    var open = itr.data.requests.filter(function (r) { return r.status !== "done" && !r.duplicateOf; });
+    var open = itr.data.requests.filter(function (r) { return r.status !== "done" && !r.duplicateOf && !r.archived; });
     var rows = IT_PRIOS.map(function (p) { return { label: p.label, n: open.filter(function (r) { return r.priority === p.id; }).length }; });
     rows.push({ label: "Not rated", n: open.filter(function (r) { return !r.priority; }).length });
     var weeks = itWeeks(), total = weeks.reduce(function (s, w) { return s + w.n; }, 0);
