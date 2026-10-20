@@ -355,6 +355,26 @@ each card says which inbox it came from. If Mail.Read is limited to certain
 mailboxes, add the shared ones to that policy too, or the page says it
 can't read them.
 
+**Customer follow-ups:** the **Follow up** tab (and a coloured stripe and
+tag on rows everywhere) shows customer conversations that need chasing. A
+customer is anyone outside the company: not on a login's email domain, the
+inboxes' domains, `INTERNAL_DOMAINS` (optional, comma-separated, set on the
+stack), or a domain with soi / cas / redsun / nano in it. Automated senders
+(no-reply, notifications and so on) are ignored. From the last 14 days of the
+Inbox and Sent Items:
+
+- **Needs reply** (orange): a customer emailed you or the inbox directly and
+  nothing has been sent back in that conversation yet. It turns
+  **Overdue** (red) after a day.
+- **No reply** (blue): you emailed a customer 2+ days ago and nothing came
+  back in that conversation.
+
+For a shared inbox, replies sent from your own mailbox count too, as well as
+replies from the shared inbox's Sent Items. (Outlook only copies "send as"
+mail into a shared mailbox's Sent Items when that's turned on for the
+mailbox, so checking both covers either setup.) Uses the same Mail.Read
+permission.
+
 **Which company it was sent to:** a shared inbox that several company
 addresses deliver into (for example one supervisor mailbox for
 `supervisor@` at SOI, CAS, Red Sun and Nanotech) shows a coloured company tag

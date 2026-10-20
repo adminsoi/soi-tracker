@@ -127,4 +127,49 @@ async function inboxThreads(email, days) {
   return value;
 }
 
-module.exports = { inboxThreads, MailError };
+/**
+ * What follow-ups need: the last 14 days of Sent Items and a light list of
+ * Inbox messages (who and when), so index.js can tell which conversations
+ * are waiting on a reply from you and which are waiting on the other side.
+ */
+const FOLLOW_DAYS = 14;
+async function followUpData(email) {
+  const key = `fu|${String(email).toLowerCase()}`;
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
+  const since = new Date(Date.now() - FOLLOW_DAYS * 24 * 3600 * 1000).toISOString();
+  const base = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(email)}`;
+  const pages = async (url, cap) => {
+    const out = [];
+    let next = url.toString();
+    while (next && out.length < cap) {
+      const page = await graphGet(next);
+      out.push(...(page.value || []));
+      next = page["@odata.nextLink"] || null;
+    }
+    return out;
+  };
+  const sentUrl = new URL(`${base}/mailFolders/sentitems/messages`);
+  sentUrl.searchParams.set("$filter", `sentDateTime ge ${since}`);
+  sentUrl.searchParams.set("$orderby", "sentDateTime desc");
+  sentUrl.searchParams.set("$select", "id,conversationId,subject,toRecipients,ccRecipients,sentDateTime,bodyPreview,webLink");
+  sentUrl.searchParams.set("$top", "100");
+  const inUrl = new URL(`${base}/mailFolders/inbox/messages`);
+  inUrl.searchParams.set("$filter", `receivedDateTime ge ${since}`);
+  inUrl.searchParams.set("$orderby", "receivedDateTime desc");
+  inUrl.searchParams.set("$select", "conversationId,receivedDateTime,from");
+  inUrl.searchParams.set("$top", "100");
+  const [sent, inbound] = await Promise.all([pages(sentUrl, 300), pages(inUrl, 500)]);
+  const value = {
+    sent: sent.map((m) => ({
+      id: m.id, conv: m.conversationId || m.id, subject: m.subject || "(No subject)", at: m.sentDateTime,
+      to: (m.toRecipients || []).map(person), cc: (m.ccRecipients || []).map(person),
+      preview: (m.bodyPreview || "").replace(/\s+/g, " ").trim().slice(0, 400), webLink: m.webLink || "",
+    })),
+    inbound: inbound.map((m) => ({ conv: m.conversationId || "", at: m.receivedDateTime, from: person(m.from) })),
+  };
+  cache.set(key, { at: Date.now(), value });
+  return value;
+}
+
+module.exports = { inboxThreads, followUpData, MailError };

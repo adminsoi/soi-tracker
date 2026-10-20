@@ -373,6 +373,14 @@
   .ib-co { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px 2px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600; color: var(--co); background: color-mix(in srgb, var(--co) 12%, white); border: 1px solid color-mix(in srgb, var(--co) 30%, white); white-space: nowrap; }
   .ib-co::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--co); }
   .ib-swatch { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
+  .fu-tag { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 10.5px; font-weight: 600; white-space: nowrap; }
+  .fu-tag.reply { background: #fdebd3; color: #9a5a0c; }
+  .fu-tag.overdue { background: #f9dcd7; color: #a3321f; }
+  .fu-tag.waiting { background: #e3ecf6; color: #2f5e8c; }
+  .ib-row.fu-reply { box-shadow: inset 3px 0 0 #e3a04f; }
+  .ib-row.fu-overdue { box-shadow: inset 3px 0 0 #c9503a; }
+  .ib-row.fu-waiting { box-shadow: inset 3px 0 0 #6d9bc9; }
+  .ib-to { font-weight: 500; color: var(--muted); }
   .ib-row.is-read .ib-from, .ib-row.is-read .ib-subj { font-weight: 500; }
   .ib-row.is-read .ib-main { color: #6e6255; }
   .ib-row.open { background: #fffaf3; }
@@ -3759,7 +3767,15 @@
   // CC'd, or it went to a group or list).
   var inboxDays = 3, inboxData = null, inboxError = null, inboxNeeds = 0, inboxSig = "";
   var inboxBox = "all";      // "all", or one mailbox address (tabs when there's more than one)
-  var inboxRead = "unread";  // unread | read
+  var inboxRead = "unread";  // unread | read | follow
+  // "2h", "3d" for follow-up ages.
+  function fuAge(h) { return h < 24 ? h + "h" : Math.floor(h / 24) + "d"; }
+  function fuTag(t) {
+    var f = t.followUp;
+    if (!f) return "";
+    if (f.kind === "waiting") return '<span class="fu-tag waiting" title="You emailed ' + E(f.who.email || "") + ' — no reply yet">No reply · ' + fuAge(f.hours) + "</span>";
+    return '<span class="fu-tag reply' + (f.overdue ? " overdue" : "") + '" title="' + E((f.who.name || f.who.email) + " is waiting on a reply") + '">' + (f.overdue ? "Overdue · " : "Needs reply · ") + fuAge(f.hours) + "</span>";
+  }
   var inboxKind = "all";     // all | needs | fyi
   var inboxOpen = {};        // expanded rows
   var inboxCo = "";          // company filter for shared inboxes ("" = all)
@@ -3831,7 +3847,7 @@
     var inBox = inBoxAll.filter(function (t) { return !inboxCo || t.company === inboxCo; });
     var tabs = $("#inbox-tabs");
     if (tabs) {
-      var unreadIn = function (m) { return inboxData.items.filter(function (t) { return (m === "all" || t.mailbox === m) && !t.isRead; }).length; };
+      var unreadIn = function (m) { return inboxData.items.filter(function (t) { return (m === "all" || t.mailbox === m) && !t.isRead && !t.waiting; }).length; };
       tabs.innerHTML = boxes.length > 1 ? '<div class="tabs" role="tablist" style="margin-top:6px;">' + ["all"].concat(boxes).map(function (m) {
         var n = unreadIn(m);
         return '<button type="button" role="tab" class="tab ' + (m === inboxBox ? "active" : "") + '" aria-selected="' + (m === inboxBox) + '" data-inbox-box="' + E(m) + '" title="' + E(m === "all" ? "Every inbox together" : m) + '">' +
@@ -3839,8 +3855,9 @@
       }).join("") + "</div>" : "";
     }
     var problems = (inboxData.errors || []).filter(function (x) { return inboxBox === "all" || x.mailbox === inboxBox; });
-    var unread = inBox.filter(function (t) { return !t.isRead; }), read = inBox.filter(function (t) { return t.isRead; });
-    var side = inboxRead === "read" ? read : unread;
+    var unread = inBox.filter(function (t) { return !t.isRead && !t.waiting; }), read = inBox.filter(function (t) { return t.isRead && !t.waiting; });
+    var follow = inBox.filter(function (t) { return t.followUp; });
+    var side = inboxRead === "read" ? read : inboxRead === "follow" ? follow : unread;
     var kindOf = function (k) { return side.filter(function (t) { return k === "all" || (k === "needs") === !!t.needsYou; }); };
     var list = kindOf(inboxKind);
     var note = $("#inbox-note");
@@ -3851,22 +3868,34 @@
         return '<button type="button" ' + attr + '="' + o[0] + '" class="' + (cur === o[0] ? "active" : "") + '">' + E(o[1]) + (o[2] != null ? ' <span class="ib-n">' + o[2] + "</span>" : "") + "</button>";
       }).join("") + "</div>";
     };
-    var bar = '<div class="ib-bar">' + seg(inboxRead, "data-inbox-read", [["unread", "Unread", unread.length], ["read", "Read", read.length]]) +
-      seg(inboxKind, "data-inbox-kind", [["all", "Everything", side.length], ["needs", "Needs you", kindOf("needs").length], ["fyi", "FYI", kindOf("fyi").length]]) +
+    var bar = '<div class="ib-bar">' + seg(inboxRead, "data-inbox-read", [["unread", "Unread", unread.length], ["read", "Read", read.length], ["follow", "Follow up", follow.length]]) +
+      (inboxRead === "follow" ? "" : seg(inboxKind, "data-inbox-kind", [["all", "Everything", side.length], ["needs", "Needs you", kindOf("needs").length], ["fyi", "FYI", kindOf("fyi").length]])) +
       (coKeys.length > 1 ? '<div class="seg ib-cos"><button type="button" data-inbox-co="" class="' + (!inboxCo ? "active" : "") + '">All companies</button>' + coKeys.map(function (k) {
         return '<button type="button" data-inbox-co="' + k + '" class="' + (inboxCo === k ? "active" : "") + '"><span class="ib-swatch" style="background:' + E((inboxData.colors || {})[k] || "#948575") + '"></span>' + E(INBOX_CO_NAME[k]) + ' <span class="ib-n">' + cosHere[k] + "</span></button>";
       }).join("") + "</div>" : "") + "</div>" +
-      '<p class="small-note ib-legend"><span class="ib-dot needs"></span>Needs you: sent to you directly, flagged or marked important. <span class="ib-dot"></span>FYI: you\'re CC\'d, or it went to a group or list.</p>';
+      (inboxRead === "follow"
+        ? '<p class="small-note ib-legend"><span class="fu-tag reply">Needs reply</span> a customer emailed and nothing\'s been sent back yet (<span class="fu-tag reply overdue">Overdue</span> after a day). <span class="fu-tag waiting">No reply</span> you emailed a customer 2+ days ago and haven\'t heard back. Customer = anyone outside the company; last 14 days.</p>'
+        : '<p class="small-note ib-legend"><span class="ib-dot needs"></span>Needs you: sent to you directly, flagged or marked important. <span class="ib-dot"></span>FYI: you\'re CC\'d, or it went to a group or list. <span class="fu-tag reply">Needs reply</span> a customer is waiting on you.</p>');
 
-    // Group by day (items come newest first).
+    // Group by day (items come newest first). Follow up: waiting on you,
+    // then waiting on them, oldest first.
     var groups = [], cur = null;
+    if (inboxRead === "follow") {
+      var oldest = function (a, b) { return String(a.followUp.since).localeCompare(String(b.followUp.since)); };
+      var mineW = list.filter(function (t) { return t.followUp.kind === "reply"; }).sort(oldest);
+      var theirs = list.filter(function (t) { return t.followUp.kind === "waiting"; }).sort(oldest);
+      if (mineW.length) groups.push({ label: "Waiting on you", rows: mineW });
+      if (theirs.length) groups.push({ label: "Waiting on them", rows: theirs });
+      list = [];
+    }
     list.forEach(function (t) {
       var label = inboxDayLabel(new Date(t.receivedAt));
       if (!cur || cur.label !== label) { cur = { label: label, rows: [] }; groups.push(cur); }
       cur.rows.push(t);
     });
     var span = inboxDays === 1 ? "day" : inboxDays === 7 ? "week" : inboxDays + " days";
-    var empty = inboxRead === "unread"
+    var empty = inboxRead === "follow" ? "No customer follow-ups. Everyone's been answered."
+      : inboxRead === "unread"
       ? (inboxKind === "all" ? "No unread mail in the last " + span + ". 🎉" : "Nothing unread here.")
       : "Nothing read in the last " + span + (inboxKind === "all" ? "." : " here.");
     box.innerHTML = problems.map(function (x) { return '<div class="banner">' + E(boxLabel(x.mailbox)) + " (" + E(x.mailbox) + "): " + E(x.error) + "</div>"; }).join("") + bar +
@@ -3879,19 +3908,23 @@
       var time = new Date(t.receivedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
       var link = safeLink(t.webLink);
       var names = function (l) { return l.map(function (p) { return p.name || p.email; }).join(", "); };
-      return '<article class="ib-row' + (t.isRead ? " is-read" : "") + (open ? " open" : "") + '">' +
+      var fu = t.followUp ? (t.followUp.kind === "waiting" ? " fu-waiting" : t.followUp.overdue ? " fu-overdue" : " fu-reply") : "";
+      return '<article class="ib-row' + (t.isRead ? " is-read" : "") + (open ? " open" : "") + fu + '">' +
         '<button type="button" class="ib-main" data-inbox-row="' + E(t.id) + '" aria-expanded="' + open + '">' +
           '<span class="ib-dot' + (t.needsYou ? " needs" : "") + '" title="' + E(t.needsYou ? "Needs you — " + t.reason : "FYI — " + t.reason) + '"></span>' +
-          '<span class="ib-from">' + E(t.from.name || t.from.email) + (t.messages > 1 ? ' <span class="ib-count">' + t.messages + "</span>" : "") + "</span>" +
+          '<span class="ib-from">' + (t.waiting ? '<span class="ib-to">To </span>' : "") + E(t.from.name || t.from.email) + (t.messages > 1 ? ' <span class="ib-count">' + t.messages + "</span>" : "") + "</span>" +
           '<span class="ib-text"><span class="ib-subj">' + E(t.subject) + '</span><span class="ib-prev"> — ' + E(t.preview || "") + "</span></span>" +
-          '<span class="ib-meta">' + inboxCoTag(t) + (t.flagged ? '<span title="Flagged">⚑</span>' : "") + (t.important ? '<span title="High importance">!</span>' : "") + (t.attachments ? '<span title="Attachments">📎</span>' : "") +
+          '<span class="ib-meta">' + fuTag(t) + inboxCoTag(t) + (t.flagged ? '<span title="Flagged">⚑</span>' : "") + (t.important ? '<span title="High importance">!</span>' : "") + (t.attachments ? '<span title="Attachments">📎</span>' : "") +
             '<span class="ib-time">' + E(time) + "</span></span></button>" +
         (open ? '<div class="ib-detail">' +
           '<div class="mail-tags"><span class="pill' + (t.needsYou ? " rose" : "") + '">' + E(t.needsYou ? "Needs you · " + t.reason : "FYI · " + t.reason) + "</span>" +
             (boxes.length > 1 ? '<span class="pill" title="' + E(t.mailbox) + '">' + E(t.mailbox === inboxData.mailbox ? "Your inbox" : t.mailbox) + "</span>" : "") +
             (t.unread ? '<span class="pill">' + t.unread + " unread</span>" : "") + "</div>" +
           (t.company ? '<div style="margin:2px 0 6px;">' + inboxCoTag(t, true) + "</div>" : "") +
-          '<div class="small-note">From ' + E(t.from.email || t.from.name) + " · To: " + E(names(t.to) || "—") + (t.cc.length ? " · cc: " + E(names(t.cc)) : "") + "</div>" +
+          (t.followUp ? '<div class="small-note" style="margin-bottom:4px;">' + (t.followUp.kind === "waiting"
+            ? "You emailed " + E(t.followUp.who.name || t.followUp.who.email) + " " + E(fuAge(t.followUp.hours)) + " ago and haven't heard back."
+            : E(t.followUp.who.name || t.followUp.who.email) + " emailed " + E(fuAge(t.followUp.hours)) + " ago and nothing's been sent back yet.") + "</div>" : "") +
+          '<div class="small-note">' + (t.waiting ? "Sent" : "From " + E(t.from.email || t.from.name)) + " · To: " + E(names(t.to) || "—") + (t.cc.length ? " · cc: " + E(names(t.cc)) : "") + "</div>" +
           (t.preview ? '<p class="mail-preview">' + E(t.preview) + (t.preview.length >= 400 ? "…" : "") + "</p>" : "") +
           (link ? '<a class="mail-open" href="' + E(link) + '" target="_blank" rel="noopener noreferrer">Open in Outlook ↗</a>' : "") + "</div>" : "") +
         "</article>";

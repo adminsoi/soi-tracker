@@ -49,7 +49,7 @@ const { sendMail, mailConfigured } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError, nameFromTitle } = require("./calendar");
 const { hrEvents, cleanFeedUrl, FeedError } = require("./hrcal");
 const { itRequestsConfigured, fetchItRequests, IT_REQUESTS_MAILBOX, parseFormWorkbook, recordFromEmail, FormFileError, officeStamp } = require("./itrequests");
-const { inboxThreads, MailError } = require("./mail");
+const { inboxThreads, followUpData, MailError } = require("./mail");
 const { pentagonQuery } = require("./pentagon");
 const {
   PENTAGON_VIEWS,
@@ -1151,6 +1151,69 @@ function companyOfMessage(t, mailbox) {
   return hits.find((h) => local && h.address.split("@")[0].includes(local)) || hits[0];
 }
 
+// Follow-ups with customers. "Customer" = anyone outside the company:
+// not on a login's email domain, the inboxes' domains, INTERNAL_DOMAINS, or
+// a domain with soi / cas / redsun / nano in it; automated senders
+// (no-reply, notifications, …) don't count. Per conversation, from Sent
+// Items and the Inbox (last 14 days):
+//  - Needs reply: the latest customer email is newer than anything sent
+//    back (from that inbox, or for a shared inbox, from your own mailbox
+//    too). Overdue after 24 hours.
+//  - Waiting on them: you emailed a customer 2+ days ago and nothing came
+//    back in that conversation since.
+const AUTOMATED_RE = /^(no-?reply|do-?not-?reply|donotreply|notifications?|notify|mailer-daemon|postmaster|alerts?|bounces?|automated|system|news(letter)?|marketing|info-?noreply)\b/i;
+const WAIT_HOURS = 48, OVERDUE_HOURS = 24;
+function internalDomainSet(users, mailboxes) {
+  const set = new Set(String(process.env.INTERNAL_DOMAINS || "").toLowerCase().split(",").map((d) => d.trim()).filter(Boolean));
+  for (const u of users) if (u.email && u.email.includes("@")) set.add(u.email.split("@")[1].toLowerCase());
+  for (const m of mailboxes) if (m && m.includes("@")) set.add(m.split("@")[1].toLowerCase());
+  return set;
+}
+function isCustomer(addr, internal) {
+  const a = String(addr || "").toLowerCase();
+  if (!a.includes("@")) return false;
+  const [local, domain] = a.split("@");
+  if (internal.has(domain) || companyOfAddress(domain)) return false;
+  return !AUTOMATED_RE.test(local);
+}
+function addFollowUps(items, box, fu, extraSent, internal, now) {
+  const lastOut = new Map(), lastIn = new Map();
+  for (const m of fu.sent.concat(extraSent || [])) if (!lastOut.has(m.conv) || m.at > lastOut.get(m.conv)) lastOut.set(m.conv, m.at);
+  for (const m of fu.inbound) {
+    if (!m.conv || !isCustomer(m.from.email, internal)) continue;
+    const cur = lastIn.get(m.conv);
+    if (!cur || m.at > cur.at) lastIn.set(m.conv, m);
+  }
+  const hours = (at) => Math.max(0, Math.round((now - Date.parse(at)) / 3600000));
+  for (const t of items) {
+    if (t.mailbox !== box || !t.needsYou) continue; // not list / CC mail
+    const inc = lastIn.get(t.conv);
+    if (!inc) continue;
+    const out = lastOut.get(t.conv);
+    if (out && out >= inc.at) continue;
+    const h = hours(inc.at);
+    t.followUp = { kind: "reply", since: inc.at, hours: h, overdue: h >= OVERDUE_HOURS, who: inc.from };
+  }
+  // Waiting on them: the latest thing sent in each conversation.
+  const latestSent = new Map();
+  for (const m of fu.sent) if (!latestSent.has(m.conv) || m.at > latestSent.get(m.conv).at) latestSent.set(m.conv, m);
+  const waiting = [];
+  for (const [conv, m] of latestSent) {
+    const cust = m.to.concat(m.cc).find((r) => isCustomer(r.email, internal));
+    if (!cust) continue;
+    const back = lastIn.get(conv);
+    if (back && back.at > m.at) continue;
+    const h = hours(m.at);
+    if (h < WAIT_HOURS) continue;
+    waiting.push({
+      id: `${box}|w|${conv}`, conv, mailbox: box, waiting: true, isRead: true, needsYou: false, unread: 0, messages: 1,
+      subject: m.subject, from: cust, to: m.to, cc: m.cc, receivedAt: m.at, preview: m.preview, webLink: m.webLink,
+      reason: "You emailed them", followUp: { kind: "waiting", since: m.at, hours: h, who: cust },
+    });
+  }
+  return waiting;
+}
+
 app.get(
   "/api/inbox",
   authMiddleware,
@@ -1160,7 +1223,7 @@ app.get(
     const own = u && u.email ? u.email.toLowerCase() : "";
     try {
       const mine = await inboxThreads(own, days); // problems with your own mailbox stop here
-      const items = mine.items.map((t) => Object.assign({}, t, { mailbox: own }));
+      const items = mine.items.map((t) => Object.assign({}, t, { mailbox: own, conv: t.id }));
       const errors = [];
       const extras = (u.extraMailboxes || []).filter((m) => m.split("@")[1] === own.split("@")[1]);
       const results = await Promise.allSettled(extras.map((m) => inboxThreads(m, days)));
@@ -1175,7 +1238,7 @@ app.get(
           if (hit && !t.needsYou && local && hit.address.split("@")[0] === local && (t.to || []).some((r) => String(r.email || "").toLowerCase() === hit.address)) {
             Object.assign(extra, { needsYou: true, reason: "Sent to " + hit.address });
           }
-          items.push(Object.assign({}, t, { id: `${box}|${t.id}`, mailbox: box }, extra));
+          items.push(Object.assign({}, t, { id: `${box}|${t.id}`, conv: t.id, mailbox: box }, extra));
         });
         else {
           const code = r.reason instanceof MailError ? r.reason.code : "";
@@ -1184,6 +1247,17 @@ app.get(
             : "Couldn't read this mailbox right now.";
           errors.push({ mailbox: box, error: why });
         }
+      });
+      // Customer follow-ups, per inbox that loaded. A shared inbox also
+      // counts replies sent from your own mailbox.
+      const loaded = [own, ...extras.filter((m, i) => results[i].status === "fulfilled")];
+      const fus = await Promise.allSettled(loaded.map((m) => followUpData(m)));
+      const internal = internalDomainSet((await getUsers()), [own, ...extras]);
+      const ownFu = fus[0].status === "fulfilled" ? fus[0].value : null;
+      const now = Date.now();
+      loaded.forEach((box, i) => {
+        if (fus[i].status !== "fulfilled") { console.error(`Follow-ups for ${box} skipped:`, fus[i].reason && fus[i].reason.message); return; }
+        items.push(...addFollowUps(items, box, fus[i].value, box === own || !ownFu ? [] : ownFu.sent, internal, now));
       });
       items.sort((a, b) => String(b.receivedAt).localeCompare(String(a.receivedAt)));
       res.json({ mailbox: own, mailboxes: [own, ...extras], days, since: mine.since, items, errors, colors: calColors(await getSettings()) });
