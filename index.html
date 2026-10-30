@@ -637,6 +637,15 @@
   html[data-theme="dark"] .cf-tab { background: #1a1d22; border-color: #353a45; }
   html[data-theme="dark"] .cf-tab.active { border-color: #3d7fd1; box-shadow: inset 0 0 0 1px #3d7fd1; color: #fff; }
   html[data-theme="dark"] .bk-file { background: #000; box-shadow: inset 0 0 0 1px #555; }
+  /* Company colours (calendar, inbox tags): tint toward the dark panel and
+     lighten text and edges, so dark ones like SOI green stay visible. */
+  html[data-theme="dark"] .ib-co { color: color-mix(in srgb, var(--co) 55%, #fff); background: color-mix(in srgb, var(--co) 22%, #15171b); border-color: color-mix(in srgb, var(--co) 50%, #15171b); }
+  html[data-theme="dark"] .ib-co::before { background: color-mix(in srgb, var(--co) 70%, #fff); }
+  html[data-theme="dark"] .mg-ev.co-ev, html[data-theme="dark"] .cal-event.co-ev { border-left-color: color-mix(in srgb, var(--co) 70%, #fff); background: color-mix(in srgb, var(--co) 24%, #15171b); }
+  html[data-theme="dark"] .mg-ev.holiday, html[data-theme="dark"] .cal-event.holiday { border-left-color: color-mix(in srgb, var(--co) 70%, #fff); background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--co) 34%, #15171b) 0 6px, color-mix(in srgb, var(--co) 18%, #15171b) 6px 12px); }
+  html[data-theme="dark"] .cal-legend i, html[data-theme="dark"] .ib-swatch, html[data-theme="dark"] .co-dot { box-shadow: 0 0 0 1px rgba(255, 255, 255, .3); }
+  html[data-theme="dark"] .person-chip .av.by-co { box-shadow: 0 0 0 2px var(--card), 0 0 0 3px rgba(255, 255, 255, .25); }
+  html[data-theme="dark"] .cal-legend i.hol { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--co) 60%, #15171b) 0 3px, color-mix(in srgb, var(--co) 30%, #15171b) 3px 6px); }
   html[data-theme="dark"] .brd-foot .av { background: #24314d; color: #c3d6ff; }
   .theme-switch { margin-left: 6px; }
 </style>
@@ -3499,13 +3508,25 @@
     });
   }
   var PALETTE = ["#78846c", "#d1a1b3", "#354936", "#c9a35c", "#a96b82", "#bbc6ad", "#8e7d6d", "#633f47"];
+  // Brighter, clearly different colours for charts on the dark background.
+  var DARK_PALETTE = ["#5fb37a", "#e07aa0", "#4f8ef0", "#e3b04b", "#b58cf0", "#4fc3c3", "#f08a5d", "#9aa1ad"];
+  // Chart colours for the current look (light or dark).
+  function CT() {
+    var d = document.documentElement.dataset.theme !== "light";
+    return {
+      text: d ? "#a9afba" : "#948575", ink: d ? "#eceef2" : "#3f352c", grid: d ? "rgba(255,255,255,0.07)" : "rgba(63,53,44,0.06)",
+      tooltip: d ? "#2a2e36" : "#3f352c", palette: d ? DARK_PALETTE : PALETTE,
+      sage: d ? "#5fb37a" : "#78846c", sageFill: d ? "rgba(95,179,122,0.18)" : "rgba(120,132,108,0.15)",
+      rose: d ? "#e07aa0" : "#d1a1b3", blue: d ? "#4f8ef0" : "#3f6ba8", red: d ? "#ef6b5e" : "#c0504d"
+    };
+  }
   function chartOptions(legend, stacked) {
     return {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: legend ? { position: "bottom", labels: { color: "#948575", boxWidth: 10, font: { size: 10.5 } } } : { display: false } },
+      plugins: { legend: legend ? { position: "bottom", labels: { color: CT().text, boxWidth: 10, font: { size: 10.5 } } } : { display: false } },
       scales: {
-        x: { stacked: !!stacked, ticks: { color: "#948575", font: { size: 10.5 } }, grid: { display: false } },
-        y: { stacked: !!stacked, beginAtZero: true, ticks: { color: "#948575", precision: 0 }, grid: { color: "rgba(63,53,44,0.06)" } }
+        x: { stacked: !!stacked, ticks: { color: CT().text, font: { size: 10.5 } }, grid: { display: false } },
+        y: { stacked: !!stacked, beginAtZero: true, ticks: { color: CT().text, precision: 0 }, grid: { color: CT().grid } }
       }
     };
   }
@@ -3527,7 +3548,7 @@
       var days = Object.keys(byDate).sort();
       charts.push(new Chart($("#" + prefix + "-line"), {
         type: "line",
-        data: { labels: days, datasets: [{ data: days.map(function (d) { return byDate[d]; }), borderColor: "#78846c", backgroundColor: "rgba(120,132,108,0.15)", fill: true, tension: 0.25, pointRadius: 2 }] },
+        data: { labels: days, datasets: [{ data: days.map(function (d) { return byDate[d]; }), borderColor: CT().sage, backgroundColor: CT().sageFill, fill: true, tension: 0.25, pointRadius: 2 }] },
         options: chartOptions(false)
       }));
     } else lineCard.style.display = "none";
@@ -3539,8 +3560,8 @@
       var labels = Object.keys(by);
       charts.push(new Chart($("#" + prefix + "-pie"), {
         type: "doughnut",
-        data: { labels: labels, datasets: [{ data: labels.map(function (s) { return by[s]; }), backgroundColor: labels.map(function (_, i) { return PALETTE[i % PALETTE.length]; }), borderWidth: 0 }] },
-        options: { responsive: true, maintainAspectRatio: false, cutout: "60%", plugins: { legend: { position: "bottom", labels: { color: "#948575", boxWidth: 10, font: { size: 10.5 } } } } }
+        data: { labels: labels, datasets: [{ data: labels.map(function (s) { return by[s]; }), backgroundColor: labels.map(function (_, i) { return CT().palette[i % PALETTE.length]; }), borderWidth: 0 }] },
+        options: { responsive: true, maintainAspectRatio: false, cutout: "60%", plugins: { legend: { position: "bottom", labels: { color: CT().text, boxWidth: 10, font: { size: 10.5 } } } } }
       }));
     } else pieCard.style.display = "none";
   }
@@ -3647,8 +3668,8 @@
         data: {
           labels: depts.map(shortDept),
           datasets: [
-            { label: "Open", data: depts.map(function (d) { return deptItems(d).filter(function (t) { return !isDone(t); }).length; }), backgroundColor: "#d1a1b3" },
-            { label: "Done", data: depts.map(function (d) { return deptItems(d).filter(isDone).length; }), backgroundColor: "#78846c" }
+            { label: "Open", data: depts.map(function (d) { return deptItems(d).filter(function (t) { return !isDone(t); }).length; }), backgroundColor: CT().rose },
+            { label: "Done", data: depts.map(function (d) { return deptItems(d).filter(isDone).length; }), backgroundColor: CT().sage }
           ]
         },
         options: chartOptions(true, true)
@@ -3661,7 +3682,7 @@
         type: "bar",
         data: {
           labels: weeks.map(function (w) { return w.from.toLocaleDateString(undefined, { month: "short", day: "numeric" }); }),
-          datasets: [{ label: "Requests", data: weeks.map(function (w) { return w.n; }), backgroundColor: "#3f6ba8", borderRadius: 3 }]
+          datasets: [{ label: "Requests", data: weeks.map(function (w) { return w.n; }), backgroundColor: CT().blue, borderRadius: 3 }]
         },
         options: chartOptions(false)
       }));
@@ -3676,7 +3697,7 @@
         type: "bar",
         data: {
           labels: dep.people.map(function (p) { return p.username; }),
-          datasets: dep.columns.map(function (col, j) { return { label: col.label, data: dep.people.map(function (p) { return p.counts[col.id] || 0; }), backgroundColor: PALETTE[j % PALETTE.length] }; })
+          datasets: dep.columns.map(function (col, j) { return { label: col.label, data: dep.people.map(function (p) { return p.counts[col.id] || 0; }), backgroundColor: CT().palette[j % PALETTE.length] }; })
         },
         options: chartOptions(true)
       }));
@@ -3712,7 +3733,6 @@
   ];
   var MN_TYPE_LABEL = { task: "Tasks", rfqs: "RFQs", quotes: "Quotes", sales_orders: "Sales orders", purchase_orders: "Purchase orders", invoice: "Invoices", other: "Other" };
   // Validated pair (dataviz palette check): one hue for counts, red only for Overdue (always labelled).
-  var MN_BLUE = "#3f6ba8", MN_RED = "#c0504d";
   var mnRows = null, mnPentRows = [], mnPentError = null, mnFilter = "all", mnCharts = [];
   var mnOpen = (function () {
     var saved = null;
@@ -3897,7 +3917,7 @@
           var v = ds.data[j];
           if (!v) return;
           ctx.save();
-          ctx.fillStyle = "#3f352c";
+          ctx.fillStyle = CT().ink;
           ctx.font = "600 11px 'DM Sans', system-ui, sans-serif";
           if (chart.options.indexAxis === "y") { ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText(v, bar.x + 6, bar.y); }
           else { ctx.textAlign = "center"; ctx.textBaseline = "bottom"; ctx.fillText(v, bar.x, bar.y - 4); }
@@ -3909,9 +3929,9 @@
 
   function drawMentionCharts(open) {
     if (typeof Chart === "undefined") return;
-    var tick = { color: "#948575", font: { size: 11 } };
-    var grid = { color: "rgba(63,53,44,0.06)" };
-    var tooltip = { backgroundColor: "#3f352c", padding: 8, displayColors: false };
+    var tick = { color: CT().text, font: { size: 11 } };
+    var grid = { color: CT().grid };
+    var tooltip = { backgroundColor: CT().tooltip, padding: 8, displayColors: false };
 
     // 1. Open by type — one hue; the axis labels carry identity.
     var counts = {};
@@ -3922,7 +3942,7 @@
       var max1 = Math.max.apply(null, typeIds.map(function (k) { return counts[k]; }));
       mnCharts.push(new Chart(el1, {
         type: "bar",
-        data: { labels: typeIds.map(function (k) { return MN_TYPE_LABEL[k]; }), datasets: [{ label: "Open", data: typeIds.map(function (k) { return counts[k]; }), backgroundColor: MN_BLUE, borderRadius: 4, borderSkipped: "start", maxBarThickness: 18 }] },
+        data: { labels: typeIds.map(function (k) { return MN_TYPE_LABEL[k]; }), datasets: [{ label: "Open", data: typeIds.map(function (k) { return counts[k]; }), backgroundColor: CT().blue, borderRadius: 4, borderSkipped: "start", maxBarThickness: 18 }] },
         options: {
           indexAxis: "y", responsive: true, maintainAspectRatio: false,
           plugins: { legend: { display: false }, tooltip: tooltip },
@@ -3951,7 +3971,7 @@
       var max2 = Math.max.apply(null, buckets.map(function (b) { return b.n; }));
       mnCharts.push(new Chart(el2, {
         type: "bar",
-        data: { labels: buckets.map(function (b) { return b.label; }), datasets: [{ label: "Due", data: buckets.map(function (b) { return b.n; }), backgroundColor: buckets.map(function (b) { return b.red ? MN_RED : MN_BLUE; }), borderRadius: 4, borderSkipped: "start", maxBarThickness: 34 }] },
+        data: { labels: buckets.map(function (b) { return b.label; }), datasets: [{ label: "Due", data: buckets.map(function (b) { return b.n; }), backgroundColor: buckets.map(function (b) { return b.red ? CT().red : CT().blue; }), borderRadius: 4, borderSkipped: "start", maxBarThickness: 34 }] },
         options: {
           responsive: true, maintainAspectRatio: false, layout: { padding: { top: 16 } },
           plugins: { legend: { display: false }, tooltip: tooltip },
