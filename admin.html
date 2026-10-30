@@ -6,6 +6,7 @@
 <title>AOG Tracker — Admin</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Libre+Caslon+Display&display=swap">
+<script>try { document.documentElement.dataset.theme = localStorage.getItem("soi_tracker_theme") || "dark"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
 <style>
   /* Same look as the tracker ("The Daily Edit"): paper, serif headings, sage and rose. */
   :root {
@@ -76,6 +77,23 @@
   .cc-row { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 14px; }
   .cc-color { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
   .cc-color input { width: 34px; height: 26px; padding: 0; border: 1px solid #ddd; border-radius: 5px; background: none; }
+  /* Dark theme, same as the tracker (shares its Light / Dark choice). */
+  html[data-theme="dark"] {
+    --navy: #2f6fdf; --red: #2f6fdf; --red-light: #3b7bea;
+    --bg: #0b0c0e; --surface: #15171b; --surface-2: #1c1f24; --border: #2b2f37;
+    --text: #eceef2; --text-dim: #b9bec8; --text-faint: #9aa1ad; --danger: #ef7d7d;
+    color-scheme: dark;
+  }
+  html[data-theme="dark"] h1, html[data-theme="dark"] h2 { font-family: 'DM Sans', system-ui, sans-serif; font-weight: 600; letter-spacing: -.4px; }
+  html[data-theme="dark"] .field input, html[data-theme="dark"] .field select, html[data-theme="dark"] .check-row { background: #0f1114; }
+  html[data-theme="dark"] .check-row.full-access-row { background: #1a2a47; border-color: #2c4370; }
+  html[data-theme="dark"] .msg.ok { color: #93d9a8; }
+  html[data-theme="dark"] .tag.full { background: #1a2a47; color: #c3d6ff; }
+  html[data-theme="dark"] .cc-color input { border-color: #3a3f48; }
+  html[data-theme="dark"] a { color: #8fb6ff; }
+  html[data-theme="dark"] ::placeholder { color: #6f7682; }
+  .theme-switch { background: none; border: 1px solid var(--border); color: var(--text-dim); padding: 5px 11px; font-size: 12px; }
+  .theme-switch:hover { background: var(--surface-2); }
 </style>
 </head>
 <body>
@@ -100,6 +118,7 @@
       <div class="mark">SOI</div>
       <h1>Manage logins</h1>
       <a class="back" href="/">← Back to tracker</a>
+      <button type="button" class="theme-switch" id="themeBtn" title="Switch between the dark and light look"></button>
     </header>
 
     <div class="card">
@@ -311,6 +330,16 @@
 <script>
 (function () {
   "use strict";
+  // Light / Dark look, shared with the tracker (dark is the default).
+  var themeBtn = document.getElementById("themeBtn");
+  function showTheme() { themeBtn.textContent = document.documentElement.dataset.theme === "light" ? "☾ Dark" : "☀ Light"; }
+  themeBtn.addEventListener("click", function () {
+    var next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem("soi_tracker_theme", next); } catch (e) {}
+    showTheme();
+  });
+  showTheme();
   var TOKEN_KEY = "soi_admin_token";
   var DEPARTMENTS = [];
   var COMPANIES = [];
