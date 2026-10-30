@@ -6,7 +6,7 @@
 <title>AOG Tracker — Admin</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Libre+Caslon+Display&display=swap">
-<script>try { document.documentElement.dataset.theme = localStorage.getItem("soi_tracker_theme") || "dark"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+<script>try { document.documentElement.dataset.theme = localStorage.getItem("soi_tracker_theme") || "light"; } catch (e) { document.documentElement.dataset.theme = "light"; }</script>
 <style>
   /* Same look as the tracker ("The Daily Edit"): paper, serif headings, sage and rose. */
   :root {
@@ -399,7 +399,7 @@
 <script>
 (function () {
   "use strict";
-  // Light / Dark look, shared with the tracker (dark is the default).
+  // Light / Dark look, shared with the tracker (light is the default).
   var themeBtn = document.getElementById("themeBtn");
   function showTheme() { themeBtn.textContent = document.documentElement.dataset.theme === "light" ? "☾ Dark" : "☀ Light"; }
   themeBtn.addEventListener("click", function () {

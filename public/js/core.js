@@ -236,7 +236,7 @@ function showLogin() {
 }
 function signOut() { clearToken(); me = null; showLogin(); }
 $("#logoutBtn").addEventListener("click", signOut);
-// Light / Dark look (remembered on this device; dark is the default).
+// Light / Dark look (remembered on this device; light is the default).
 function applyTheme() {
   var dark = document.documentElement.dataset.theme !== "light";
   $("#themeBtn").textContent = dark ? "☀ Light" : "☾ Dark";

@@ -357,12 +357,12 @@ query's `TOP 200` limit is hit for the range, the page says so.
 
 ## Navigation
 
-**Look:** dark by default, to match the AOG CRM mockup: near-black page,
-charcoal panels, white text, blue accents (active sidebar item, active tab,
-company switcher, primary buttons, the case file box) and sans-serif
-headings. **☀ Light / ☾ Dark** under Sign out switches to the original light
-"Daily Edit" look; the choice is remembered on that device and shared with
-`/admin.html`, which has the same switch. Charts use a brighter palette in
+**Look:** the original light "Daily Edit" look by default. **☀ Light /
+☾ Dark** under Sign out switches to the dark look that matches the AOG CRM
+mockup: near-black page, charcoal panels, white text, blue accents (active
+sidebar item, active tab, company switcher, primary buttons, the case file
+box) and sans-serif headings. The choice is remembered on that device and
+shared with `/admin.html`, which has the same switch. Charts use a brighter palette in
 dark mode (axis text, grid lines, tooltips and the numbers on bars follow
 the theme), and company colours on the calendar and inbox tags are tinted so
 dark ones like SOI green stay visible.
