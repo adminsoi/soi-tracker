@@ -235,6 +235,8 @@
   .st-archived { background: #ece8e1; color: #6b6458; }
   .itr-reply.pending { border-left-color: #d08a3a; background: #fdf3e6; }
   .itr-reply-acts { display: flex; gap: 10px; align-items: center; margin-top: 6px; }
+  .ops-switch { margin-left: auto; }
+  .tab.ops-tab { font-weight: 600; }
   /* AOG board */
   .brd-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-top: 14px; }
   .brd-legend { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
@@ -612,6 +614,17 @@
   };
   // Procurement / Purchasing / Warehouse use part rows; everything else is projects with sub-tasks.
   var OPS_DEPTS = ["Procurement", "Purchasing", "Warehouse"];
+  // Sidebar groups: IT, Admin, HR and Finance live under Administration;
+  // everything else under Departments, where Procurement, Purchasing and
+  // Warehouse share one tab (and one board).
+  var ADMIN_DEPTS = ["IT", "Administrative", "HR", "Accounting & Finance"];
+  var lastDeptIn = {}; // group -> last department opened there
+  function deptGroup(d) { return ADMIN_DEPTS.indexOf(d) !== -1 ? "admin" : "main"; }
+  function deptsIn(group) { return visibleDepartments().filter(function (d) { return deptGroup(d) === group; }); }
+  function groupHome(group) {
+    var list = deptsIn(group), last = lastDeptIn[group];
+    return last && list.indexOf(last) !== -1 ? last : list[0] || "";
+  }
   var DEPARTMENTS_FALLBACK = ["Procurement", "Purchasing", "IT", "HR", "Business Development", "US Government", "Warehouse", "Administrative", "Accounting & Finance"];
 
   // Quick links per department. The department's Claude project (set in
@@ -945,14 +958,18 @@
 
   // ---------- Routing ----------
   function navItems() {
-    var items = [{ group: "WORK", id: "departments", ic: "▣", label: "Departments" }];
-    if (me.fullAccess || me.departments.length > 1) items.push({ id: "overview", ic: "◷", label: "Overview" });
+    var items = [];
+    if (deptsIn("main").length) items.push({ id: "departments", ic: "▣", label: "Departments" });
+    if (deptsIn("admin").length) items.push({ id: "administration", ic: "▤", label: "Administration" });
+    if (items.length) items[0].group = "WORK";
     items.push({ group: "YOU", id: "mentions", ic: "@", label: "Mentions you", badge: mineOpen });
     items.push({ id: "inbox", ic: "✉", label: "Work inbox", badge: inboxNeeds });
     var tools = [];
     tools.push({ id: "calendar", ic: "▦", label: "Calendar" });
+    if (me.fullAccess || me.departments.length > 1) tools.push({ id: "overview", ic: "◷", label: "Overview" });
     if (me.performance) tools.push({ id: "performance", ic: "◐", label: "Performance", badge: perfFlagged });
     if (canUseAll()) tools.push({ id: "global", ic: "◎", label: "Global" });
+    tools.push({ id: "chat", ic: "✳", label: "Master Chat" });
     if (tools.length) { tools[0].group = "TOOLS"; items = items.concat(tools); }
     return items;
   }
@@ -960,6 +977,7 @@
     var h = decodeURIComponent((location.hash || "").replace(/^#/, ""));
     var parts = h.split("/");
     if (parts[0] === "dept" && parts[1] && visibleDepartments().indexOf(parts[1]) !== -1) { page = "departments"; activeDept = parts[1]; }
+    else if (parts[0] === "administration" && groupHome("admin")) { page = "departments"; activeDept = groupHome("admin"); }
     else if (parts[0] !== "departments" && parts[0] !== "dept" && navItems().some(function (n) { return n.id === parts[0]; })) page = parts[0];
     else page = "departments";
   }
@@ -969,9 +987,11 @@
   // ---------- Render ----------
   function renderNav() {
     $("#nav").innerHTML = navItems().map(function (n) {
-      var href = n.id === "departments" ? "dept/" + encodeURIComponent(activeDept || "") : n.id;
+      var grp = n.id === "departments" ? "main" : n.id === "administration" ? "admin" : "";
+      var href = grp ? "dept/" + encodeURIComponent(page === "departments" && deptGroup(activeDept) === grp ? activeDept : groupHome(grp)) : n.id;
+      var on = grp ? page === "departments" && deptGroup(activeDept) === grp : n.id === page;
       return (n.group ? '<div class="nav-group">' + n.group + "</div>" : "") +
-        '<a href="#' + href + '" class="' + (n.id === page ? "active" : "") + '"><span class="ic">' + n.ic + "</span>" + E(n.label) +
+        '<a href="#' + href + '" class="' + (on ? "active" : "") + '"><span class="ic">' + n.ic + "</span>" + E(n.label) +
         (n.badge ? '<span class="badge">' + n.badge + "</span>" : "") + "</a>";
     }).join("");
   }
@@ -991,6 +1011,7 @@
       else if (page === "inbox") html = renderInbox();
       else if (page === "performance") html = renderPerformance();
       else if (page === "global") html = renderGlobalShell();
+      else if (page === "chat") html = renderMasterChat();
       else html = renderDepartment();
     } catch (e) {
       console.error(e);
@@ -1042,8 +1063,52 @@
   }
 
   // ---------- Department page ----------
+  // Tabs for the current sidebar group. Procurement, Purchasing and
+  // Warehouse share one tab, which opens the last of them you used.
+  function deptTabs(depts, opsHere, dept) {
+    var out = [], opsDone = false;
+    depts.forEach(function (d) {
+      if (OPS_DEPTS.indexOf(d) !== -1 && opsHere.length > 1) {
+        if (opsDone) return;
+        opsDone = true;
+        var on = opsHere.indexOf(dept) !== -1;
+        var to = on ? dept : (lastDeptIn.ops && opsHere.indexOf(lastDeptIn.ops) !== -1 ? lastDeptIn.ops : opsHere[0]);
+        var n = opsHere.reduce(function (s, x) { return s + openCount(x); }, 0);
+        out.push('<button type="button" role="tab" class="tab ops-tab ' + (on ? "active" : "") + '" aria-selected="' + on + '" data-dept="' + E(to) + '">' +
+          E(opsHere.map(shortDept).join(" / ")) + (n ? '<span class="badge">' + n + "</span>" : "") + "</button>");
+        return;
+      }
+      var k = openCount(d);
+      out.push('<button type="button" role="tab" class="tab ' + (d === dept ? "active" : "") + '" aria-selected="' + (d === dept) + '" data-dept="' + E(d) + '">' +
+        E(shortDept(d)) + (k ? '<span class="badge">' + k + "</span>" : "") + "</button>");
+    });
+    if (OPS_DEPTS.indexOf(dept) !== -1) lastDeptIn.ops = dept;
+    return out.join("");
+  }
+
+  // Master Chat: the AOG CRM spec's one Claude chat that can read the
+  // tracker and make changes when asked. It needs Claude running inside
+  // SOI's compliant AWS environment (Bedrock), which compliance still has to
+  // approve, so for now this says what it will do and opens Claude.
+  function renderMasterChat() {
+    setBreadcrumb(["Tools", "Master Chat"]);
+    var row = function (a, b) { return "<tr><td><b>" + a + "</b></td><td>" + b + "</td></tr>"; };
+    return '<div class="intro"><div><div class="eyebrow">Tools</div><h1>Master Chat</h1>' +
+      "<p>One Claude chat for the whole tracker, replacing the department chats. It isn't switched on yet: it has to run inside SOI's compliant AWS environment (for example Claude on Amazon Bedrock in GovCloud), and the compliance lead has to approve what it can read.</p></div></div>" +
+      '<div class="card" style="padding:18px 20px;"><div class="card-label">What it will do</div>' +
+      '<table class="plain"><tbody>' +
+      row("When asked", "Add notes; create and assign tasks; add tags and flags; search and summarise a quote, order or customer; attach emails and files to a case file; draft emails and quotes (as drafts only).") +
+      row("Shows a preview, you confirm", "Move a card to another column; send any email to a client or supplier; change prices or mark-ups; edit or delete existing records; bulk changes.") +
+      row("Never", "Give its own ✓ / ✗ approval; clear quality or export holds; enter or generate certificate numbers, NSNs, CAGE codes or export classifications.") +
+      "</tbody></table>" +
+      '<p class="small-note" style="margin-top:10px;">It will act with your permissions, never more, and every change will be logged as "by assistant for (you)" and be undoable.</p></div>' +
+      '<p style="margin-top:16px;"><a class="links-a" href="https://claude.ai/new" target="_blank" rel="noopener noreferrer">Open Claude ↗</a> <span class="small-note">Until then, the header\'s Claude button opens claude.ai. Don\'t paste government client data, contract details or supplier pricing into it.</span></p>';
+  }
   function renderDepartment() {
-    var depts = visibleDepartments();
+    var group = deptGroup(activeDept), groupLabel = group === "admin" ? "Administration" : "Departments";
+    var depts = activeDept ? deptsIn(group) : visibleDepartments();
+    if (activeDept) lastDeptIn[group] = activeDept;
+    var opsHere = depts.filter(function (d) { return OPS_DEPTS.indexOf(d) !== -1; });
     if (!activeDept) return '<div class="empty">Your login has no departments yet. Ask an admin to add one.</div>';
     var dept = activeDept;
     var views = pentagonViewsFor(dept);
@@ -1065,7 +1130,7 @@
     if (!sub || !subs.some(function (s) { return s.id === sub; })) sub = subView[dept] = subs[0].id;
 
     var totalOpen = depts.reduce(function (s, d) { return s + openCount(d); }, 0);
-    setBreadcrumb(["Departments", shortCo(activeCompany), shortDept(dept)]);
+    setBreadcrumb([groupLabel, shortCo(activeCompany), shortDept(dept)]);
 
     var links = (DEPARTMENT_RESOURCES[dept] || []).slice();
     if (claudeProjects[dept]) {
@@ -1078,7 +1143,7 @@
     }).join("") + "</div>" : "";
 
     var head =
-      '<div class="intro"><div><div class="eyebrow">Departments / ' + E(shortCo(activeCompany)) + "</div>" +
+      '<div class="intro"><div><div class="eyebrow">' + E(groupLabel) + " / " + E(shortCo(activeCompany)) + "</div>" +
       "<h1>" + E(dept) + " · " + E(shortCo(activeCompany)) + "</h1>" +
       "<p>" + E(DEPT_TAGLINE[dept] || "Projects, sub-tasks and who's responsible for each.") + "</p>" +
       '<p class="small-note">' + (isManager()
@@ -1086,14 +1151,15 @@
         : "You can add your own rows. Only a manager ticks things off; anything a manager gave you is read-only.") +
       " · Saved to the SOI server</p>" + linkHtml + "</div>" +
       companySwitcher(totalOpen) + "</div>" +
-      '<div class="tabs" role="tablist">' + depts.map(function (d) {
-        var n = openCount(d);
-        return '<button type="button" role="tab" class="tab ' + (d === dept ? "active" : "") + '" aria-selected="' + (d === dept) + '" data-dept="' + E(d) + '">' +
-          E(shortDept(d)) + (n ? '<span class="badge">' + n + "</span>" : "") + "</button>";
-      }).join("") + "</div>" +
-      (subs.length > 1 ? '<div class="subbar"><div class="seg">' + subs.map(function (s) {
+      '<div class="tabs" role="tablist">' + deptTabs(depts, opsHere, dept) + "</div>" +
+      (subs.length > 1 || opsHere.length > 1 ? '<div class="subbar"><div class="seg">' + subs.map(function (s) {
         return '<button type="button" data-sub="' + E(s.id) + '" class="' + (s.id === sub ? "active" : "") + '">' + E(s.label) + "</button>";
-      }).join("") + "</div></div>" : "");
+      }).join("") + "</div>" +
+      // Inside the shared tab: which department's tasks, projects and lists
+      // (the board is the same for all three).
+      (opsHere.length > 1 && OPS_DEPTS.indexOf(dept) !== -1 && sub !== "board" ? '<div class="seg ops-switch" aria-label="Department">' + opsHere.map(function (d) {
+        return '<button type="button" data-ops-dept="' + E(d) + '" class="' + (d === dept ? "active" : "") + '">' + E(shortDept(d)) + "</button>";
+      }).join("") + "</div>" : "") + "</div>" : "");
 
     var body;
     if (sub === "finance") body = renderFinance();
@@ -4837,7 +4903,7 @@
     if (ww && $("#view").contains(ww)) { var dw = +ww.dataset.whoWeek; whoWeek = dw ? shiftDays(whoWeek, dw) : today; render(); return; }
     var sc = e.target.closest("[data-it-scope]");
     if (sc && $("#view").contains(sc)) { itScope = sc.dataset.itScope; showPerson = ""; render(); return; }
-    var t = e.target.closest("[data-co],[data-dept],[data-sub],[data-source],[data-add],[data-add-sub],[data-del],[data-cancel],[data-toggle],[data-fin-del]");
+    var t = e.target.closest("[data-co],[data-dept],[data-ops-dept],[data-sub],[data-source],[data-add],[data-add-sub],[data-del],[data-cancel],[data-toggle],[data-fin-del]");
     if (!t || !$("#view").contains(t)) return;
     var d = t.dataset;
     if (d.co) {
@@ -4849,6 +4915,11 @@
     } else if (d.dept) {
       showPerson = ""; showSource = "all";
       go("dept/" + encodeURIComponent(d.dept));
+    } else if (d.opsDept) {
+      // Same view in the other department, when it has it.
+      subView[d.opsDept] = subView[activeDept] || subView[d.opsDept];
+      showPerson = ""; showSource = "all";
+      go("dept/" + encodeURIComponent(d.opsDept));
     } else if (d.sub) {
       subView[activeDept] = d.sub;
       render();
