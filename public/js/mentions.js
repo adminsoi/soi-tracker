@@ -44,10 +44,10 @@ var mnOpen = (function () {
 function saveMnOpen() { try { localStorage.setItem("soi_tracker_mentions_open", JSON.stringify(mnOpen)); } catch (e) {} }
 
 function renderMentionsShell() {
-  setBreadcrumb(["You", "Mentions you"]);
+  setBreadcrumb(["You", "Mentions of You"]);
   setTimeout(loadMentions, 0);
   var wantPentagon = hasSOI() && !!me.pentagonCode && !!me.pentagonMentions;
-  return '<div class="intro"><div><div class="eyebrow">You</div><h1>Mentions you</h1><p>Everything assigned to you' +
+  return '<div class="intro"><div><div class="eyebrow">You</div><h1>Mentions of You</h1><p>Everything assigned to you' +
     (hasSOI() && me.pentagonMentions ? ", and every Pentagon document where you're the contact" : "") + " — sorted by what's urgent.</p></div></div>" +
     (hasSOI() && me.pentagonMentions && !me.pentagonCode ? '<div class="banner">No Pentagon code is set on your login yet — ask an admin to add one at <b>/admin.html</b> so your RFQs, Quotes, Sales Orders, Purchase Orders and Invoices show up here.</div>' : "") +
     '<div id="mn-dash"><div class="empty">Loading…</div></div>' +

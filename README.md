@@ -133,8 +133,7 @@ access changes apply without signing out. Don't tick it on shared computers.
 
 ## Layout (the "Daily Edit" look)
 
-A left sidebar (Departments, Overview, Mentions you, Calendar, Global,
-Pentagon), a company switcher (SOI · CAS · RedSun · Nano, plus All for
+A left sidebar (see *Navigation* below), a company switcher (SOI · CAS · RedSun · Nano, plus All for
 full-access accounts) and one tab per department. Every department is an
 editable table; changes save to the server when you leave a field.
 
@@ -367,18 +366,35 @@ dark mode (axis text, grid lines, tooltips and the numbers on bars follow
 the theme), and company colours on the calendar and inbox tags are tinted so
 dark ones like SOI green stay visible.
 
-- **Sidebar:** Work — **Departments** and **Administration**; You —
-  Mentions you, Work inbox; Tools — Calendar, Overview, Performance, Global,
-  **Master Chat**.
-- **Departments** shows Procurement, Purchasing and Warehouse as one tab
+- **Sidebar**, top to bottom: Work — **Operations** and **Administration**;
+  **Overview**; You — **Mentions of You**, **Emails**; Company —
+  **Strategy Meeting**, **SOP**, **People** (leadership logins only),
+  **Documents**, **Department Chat**; and at the bottom, Tools — **Calendar**
+  and **Global**. Pentagon isn't a sidebar item; its data feeds the
+  Operations tabs and the board. Old `#performance` links open HR's
+  Performance tab.
+- **Operations** shows Procurement, Purchasing and Warehouse as one tab
   (**Procurement / Purchasing / Warehouse**, sharing the AOG board), plus
   Business Dev and US Government. Inside the shared tab, a small switcher
   picks whose Tasks, Projects, SOPs and Pentagon lists you're looking at;
-  the board is the same for all three.
-- **Administration** holds IT, Admin, HR and Finance. Each sidebar item
-  reopens the department you last used there.
-- **Master Chat** describes the planned Claude chat (Phase 3 of the AOG CRM
-  spec). It isn't switched on until it can run in SOI's compliant AWS
+  the board is the same for all three. Business Dev and US Government have
+  no Tasks or SOPs tabs (Tasks stays while older tasks are still there;
+  their SOPs are on the SOP page).
+- **Administration** holds IT, Admin, HR and Finance. Each has
+  **Staff-Facing** (empty for now; the forms staff fill in come in Phase 4
+  of `ROADMAP.md`) and **Department-Facing**, which holds the department's
+  existing tabs: IT — Requests, Tasks, Projects, Resolved; HR — Tasks,
+  Projects and **Performance** (for logins with Performance ticked; anyone
+  with Performance but no HR department keeps it under Tools); Finance —
+  Finance, Tasks, Projects, Invoices; Admin — Tasks, Projects. Each sidebar
+  item reopens the department you last used there.
+- **SOP** shows each of your departments' quick answers and SOP documents,
+  with a tab per department (the same SOPs as the Operations SOPs tabs).
+- **Strategy Meeting**, **People** and **Documents** are placeholders for
+  later phases and load no data yet. People is shown to leadership logins
+  only; once it loads data, the server must check leadership too.
+- **Department Chat** (was Master Chat) describes the planned company-wide
+  Claude chat. It isn't switched on until it can run in SOI's compliant AWS
   environment and compliance approves its access; meanwhile it opens
   claude.ai.
 
@@ -451,9 +467,9 @@ Administration forms; the master chat (Claude on Bedrock). Until the
 compliance lead confirms the storage, don't upload export-controlled
 technical data to case files.
 
-## Work inbox
+## Emails (work inbox)
 
-**Work inbox** (sidebar → You) shows the signed-in person's own Outlook inbox
+**Emails** (sidebar → You) shows the signed-in person's own Outlook inbox
 from the last day / 3 days / week, one row per conversation. **Unread** and
 **Read** tabs follow Outlook: open a conversation in Outlook and it moves to
 Read on the next check (every few minutes). Inside each tab, rows are grouped

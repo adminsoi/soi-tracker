@@ -63,7 +63,7 @@ function loadPerf() {
     perf.list = d; perf.error = "";
     var n = d.people.filter(function (p) { return p.reviewDue; }).length;
     if (n !== perfFlagged) { perfFlagged = n; renderNav(); }
-  }, function (err) { perf.error = err.message; }).then(function () { perf.loading = false; perf.at = Date.now(); if (page === "performance") requestRender(); });
+  }, function (err) { perf.error = err.message; }).then(function () { perf.loading = false; perf.at = Date.now(); if (perfOnScreen()) requestRender(); });
 }
 function loadPerfPerson(key) {
   if (perf.personLoading === key) return;
@@ -85,10 +85,14 @@ function noteState(e, d) {
   if (d.stageDate && e.incidentDate <= d.stageDate) return ["old", "Before the last step"];
   return ["yes", "Counts toward the next step"];
 }
-function renderPerformance() {
-  setBreadcrumb(["Tools", "Performance"]);
+// Shown on its own page, or embedded on HR → Department-Facing.
+function perfOnScreen() {
+  return page === "performance" || (page === "departments" && activeDept === "HR" && adminFace.HR !== "staff" && subView.HR === "performance");
+}
+function renderPerformance(embedded) {
+  if (!embedded) setBreadcrumb(["Tools", "Performance"]);
   if (!perf.list || Date.now() - perf.at > 60000) loadPerf();
-  var head = '<div class="intro"><div><div class="eyebrow">Tools · private</div><h1>Performance</h1>' +
+  var head = embedded ? '<p class="small-note" style="margin:16px 0;">Private. HR\'s escalation process at a glance; PerformYard is the system of record. Every step is a person\'s decision, and anything beyond the PIP review needs HR and legal.</p>' : '<div class="intro"><div><div class="eyebrow">Tools · private</div><h1>Performance</h1>' +
     "<p>HR's escalation process at a glance. PerformYard is the system of record. Notes only count once the employee has been told; reaching a count means a <b>review</b> is due — every step is a person's decision, and anything beyond the PIP review needs HR and legal.</p></div></div>";
   if (perf.error) return head + '<div class="banner">' + E(perf.error) + "</div>";
   if (!perf.list) return head + '<div class="empty">Loading…</div>';

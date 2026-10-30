@@ -29,9 +29,10 @@
   .brand { font: 36px/.95 'Libre Caslon Display', Georgia, serif; color: var(--ink); letter-spacing: -1px; }
   .brand em { font-style: italic; }
   .brand span { display: block; margin-top: 17px; font: 8px 'DM Sans', sans-serif; letter-spacing: 2px; color: var(--muted); }
-  nav { margin-top: 26px; flex: 1 1 auto; min-height: 0; overflow-y: auto; margin-right: -12px; padding-right: 12px; }
-  nav .nav-group { font-size: 9px; letter-spacing: 2px; color: var(--muted); margin: 22px 10px 8px; }
-  nav a { display: flex; gap: 12px; align-items: center; padding: 11px 12px; margin: 3px 0; color: #756657; font-size: 13px; border-radius: 6px; }
+  nav { margin-top: 26px; flex: 1 1 auto; min-height: 0; overflow-y: auto; margin-right: -12px; padding-right: 12px; display: flex; flex-direction: column; }
+  nav .nav-group { font-size: 9px; letter-spacing: 2px; color: var(--muted); margin: 16px 10px 6px; }
+  nav .nav-group.nav-bottom { margin-top: auto; padding-top: 16px; }
+  nav a { display: flex; gap: 12px; align-items: center; padding: 8px 12px; margin: 2px 0; color: #756657; font-size: 13px; border-radius: 6px; }
   nav a:hover { background: var(--soft); }
   nav a.active { background: var(--pink); color: var(--rose-ink); }
   nav a .ic { width: 19px; font-size: 15px; text-align: center; }

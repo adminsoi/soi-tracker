@@ -8,6 +8,9 @@
 // Quick answers ("our manager is out — how do we…?") and the department's
 // SOP PDFs. Everyone in the department reads; managers add and change.
 var sopData = {}, sopUi = { view: {}, q: "", adding: false, editing: "", pasting: false, form: {} };
+// The SOP page picks its own department; a department's SOPs tab uses the open one.
+var sopPageDept = "";
+function sopDeptNow() { return page === "sop" ? sopPageDept : activeDept; }
 function loadSops(dept) {
   var st = sopData[dept] = sopData[dept] || {};
   if (st.loading) return;
@@ -126,7 +129,7 @@ document.addEventListener("input", function (e) {
   if (t.id === "sopPasteBox") { var n = parseQa(t.value).length; var c = $("#sopPasteCount"); if (c) c.textContent = n ? n + " question" + (n === 1 ? "" : "s") + " found" : ""; }
 });
 document.addEventListener("change", function (e) {
-  var t = e.target, dept = activeDept;
+  var t = e.target, dept = sopDeptNow();
   if (t.dataset && t.dataset.sopF) { sopUi.form[t.dataset.sopF] = t.value; return; }
   if (t.dataset && t.dataset.sopMeta) {
     var ch = {}; ch[t.dataset.sopMeta] = t.value;
@@ -155,7 +158,7 @@ document.addEventListener("change", function (e) {
 document.addEventListener("click", function (e) {
   var t = e.target.closest && e.target.closest("[data-sop-view],[data-sop-addq],[data-sop-paste],[data-sop-cancel],[data-sop-save],[data-sop-editq],[data-sop-delq],[data-sop-pastesave],[data-sop-open],[data-sop-upload],[data-sop-del]");
   if (!t) return;
-  var ds = t.dataset, dept = activeDept, st = sopData[dept], d = st && st.data;
+  var ds = t.dataset, dept = sopDeptNow(), st = sopData[dept], d = st && st.data;
   if (ds.sopView) { sopUi.view[dept] = ds.sopView; render(); return; }
   if (ds.sopOpen) { openSop(ds.sopOpen); return; }
   if ("sopUpload" in ds) { $("#sopFile").click(); return; }

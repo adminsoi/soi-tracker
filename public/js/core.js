@@ -24,7 +24,7 @@ var DEPT_TAGLINE = {
 // Procurement / Purchasing / Warehouse use part rows; everything else is projects with sub-tasks.
 var OPS_DEPTS = ["Procurement", "Purchasing", "Warehouse"];
 // Sidebar groups: IT, Admin, HR and Finance live under Administration;
-// everything else under Departments, where Procurement, Purchasing and
+// everything else under Operations, where Procurement, Purchasing and
 // Warehouse share one tab (and one board).
 var ADMIN_DEPTS = ["IT", "Administrative", "HR", "Accounting & Finance"];
 var lastDeptIn = {}; // group -> last department opened there
@@ -78,9 +78,10 @@ var FIELD_GUESSES = {
 var me = null;
 var DEPARTMENTS = [];
 var activeCompany = null;
-var page = "departments";        // departments | overview | mentions | inbox | calendar | global
+var page = "departments";        // departments (Operations / Administration) | overview | mentions | inbox | strategy | sop | people | documents | chat | calendar | global | performance
 var activeDept = null;
 var subView = {};                // dept -> "tasks" | "projects" | "finance" | … | Pentagon view id
+var adminFace = {};              // Administration dept -> "staff" | "dept" (Staff-Facing / Department-Facing)
 var tasks = [];                  // tasks made in the tracker
 var cards = [];                  // Pentagon rows as task-shaped cards
 var pentagonErrors = [];
@@ -381,27 +382,38 @@ document.addEventListener("focusout", function () {
 });
 
 // ---------- Routing ----------
+// Performance lives on HR → Department-Facing; people with Performance
+// but no HR tab keep it in the sidebar.
+function perfInHr() { return !!me.performance && deptsIn("admin").indexOf("HR") !== -1; }
 function navItems() {
   var items = [];
-  if (deptsIn("main").length) items.push({ id: "departments", ic: "▣", label: "Departments" });
-  if (deptsIn("admin").length) items.push({ id: "administration", ic: "▤", label: "Administration" });
+  if (deptsIn("main").length) items.push({ id: "departments", ic: "▣", label: "Operations" });
+  if (deptsIn("admin").length) items.push({ id: "administration", ic: "▤", label: "Administration", badge: perfInHr() ? perfFlagged : 0 });
   if (items.length) items[0].group = "WORK";
-  items.push({ group: "YOU", id: "mentions", ic: "@", label: "Mentions you", badge: mineOpen });
-  items.push({ id: "inbox", ic: "✉", label: "Work inbox", badge: inboxNeeds });
-  var tools = [];
-  tools.push({ id: "calendar", ic: "▦", label: "Calendar" });
-  if (me.fullAccess || me.departments.length > 1) tools.push({ id: "overview", ic: "◷", label: "Overview" });
-  if (me.performance) tools.push({ id: "performance", ic: "◐", label: "Performance", badge: perfFlagged });
+  if (me.fullAccess || me.departments.length > 1) items.push({ group: "OVERVIEW", id: "overview", ic: "◷", label: "Overview" });
+  items.push({ group: "YOU", id: "mentions", ic: "@", label: "Mentions of You", badge: mineOpen });
+  items.push({ id: "inbox", ic: "✉", label: "Emails", badge: inboxNeeds });
+  items.push({ group: "COMPANY", id: "strategy", ic: "◇", label: "Strategy Meeting" });
+  items.push({ id: "sop", ic: "☰", label: "SOP" });
+  // Leadership only (the server checks too, once the page loads data).
+  if (me.leadership) items.push({ id: "people", ic: "☺", label: "People" });
+  items.push({ id: "documents", ic: "▢", label: "Documents" });
+  items.push({ id: "chat", ic: "✳", label: "Department Chat" });
+  // Calendar and Global sit at the bottom of the sidebar.
+  var tools = [{ id: "calendar", ic: "▦", label: "Calendar" }];
   if (canUseAll()) tools.push({ id: "global", ic: "◎", label: "Global" });
-  tools.push({ id: "chat", ic: "✳", label: "Master Chat" });
-  if (tools.length) { tools[0].group = "TOOLS"; items = items.concat(tools); }
-  return items;
+  if (me.performance && !perfInHr()) tools.push({ id: "performance", ic: "◐", label: "Performance", badge: perfFlagged });
+  tools[0].group = "TOOLS"; tools[0].bottom = true;
+  return items.concat(tools);
 }
 function readHash() {
   var h = decodeURIComponent((location.hash || "").replace(/^#/, ""));
   var parts = h.split("/");
   if (parts[0] === "dept" && parts[1] && visibleDepartments().indexOf(parts[1]) !== -1) { page = "departments"; activeDept = parts[1]; }
   else if (parts[0] === "administration" && groupHome("admin")) { page = "departments"; activeDept = groupHome("admin"); }
+  else if (parts[0] === "operations" && groupHome("main")) { page = "departments"; activeDept = groupHome("main"); }
+  // Old links to Performance open it on HR.
+  else if (parts[0] === "performance" && perfInHr()) { page = "departments"; activeDept = "HR"; adminFace.HR = "dept"; subView.HR = "performance"; }
   else if (parts[0] !== "departments" && parts[0] !== "dept" && navItems().some(function (n) { return n.id === parts[0]; })) page = parts[0];
   else page = "departments";
 }
@@ -414,7 +426,7 @@ function renderNav() {
     var grp = n.id === "departments" ? "main" : n.id === "administration" ? "admin" : "";
     var href = grp ? "dept/" + encodeURIComponent(page === "departments" && deptGroup(activeDept) === grp ? activeDept : groupHome(grp)) : n.id;
     var on = grp ? page === "departments" && deptGroup(activeDept) === grp : n.id === page;
-    return (n.group ? '<div class="nav-group">' + n.group + "</div>" : "") +
+    return (n.group ? '<div class="nav-group' + (n.bottom ? " nav-bottom" : "") + '">' + n.group + "</div>" : "") +
       '<a href="#' + href + '" class="' + (on ? "active" : "") + '"><span class="ic">' + n.ic + "</span>" + E(n.label) +
       (n.badge ? '<span class="badge">' + n.badge + "</span>" : "") + "</a>";
   }).join("");
@@ -435,7 +447,11 @@ function render() {
     else if (page === "inbox") html = renderInbox();
     else if (page === "performance") html = renderPerformance();
     else if (page === "global") html = renderGlobalShell();
-    else if (page === "chat") html = renderMasterChat();
+    else if (page === "strategy") html = renderStrategy();
+    else if (page === "sop") html = renderSopPage();
+    else if (page === "people") html = renderPeople();
+    else if (page === "documents") html = renderDocuments();
+    else if (page === "chat") html = renderDeptChat();
     else html = renderDepartment();
   } catch (e) {
     console.error(e);

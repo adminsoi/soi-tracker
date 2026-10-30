@@ -28,26 +28,8 @@ function deptTabs(depts, opsHere, dept) {
   return out.join("");
 }
 
-// Master Chat: the AOG CRM spec's one Claude chat that can read the
-// tracker and make changes when asked. It needs Claude running inside
-// SOI's compliant AWS environment (Bedrock), which compliance still has to
-// approve, so for now this says what it will do and opens Claude.
-function renderMasterChat() {
-  setBreadcrumb(["Tools", "Master Chat"]);
-  var row = function (a, b) { return "<tr><td><b>" + a + "</b></td><td>" + b + "</td></tr>"; };
-  return '<div class="intro"><div><div class="eyebrow">Tools</div><h1>Master Chat</h1>' +
-    "<p>One Claude chat for the whole tracker, replacing the department chats. It isn't switched on yet: it has to run inside SOI's compliant AWS environment (for example Claude on Amazon Bedrock in GovCloud), and the compliance lead has to approve what it can read.</p></div></div>" +
-    '<div class="card" style="padding:18px 20px;"><div class="card-label">What it will do</div>' +
-    '<table class="plain"><tbody>' +
-    row("When asked", "Add notes; create and assign tasks; add tags and flags; search and summarise a quote, order or customer; attach emails and files to a case file; draft emails and quotes (as drafts only).") +
-    row("Shows a preview, you confirm", "Move a card to another column; send any email to a client or supplier; change prices or mark-ups; edit or delete existing records; bulk changes.") +
-    row("Never", "Give its own ✓ / ✗ approval; clear quality or export holds; enter or generate certificate numbers, NSNs, CAGE codes or export classifications.") +
-    "</tbody></table>" +
-    '<p class="small-note" style="margin-top:10px;">It will act with your permissions, never more, and every change will be logged as "by assistant for (you)" and be undoable.</p></div>' +
-    '<p style="margin-top:16px;"><a class="links-a" href="https://claude.ai/new" target="_blank" rel="noopener noreferrer">Open Claude ↗</a> <span class="small-note">Until then, the header\'s Claude button opens claude.ai. Don\'t paste government client data, contract details or supplier pricing into it.</span></p>';
-}
 function renderDepartment() {
-  var group = deptGroup(activeDept), groupLabel = group === "admin" ? "Administration" : "Departments";
+  var group = deptGroup(activeDept), groupLabel = group === "admin" ? "Administration" : "Operations";
   var depts = activeDept ? deptsIn(group) : visibleDepartments();
   if (activeDept) lastDeptIn[group] = activeDept;
   var opsHere = depts.filter(function (d) { return OPS_DEPTS.indexOf(d) !== -1; });
@@ -63,16 +45,25 @@ function renderDepartment() {
   if (BOARD_DEPTS.indexOf(dept) !== -1 && canSeeBoardUi()) subs.push({ id: "board", label: "Board" });
   // IT opens on Requests.
   if (dept === "IT" && canSeeItRequests()) subs.push({ id: "requests", label: "Requests" });
-  subs.push({ id: "tasks", label: "Tasks" });
+  // Business Development and US Gov have no Tasks tab; it stays while
+  // older tasks are still there. Their SOPs, and Administration's, are on
+  // the SOP page.
+  var trimmed = dept === "Business Development" || dept === "US Government";
+  if (!trimmed || deptTasks(dept).some(function (t) { return itemKind(t) === "task"; })) subs.push({ id: "tasks", label: "Tasks" });
   subs.push({ id: "projects", label: "Projects" });
   if (dept === "IT" && me.itNotebook) subs.push({ id: "resolved", label: "Resolved" });
-  subs.push({ id: "sops", label: "SOPs" });
+  if (dept === "HR" && me.performance) subs.push({ id: "performance", label: "Performance" + (perfFlagged ? " (" + perfFlagged + ")" : "") });
+  if (!trimmed && group !== "admin") subs.push({ id: "sops", label: "SOPs" });
   views.forEach(function (v) { subs.push({ id: v.id, label: v.label }); });
   var sub = subView[dept];
   if (!sub || !subs.some(function (s) { return s.id === sub; })) sub = subView[dept] = subs[0].id;
 
+  // Administration departments: Staff-Facing (forms for everyone, still
+  // to come) and Department-Facing (the department's own work).
+  var face = group === "admin" ? adminFace[dept] || "dept" : "";
+
   var totalOpen = depts.reduce(function (s, d) { return s + openCount(d); }, 0);
-  setBreadcrumb([groupLabel, shortCo(activeCompany), shortDept(dept)]);
+  setBreadcrumb([groupLabel, shortCo(activeCompany), shortDept(dept), face === "staff" ? "Staff-Facing" : face ? "Department-Facing" : ""]);
 
   var links = (DEPARTMENT_RESOURCES[dept] || []).slice();
   if (claudeProjects[dept]) {
@@ -94,7 +85,10 @@ function renderDepartment() {
     " · Saved to the SOI server</p>" + linkHtml + "</div>" +
     companySwitcher(totalOpen) + "</div>" +
     '<div class="tabs" role="tablist">' + deptTabs(depts, opsHere, dept) + "</div>" +
-    (subs.length > 1 || opsHere.length > 1 ? '<div class="subbar"><div class="seg">' + subs.map(function (s) {
+    (face ? '<div class="subbar"><div class="seg" aria-label="Who it\'s for">' + [["staff", "Staff-Facing"], ["dept", "Department-Facing"]].map(function (f) {
+      return '<button type="button" data-face="' + f[0] + '" class="' + (f[0] === face ? "active" : "") + '">' + f[1] + "</button>";
+    }).join("") + "</div></div>" : "") +
+    (face === "staff" ? "" : subs.length > 1 || opsHere.length > 1 ? '<div class="subbar"><div class="seg">' + subs.map(function (s) {
       return '<button type="button" data-sub="' + E(s.id) + '" class="' + (s.id === sub ? "active" : "") + '">' + E(s.label) + "</button>";
     }).join("") + "</div>" +
     // Inside the shared tab: which department's tasks, projects and lists
@@ -104,13 +98,15 @@ function renderDepartment() {
     }).join("") + "</div>" : "") + "</div>" : "");
 
   var body;
-  if (sub === "finance") body = renderFinance();
+  if (face === "staff") body = renderStaffFacing(dept);
+  else if (sub === "finance") body = renderFinance();
   else if (sub === "analytics") body = renderBdAnalytics();
   else if (sub === "requests") body = renderItRequests();
   else if (sub === "resolved") body = renderNotebook();
   else if (sub === "sops") body = renderSops(dept);
   else if (sub === "insights") body = renderWarehouseInsights();
   else if (sub === "board") body = renderBoard(dept);
+  else if (sub === "performance") body = renderPerformance(true);
   else if (sub === "tasks") body = isOps(dept) ? renderOpsTable(dept) : renderTaskTable(dept);
   else if (sub === "projects") body = renderProjectTable(dept);
   else {
@@ -119,6 +115,24 @@ function renderDepartment() {
   }
   return head + body;
 }
+
+// What each Administration department's Staff-Facing tab will hold
+// (Phase 4 of ROADMAP.md).
+var STAFF_FACING = {
+  "IT": "the IT ticket form. Until then, staff use the IT request Microsoft Form, and requests land on Department-Facing → Requests",
+  "Administrative": "the admin request form",
+  "HR": "the HR issue, leave request and performance comment forms",
+  "Accounting & Finance": "the reimbursement request form"
+};
+function renderStaffFacing(dept) {
+  return '<div class="empty">Nothing here yet. This is where staff will find ' + E(STAFF_FACING[dept] || "this department's forms") + ".</div>";
+}
+document.addEventListener("click", function (e) {
+  var t = e.target.closest && e.target.closest("[data-face]");
+  if (!t || !$("#view").contains(t)) return;
+  adminFace[activeDept] = t.dataset.face;
+  render();
+});
 
 // Source / person filters shared by both table layouts.
 function filtered(list) {

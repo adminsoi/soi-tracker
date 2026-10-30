@@ -98,7 +98,7 @@ Mentions of You, and files created automatically from Pentagon.
 - [x] **0. Split `index.html`** into `public/styles.css` and one script per
       area in `public/js/`, with no behaviour change, so later phases only
       read the part they change.
-- [ ] **1. Sidebar and navigation** per the decisions above; empty
+- [x] **1. Sidebar and navigation** per the decisions above; empty
       Staff-Facing / Department-Facing tabs; BD / US Gov tabs trimmed.
 - [ ] **2. Operations Kanban** — reshape the existing AOG board
       (`public/js/aog-board.js`, `board.js`) to the decisions above.

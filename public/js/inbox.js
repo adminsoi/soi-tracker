@@ -36,10 +36,10 @@ function inboxCoTag(t, long) {
 function boxLabel(m) { return inboxData && m === inboxData.mailbox ? "Mine" : String(m).split("@")[0] + "@"; }
 
 function renderInbox() {
-  setBreadcrumb(["You", "Work inbox"]);
+  setBreadcrumb(["You", "Emails"]);
   setTimeout(function () { loadInbox(false); }, 0);
   var several = inboxData && inboxData.mailboxes && inboxData.mailboxes.length > 1;
-  return '<div class="intro"><div><div class="eyebrow">Outlook' + (inboxData ? " · " + E(several ? inboxData.mailboxes.length + " inboxes" : inboxData.mailbox) : "") + '</div><h1>Work inbox</h1>' +
+  return '<div class="intro"><div><div class="eyebrow">Outlook' + (inboxData ? " · " + E(several ? inboxData.mailboxes.length + " inboxes" : inboxData.mailbox) : "") + '</div><h1>Emails</h1>' +
     "<p>Your Outlook inbox" + (several ? " and your shared inboxes" : "") + ", newest first. Open something in Outlook and it moves to Read. Nothing here sends or changes your mail.</p>" +
     '<p class="small-note" id="inbox-note"></p></div>' +
     '<div class="co-wrap"><div class="eyebrow">Received in the last</div><div class="cos">' + [[1, "Day"], [3, "3 days"], [7, "Week"]].map(function (d) {
