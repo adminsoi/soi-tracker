@@ -112,6 +112,10 @@ function getSettings() {
 // Customer follow-up index for the Work inbox: per mailbox, the latest
 // customer email and the latest reply in each open conversation (who, when,
 // subject — never bodies), plus Microsoft's delta links. See mail.js.
+// AOG operations board: { cards: [...], customers: { name: { files } } }.
+function getBoard() {
+  return readJson("aog_board", { cards: [], customers: {} });
+}
 function getMailIndex() {
   return readJson("mail_followups", {});
 }
@@ -149,6 +153,7 @@ let sopsQueue = Promise.resolve();
 let performanceQueue = Promise.resolve();
 let qbrQueue = Promise.resolve();
 let mailIndexQueue = Promise.resolve();
+let boardQueue = Promise.resolve();
 
 function withUsers(mutator) {
   usersQueue = usersQueue.then(async () => {
@@ -274,7 +279,19 @@ function withMailIndex(mutator) {
   return mailIndexQueue;
 }
 
+function withBoard(mutator) {
+  boardQueue = boardQueue.then(async () => {
+    const doc = await getBoard();
+    const result = await mutator(doc);
+    await writeJson("aog_board", doc);
+    return result;
+  });
+  return boardQueue;
+}
+
 module.exports = {
+  getBoard,
+  withBoard,
   getMailIndex,
   withMailIndex,
   getQbr,

@@ -42,6 +42,8 @@ const {
   withSops,
   getPerformance,
   withPerformance,
+  getBoard,
+  withBoard,
   getMailIndex,
   withMailIndex,
   getQbr,
@@ -52,6 +54,7 @@ const { eventsBetween, whosIn, CalendarError, nameFromTitle } = require("./calen
 const { hrEvents, cleanFeedUrl, FeedError } = require("./hrcal");
 const { itRequestsConfigured, fetchItRequests, IT_REQUESTS_MAILBOX, parseFormWorkbook, recordFromEmail, FormFileError, officeStamp } = require("./itrequests");
 const { inboxThreads, syncFollowIndex, MailError } = require("./mail");
+const board = require("./board");
 const { pentagonQuery } = require("./pentagon");
 const {
   PENTAGON_VIEWS,
@@ -1104,6 +1107,369 @@ app.get(
       };
     }
     res.json({ departments, errors, windowNote: "Pentagon counts cover what each query returns (by default the last 14 days)." });
+  })
+);
+
+// ---------- AOG operations board ----------
+// One card per quote, RFQ → Quoted → Sale → Purchased → Received → Sent
+// (rules in board.js). Staff see their own cards and their department's
+// stages; full-access and leadership logins see everything in their
+// companies. Moving a card assigns it to that stage's manager (Board
+// settings, else the department default). Every change is added to the
+// card's history; cards are archived, never deleted.
+const BOARD_DEPTS = ["Procurement", "Purchasing", "Warehouse"];
+const BOARD_BIG_TICKET = 25000;
+function boardSettings(settings) {
+  const b = settings.board || {};
+  return { managers: b.managers || {}, globalManager: b.globalManager || "", bigTicket: Number(b.bigTicket) > 0 ? Number(b.bigTicket) : BOARD_BIG_TICKET };
+}
+function stageManager(stage, settings) {
+  return boardSettings(settings).managers[stage] || (settings.departmentDefaults || {})[board.stageOf(stage).dept] || "";
+}
+const boardTop = (u) => !!(u.fullAccess || u.leadership);
+function canSeeBoard(u) { return boardTop(u) || BOARD_DEPTS.some((d) => (u.departments || []).includes(d)); }
+function canSeeCard(u, c) {
+  if (!(u.companies || []).includes(c.company)) return false;
+  return boardTop(u) || sameUser(c.assignee, u.username) || sameUser(c.createdBy, u.username) || inDepartment(u, board.stageOf(c.stage).dept);
+}
+// Cost and mark-up: Procurement, Purchasing and the top. Margin: the top only.
+const mayCost = (u) => boardTop(u) || ["Procurement", "Purchasing"].some((d) => (u.departments || []).includes(d));
+const mayMargin = (u) => boardTop(u);
+function mayApprove(u, c, settings) {
+  return boardTop(u) || sameUser(stageManager(c.stage, settings), u.username) || (isManager(u) && inDepartment(u, board.stageOf(c.stage).dept));
+}
+function mayQuality(u, settings) {
+  return boardTop(u) || sameUser(stageManager("received", settings), u.username) || (isManager(u) && inDepartment(u, "Warehouse"));
+}
+function logCard(c, by, what) {
+  c.history = c.history || [];
+  c.history.push({ at: Date.now(), by, what });
+  if (c.history.length > 500) c.history = c.history.slice(-500);
+  c.updatedAt = Date.now();
+}
+// A card as the signed-in person may see it.
+function shapeCard(c, u, now) {
+  const out = JSON.parse(JSON.stringify(c));
+  out.flags = board.flagsOf(c, now);
+  out.total = board.quoteTotal(c);
+  out.approvalBlockers = {};
+  for (const kind of Object.values(board.APPROVALS)) out.approvalBlockers[kind] = board.approvalBlockers(c, kind);
+  const next = board.STAGE_IDS[board.STAGE_IDS.indexOf(c.stage) + 1];
+  out.next = next || "";
+  out.moveBlockers = next ? board.moveBlockers(c, next) : [];
+  for (const l of out.lines || []) {
+    if (mayMargin(u)) l.margin = l.price > 0 && l.cost > 0 ? Math.round(((l.price - l.cost) / l.price) * 1000) / 10 : null;
+    if (!mayCost(u)) { delete l.cost; delete l.markup; }
+  }
+  return out;
+}
+async function boardCard(req, res) {
+  const doc = await getBoard();
+  const c = (doc.cards || []).find((x) => x.id === req.params.id);
+  if (!c || !canSeeCard(req.user, c)) { res.status(404).json({ error: "That card isn't here" }); return null; }
+  return c;
+}
+// Change one card inside the board queue; fn returns an error string to stop.
+async function changeCard(req, res, fn) {
+  const now = Date.now();
+  const settings = await getSettings();
+  const out = await withBoard(async (doc) => {
+    const c = (doc.cards || []).find((x) => x.id === req.params.id);
+    if (!c || !canSeeCard(req.user, c)) return { status: 404, error: "That card isn't here" };
+    const err = await fn(c, settings, doc);
+    if (err) return { status: 400, error: err };
+    return { card: c };
+  });
+  if (out.error) return res.status(out.status).json({ error: out.error });
+  res.json(shapeCard(out.card, req.user, now));
+  return out.card;
+}
+
+app.get(
+  "/api/board",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!canSeeBoard(req.user)) return res.status(403).json({ error: "The board is for Procurement, Purchasing and Warehouse" });
+    const company = String(req.query.company || "");
+    const [doc, settings, users] = await Promise.all([getBoard(), getSettings(), getUsers()]);
+    const now = Date.now();
+    const cards = (doc.cards || []).filter((c) => !c.archived === (req.query.archived !== "1") && (!company || c.company === company) && canSeeCard(req.user, c));
+    const people = users.map(normalizeUser).filter((u) => BOARD_DEPTS.some((d) => u.departments.includes(d)) || u.fullAccess)
+      .filter((u) => u.companies.some((co) => req.user.companies.includes(co))).map((u) => u.username).sort((a, b) => a.localeCompare(b));
+    const customers = {};
+    for (const [name, x] of Object.entries(doc.customers || {})) customers[name] = { files: (x.files || []) };
+    res.json({
+      stages: board.STAGES, checks: board.CHECKS, approvals: board.APPROVALS,
+      cards: cards.map((c) => shapeCard(c, req.user, now)),
+      people, customers,
+      managers: Object.fromEntries(board.STAGE_IDS.map((s) => [s, stageManager(s, settings)])),
+      settings: boardTop(req.user) ? boardSettings(settings) : null,
+      can: { cost: mayCost(req.user), margin: mayMargin(req.user), quality: mayQuality(req.user, settings), settings: boardTop(req.user), assign: isManager(req.user) || boardTop(req.user) },
+    });
+  })
+);
+
+app.post(
+  "/api/board",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!canSeeBoard(req.user) || !(boardTop(req.user) || inDepartment(req.user, "Procurement"))) return res.status(403).json({ error: "New RFQs are added by Procurement" });
+    const b = req.body || {};
+    const company = String(b.company || "");
+    if (!req.user.companies.includes(company)) return res.status(400).json({ error: "Pick a company" });
+    const customer = board.text(b.customer, 120);
+    if (!customer) return res.status(400).json({ error: "Who's the customer?" });
+    const settings = await getSettings();
+    const lines = (Array.isArray(b.lines) ? b.lines : []).slice(0, 50).map((l) => board.cleanLine(l, null, { cost: mayCost(req.user), quality: false, username: req.user.username })).filter((l) => l.pn);
+    const card = {
+      id: newId(), company, customer, quoteNo: board.text(b.quoteNo, 40), orderNo: "", stage: "rfq",
+      dueDate: /^\d{4}-\d{2}-\d{2}$/.test(b.dueDate || "") ? b.dueDate : "", highlighted: !!b.highlighted,
+      assignee: board.text(b.assignee, 60) || stageManager("rfq", settings) || req.user.username,
+      lines, checks: {}, approvals: {}, notes: [], files: [], history: [], createdAt: Date.now(), createdBy: req.user.username,
+    };
+    logCard(card, req.user.username, `Created the RFQ for ${customer}`);
+    await withBoard((doc) => { doc.cards = doc.cards || []; doc.cards.push(card); });
+    res.status(201).json(shapeCard(card, req.user, Date.now()));
+  })
+);
+
+app.patch(
+  "/api/board/:id",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    await changeCard(req, res, (c, settings) => {
+      const by = req.user.username, said = [];
+      for (const [k, n, label] of [["customer", 120, "customer"], ["quoteNo", 40, "quote number"], ["orderNo", 40, "order number"]]) {
+        if (k in b && board.text(b[k], n) !== (c[k] || "")) { c[k] = board.text(b[k], n); said.push(`${label} → ${c[k] || "blank"}`); }
+      }
+      if ("dueDate" in b) { const d = /^\d{4}-\d{2}-\d{2}$/.test(b.dueDate || "") ? b.dueDate : ""; if (d !== (c.dueDate || "")) { c.dueDate = d; said.push(`due date → ${d || "none"}`); } }
+      if ("highlighted" in b && !!b.highlighted !== !!c.highlighted) { c.highlighted = !!b.highlighted; said.push(c.highlighted ? "highlighted: not on the open market" : "highlight removed"); }
+      if ("assignee" in b && board.text(b.assignee, 60) !== (c.assignee || "")) {
+        if (!(isManager(req.user) || boardTop(req.user))) return "Only a manager can reassign a card";
+        c.assignee = board.text(b.assignee, 60); said.push(`assigned to ${c.assignee || "nobody"}`);
+      }
+      if (b.checks && typeof b.checks === "object") {
+        c.checks = c.checks || {};
+        for (const list of Object.values(board.CHECKS)) for (const ch of list) {
+          if (ch.id in b.checks && !!b.checks[ch.id] !== !!c.checks[ch.id]) { c.checks[ch.id] = !!b.checks[ch.id]; said.push(`${ch.label}: ${c.checks[ch.id] ? "✓" : "unticked"}`); }
+        }
+        // An approval given on a complete file doesn't survive unticking it.
+        for (const [stage, kind] of [["rfq", "sourcing"], ["sale", "purchase"]]) {
+          if (board.approval(c, kind).state === "approved" && !board.checksDone(c, stage)) { c.approvals[kind] = { state: "" }; said.push(`${board.APPROVAL_LABEL[kind]} approval reset (file no longer complete)`); }
+        }
+      }
+      if (Array.isArray(b.lines)) {
+        const may = { cost: mayCost(req.user), quality: mayQuality(req.user, settings), username: by };
+        if (b.lines.some((l, i) => l && "qualityOk" in l && !may.quality && !!l.qualityOk !== !!((c.lines || []).find((p) => p.id === l.id) || {}).qualityOk)) return "Only the warehouse manager signs off quality";
+        const before = JSON.stringify((c.lines || []).map((l) => [l.pn, l.qty, l.price]));
+        const prevById = new Map((c.lines || []).map((l) => [l.id, l]));
+        const lines = b.lines.slice(0, 50).map((l) => board.cleanLine(l || {}, prevById.get(l && l.id), may));
+        for (const l of lines) { const p = prevById.get(l.id); if (p && !!p.qualityOk !== !!l.qualityOk) said.push(`quality ${l.qualityOk ? "signed off" : "sign-off removed"} on ${l.pn || "a line"}`); }
+        c.lines = lines;
+        said.push("lines updated");
+        // A quote approved at one price isn't approved at another.
+        if (board.approval(c, "quote").state === "approved" && JSON.stringify(c.lines.map((l) => [l.pn, l.qty, l.price])) !== before) {
+          c.approvals.quote = { state: "" }; said.push("Quote approval reset (lines or prices changed)");
+        }
+      }
+      if (said.length) logCard(c, by, said.join("; "));
+    });
+  })
+);
+
+app.post(
+  "/api/board/:id/move",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const to = String((req.body || {}).to || "");
+    if (!board.STAGE_IDS.includes(to)) return res.status(400).json({ error: "Unknown column" });
+    const card = await changeCard(req, res, (c, settings) => {
+      const from = board.STAGE_IDS.indexOf(c.stage), dest = board.STAGE_IDS.indexOf(to);
+      if (dest === from) return "It's already there";
+      if (dest > from + 1) return "Cards move one column at a time";
+      if (dest < from && !(mayApprove(req.user, c, settings) || boardTop(req.user))) return "Only a manager can move a card back";
+      if (dest === from + 1 && !(canSeeCard(req.user, c) && (inDepartment(req.user, board.stageOf(c.stage).dept) || sameUser(c.assignee, req.user.username) || boardTop(req.user)))) return "You can't move this card";
+      const stops = board.moveBlockers(c, to);
+      if (stops.length) return "Not yet: " + stops.join("; ");
+      // Going back clears the approvals from the stages it left.
+      if (dest < from) for (const [stage, kind] of Object.entries(board.APPROVALS)) if (board.STAGE_IDS.indexOf(stage) >= dest) c.approvals[kind] = { state: "" };
+      const prev = c.assignee;
+      c.stage = to;
+      c.assignee = stageManager(to, settings) || c.assignee;
+      logCard(c, req.user.username, `Moved to ${board.stageOf(to).label}` + (c.assignee !== prev ? `, assigned to ${c.assignee}` : ""));
+    });
+    if (card && card.assignee) notifyBoardAssignee(card, `${board.stageOf(card.stage).label}: ${cardLabel(card)}`).catch(() => {});
+  })
+);
+
+function cardLabel(c) {
+  const n = board.STAGE_IDS.indexOf(c.stage) >= 2 && c.orderNo ? `Order ${c.orderNo}` : c.quoteNo ? `Quote ${c.quoteNo}` : "RFQ";
+  return `${n} — ${c.customer}`;
+}
+async function notifyBoardAssignee(c, subject) {
+  const u = (await getUsers()).find((x) => sameUser(x.username, c.assignee));
+  if (!u || !u.email) return;
+  await sendMail({
+    to: u.email,
+    subject: `AOG board — ${subject}`,
+    html: `<p>A card on the AOG board is now with you (${escapeHtml(board.stageOf(c.stage).label)}):</p><p><strong>${escapeHtml(cardLabel(c))}</strong></p>` +
+      (c.dueDate ? `<p>Due: ${escapeHtml(c.dueDate)}</p>` : "") + `<p>Open the tracker's board to work it.</p>`,
+  });
+}
+
+app.post(
+  "/api/board/:id/approval",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const decision = b.decision === "approve" ? "approved" : b.decision === "reject" ? "rejected" : "";
+    if (!decision) return res.status(400).json({ error: "Approve or reject" });
+    let followUp = null;
+    const card = await changeCard(req, res, (c, settings) => {
+      const kind = board.APPROVALS[c.stage];
+      if (!kind || kind !== b.kind) return "Nothing to approve in this column";
+      if (!mayApprove(req.user, c, settings)) return "Only this stage's manager can approve";
+      const blockers = board.approvalBlockers(c, kind);
+      if (decision === "approved" && blockers.length) return "Not ready: " + blockers.join("; ");
+      const note = board.text(b.note, 500);
+      c.approvals = c.approvals || {};
+      c.approvals[kind] = { state: decision, by: req.user.username, at: Date.now(), note };
+      logCard(c, req.user.username, `${board.APPROVAL_LABEL[kind]} ${decision === "approved" ? "✓ approved" : "✗ rejected"}${note ? ": " + note : ""}`);
+      if (kind === "quote" && decision === "rejected") {
+        const s = boardSettings(settings), total = board.quoteTotal(c);
+        followUp = { card: JSON.parse(JSON.stringify(c)), big: total >= s.bigTicket && s.globalManager, globalManager: s.globalManager, total };
+        if (followUp.big) logCard(c, req.user.username, `Big-ticket rejection ($${total.toLocaleString("en-US")}) flagged to ${s.globalManager}`);
+      }
+    });
+    // A rejected quote gets a feedback follow-up task; a big one also goes
+    // to the global manager.
+    if (card && followUp) {
+      const c = followUp.card, due = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
+      const mk = (owner, title, priority) => ({ id: newId(), title, company: c.company, department: "Procurement", status: "todo", priority, owner, dueDate: due,
+        notes: `From the AOG board (${cardLabel(c)}). ${c.approvals.quote.note ? "Why: " + c.approvals.quote.note : ""}`.trim(), createdAt: Date.now(), createdBy: req.user.username, kind: "task" });
+      const made = [mk(c.assignee || c.createdBy, `Ask ${c.customer} for feedback on rejected quote ${c.quoteNo || ""}`.replace(/\s+/g, " ").trim(), "medium")];
+      if (followUp.big) made.push(mk(followUp.globalManager, `Big-ticket quote rejected: ${cardLabel(c)} ($${Math.round(followUp.total).toLocaleString("en-US")})`, "high"));
+      await withTasks((tasks) => { tasks.unshift(...made); });
+      for (const t of made) notifyOwner(t).catch(() => {});
+    }
+  })
+);
+
+app.post(
+  "/api/board/:id/notes",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const t = String(b.text || "").trim().slice(0, 4000);
+    if (!t) return res.status(400).json({ error: "Write a note first" });
+    await changeCard(req, res, (c) => {
+      const manager = !!b.manager && (isManager(req.user) || boardTop(req.user));
+      c.notes = c.notes || [];
+      c.notes.push({ id: newId(), text: t, by: req.user.username, at: Date.now(), manager });
+      logCard(c, req.user.username, manager ? "Added a manager's to-do note" : "Added a note");
+    });
+  })
+);
+
+app.post(
+  "/api/board/:id/archive",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const archived = !!(req.body || {}).archived;
+    await changeCard(req, res, (c) => {
+      if (!(isManager(req.user) || boardTop(req.user))) return "Only a manager can archive a card";
+      c.archived = archived;
+      logCard(c, req.user.username, archived ? "Archived" : "Restored from the archive");
+    });
+  })
+);
+
+// Case-file attachments (PDFs, pictures, invoices, screenshots, emails), up to
+// 15 MB each, stored under board_files/<card>/ in S3. Always downloaded,
+// never shown in the page.
+function boardFileMeta(req) {
+  const name = String(req.query.name || "file").replace(/[\\/\r\n"]+/g, "_").slice(0, 160);
+  const ext = (name.match(/\.([a-z0-9]{2,5})$/i) || [])[1];
+  const type = ext && PERF_FILE_TYPES[ext.toLowerCase()];
+  return { name, type };
+}
+function sendBoardFile(res, meta, file) {
+  res.set({ "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${meta.name.replace(/[^\w .()-]+/g, "_")}"`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" });
+  res.send(file.body);
+}
+app.post(
+  "/api/board/:id/files",
+  authMiddleware,
+  express.raw({ type: () => true, limit: "15mb" }),
+  asyncHandler(async (req, res) => {
+    const { name, type } = boardFileMeta(req);
+    if (!type) return res.status(400).json({ error: "Attach a PDF, image, Word, Excel, PowerPoint, text or email file" });
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "No file came through" });
+    const c0 = await boardCard(req, res);
+    if (!c0) return;
+    const file = { id: newId(), name, type, size: req.body.length, at: Date.now(), by: req.user.username, kind: board.text(req.query.kind, 30) };
+    await putFile(`board_files/${c0.id}/${file.id}`, req.body, type);
+    await changeCard(req, res, (c) => { c.files = c.files || []; c.files.push(file); logCard(c, req.user.username, `Attached ${name}`); });
+  })
+);
+app.get(
+  "/api/board/:id/files/:fid",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const c = await boardCard(req, res);
+    if (!c) return;
+    const meta = (c.files || []).find((f) => f.id === req.params.fid);
+    const file = meta && (await getFile(`board_files/${c.id}/${meta.id}`));
+    if (!file) return res.status(404).json({ error: "That file isn't here" });
+    sendBoardFile(res, meta, file);
+  })
+);
+
+// Customer file documents (export licences, certificates…), by customer name.
+app.post(
+  "/api/board-customers/files",
+  authMiddleware,
+  express.raw({ type: () => true, limit: "15mb" }),
+  asyncHandler(async (req, res) => {
+    if (!canSeeBoard(req.user)) return res.status(403).json({ error: "Not available for your account" });
+    const customer = board.text(req.query.customer, 120);
+    const { name, type } = boardFileMeta(req);
+    if (!customer) return res.status(400).json({ error: "Which customer?" });
+    if (!type) return res.status(400).json({ error: "Attach a PDF, image, Word, Excel, PowerPoint, text or email file" });
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "No file came through" });
+    const file = { id: newId(), name, type, size: req.body.length, at: Date.now(), by: req.user.username };
+    await putFile(`board_customers/${file.id}`, req.body, type);
+    await withBoard((doc) => { doc.customers = doc.customers || {}; const x = (doc.customers[customer] = doc.customers[customer] || { files: [] }); x.files.push(file); });
+    res.status(201).json(file);
+  })
+);
+app.get(
+  "/api/board-customers/files/:fid",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!canSeeBoard(req.user)) return res.status(403).json({ error: "Not available for your account" });
+    const doc = await getBoard();
+    let meta = null;
+    for (const x of Object.values(doc.customers || {})) meta = meta || (x.files || []).find((f) => f.id === req.params.fid);
+    const file = meta && (await getFile(`board_customers/${meta.id}`));
+    if (!file) return res.status(404).json({ error: "That file isn't here" });
+    sendBoardFile(res, meta, file);
+  })
+);
+
+// Stage managers, the global manager and the big-ticket amount.
+app.put(
+  "/api/board-settings",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!boardTop(req.user)) return res.status(403).json({ error: "Full-access or leadership logins only" });
+    const b = req.body || {};
+    const managers = {};
+    for (const s of board.STAGE_IDS) if (b.managers && b.managers[s]) managers[s] = board.text(b.managers[s], 60);
+    const next = { managers, globalManager: board.text(b.globalManager, 60), bigTicket: Number(b.bigTicket) > 0 ? Math.round(Number(b.bigTicket)) : BOARD_BIG_TICKET };
+    await withSettings((s) => { s.board = next; });
+    res.json(next);
   })
 );
 

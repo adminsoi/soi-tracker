@@ -330,6 +330,67 @@ value, and activity by person (Pentagon contact) — from the same Pentagon
 queries as the department tabs. Its tasks are under **Projects**. If a
 query's `TOP 200` limit is hit for the range, the page says so.
 
+## AOG operations board (Phase 1 of the AOG CRM spec)
+
+**Procurement / Purchasing / Warehouse → Board** (first tab on Procurement
+and Purchasing, after Insights on Warehouse). One card per quote, moving left
+to right through six columns:
+
+| Column | Department | Before the card can move on |
+|---|---|---|
+| RFQ | Procurement | All sourcing checks ticked (ILS, PartsBase, Locatory, Pentagon) and a manager's ✓ on sourcing |
+| Quoted | Procurement | A price on every line, a manager's ✓ on the quote, and the order number from Pentagon |
+| Sale | Purchasing | Red-file checks (sales order, supplier PO, deeper research) and a manager's ✓ on the purchase; export licence field filled on every line |
+| Purchased | Purchasing | Warehouse location and date in on every line |
+| Received | Warehouse | Quality sign-off on every line (warehouse manager) and the export licence field on every line |
+| Sent | Warehouse | — |
+
+- **Labels:** quote number in RFQ and Quoted, order number from Sale on.
+- **Auto-assign:** moving a card assigns it to that column's manager (and
+  emails them). Set them under **Stage managers** on the board (full-access /
+  leadership); blank uses the department default from `/admin.html`.
+- **Approvals:** the column's manager, managers in that department, or
+  full-access / leadership give ✓ / ✗. Unticking a check or changing a line's
+  price after a ✓ resets that approval. A rejected quote adds a feedback
+  follow-up task for the card's owner; a rejected quote at or above the
+  big-ticket amount (default $25,000) also adds a task for the global manager.
+- **Flags** on cards and as filters: **Due** (within 2 days) / **Overdue**,
+  **For approval** (ready for a ✓ / ✗), **Highlighted** (not on the open
+  market — ticked by the buyer), **Quote rejected**.
+- **Board tools:** Refresh, search by quote no., order no., P/N or customer,
+  filter by flag and by person, and the company switcher.
+- **Case file** (click a card): quote / order numbers, customer, due date,
+  owner, P/N lines (price follows cost × mark-up), checklists, approval,
+  move buttons, notes (managers can mark a note as a to-do), files and the
+  full history. Files (PDFs, pictures, invoices, screenshots, saved emails,
+  up to 15 MB) go to S3 under `board_files/<card>/`.
+- **Customer file** (click the customer): every RFQ and order you can see
+  for them, plus documents (export licences, certificates…) under
+  `board_customers/`.
+- **Who sees what:** staff see cards they own or created and cards in their
+  department's columns; full-access and leadership see everything in their
+  companies. Cost and mark-up show to Procurement, Purchasing and
+  full-access / leadership; the **margin** column to full-access /
+  leadership only. Cards are archived, never deleted; every change is in the
+  card's history.
+- **Numbers are never made up:** quote and order numbers, export licence
+  entries, certificate and approval references are typed or copied from
+  Pentagon and source documents.
+
+Data: `aog_board.json` in the S3 bucket.
+
+**Not built yet** (need accounts, APIs or a compliance decision first):
+GovCloud hosting and U.S.-persons administration; Microsoft SSO with MFA;
+an unalterable audit log (needs S3 Object Lock — today's history is
+append-only in the app); writing back to Pentagon (the Transmute API is
+read-only); creating cards from Outlook / Pentagon automatically; sending
+quotes and POs from Outlook templates; Teams capture and alerts; Xero
+receivables; carrier tracking; voice-to-text notes (browser dictation sends
+audio to Google — needs a compliant alternative); BD / US Gov workspaces;
+Administration forms; the master chat (Claude on Bedrock). Until the
+compliance lead confirms the storage, don't upload export-controlled
+technical data to case files.
+
 ## Work inbox
 
 **Work inbox** (sidebar → You) shows the signed-in person's own Outlook inbox
