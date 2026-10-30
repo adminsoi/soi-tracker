@@ -21,7 +21,7 @@
     font-family: 'DM Sans', system-ui, sans-serif;
     padding: 32px 16px;
   }
-  .wrap { max-width: 720px; margin: 0 auto; }
+  .wrap { max-width: 1100px; margin: 0 auto; }
   header { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
   .mark { width: 30px; height: 30px; border-radius: 7px; background: var(--red); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; }
   h1 { font: 30px 'Libre Caslon Display', Georgia, serif; margin: 0; letter-spacing: -.5px; }
@@ -92,6 +92,49 @@
   html[data-theme="dark"] .cc-color input { border-color: #3a3f48; }
   html[data-theme="dark"] a { color: #8fb6ff; }
   html[data-theme="dark"] ::placeholder { color: #6f7682; }
+  /* People and access grid, collapsible settings, the login pop-up */
+  .ppl-head { flex-wrap: wrap; gap: 10px; }
+  .ppl-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .ppl-tools input[type=search] { padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); color: var(--text); font: inherit; font-size: 13px; width: 220px; }
+  .seg { display: inline-flex; gap: 3px; padding: 3px; border-radius: 9px; background: var(--surface-2); }
+  .seg button { background: none; color: var(--text-dim); padding: 6px 11px; font-size: 12px; font-weight: 600; }
+  .seg button:hover { background: var(--border); }
+  .seg button.active { background: var(--surface); color: var(--text); box-shadow: 0 0 0 1px var(--border); }
+  .mx-wrap { overflow-x: auto; margin-top: 6px; }
+  table.matrix { font-size: 12.5px; }
+  .matrix th { white-space: nowrap; text-align: center; vertical-align: bottom; }
+  .matrix th:first-child, .matrix td:first-child { text-align: left; position: sticky; left: 0; background: var(--surface); z-index: 1; }
+  .matrix td { text-align: center; vertical-align: middle; padding: 7px 6px; }
+  .matrix td.who b { display: block; font-size: 13px; }
+  .matrix td.who small { color: var(--text-faint); font-size: 11px; }
+  .matrix input[type=checkbox] { width: 17px; height: 17px; cursor: pointer; accent-color: var(--red); }
+  .matrix input[type=checkbox]:disabled { cursor: not-allowed; opacity: .45; }
+  .matrix .all { font-size: 10.5px; color: var(--text-faint); }
+  .matrix tr.saving td { opacity: .55; }
+  .matrix .row-actions { justify-content: flex-end; }
+  .matrix th .sub { display: block; font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 10px; }
+  .sec-tools { display: flex; gap: 8px; align-items: center; margin: 4px 0 10px; }
+  .sec-tools button { padding: 5px 11px; font-size: 12px; }
+  details.sec { padding: 0; }
+  details.sec > summary { list-style: none; cursor: pointer; padding: 16px 22px; display: flex; align-items: baseline; gap: 12px; }
+  details.sec > summary::-webkit-details-marker { display: none; }
+  details.sec > summary::before { content: "▸"; color: var(--text-faint); font-size: 12px; transition: transform .15s; }
+  details.sec[open] > summary::before { transform: rotate(90deg); }
+  details.sec > summary h2 { margin: 0; font-size: 18px; }
+  details.sec > summary .sum { color: var(--text-faint); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+  details.sec > .sec-body { padding: 0 22px 20px; }
+  .modal { position: fixed; inset: 0; background: rgba(0, 0, 0, .55); z-index: 50; display: flex; align-items: flex-start; justify-content: center; padding: 24px 16px; overflow-y: auto; }
+  .modal-card { width: min(760px, 100%); margin: 0; }
+  .modal-foot { position: sticky; bottom: -22px; background: var(--surface); padding: 12px 0 4px; display: flex; gap: 12px; align-items: center; border-top: 1px solid var(--border); margin-top: 10px; }
+  .modal-foot .msg { margin: 0; }
+  details.grp { border: 1px solid var(--border); border-radius: 9px; margin: 0 0 12px; }
+  details.grp > summary { cursor: pointer; padding: 10px 12px; font-weight: 600; font-size: 13px; list-style: none; }
+  details.grp > summary::-webkit-details-marker { display: none; }
+  details.grp > summary::before { content: "▸ "; color: var(--text-faint); }
+  details.grp[open] > summary::before { content: "▾ "; }
+  details.grp > .grp-body { padding: 4px 12px 2px; }
+  .copy-from { background: var(--surface-2); border-radius: 9px; padding: 10px 12px; }
+  .access-grid .check-row label { font-weight: 500 !important; font-size: 12.5px; }
   .theme-switch { background: none; border: 1px solid var(--border); color: var(--text-dim); padding: 5px 11px; font-size: 12px; }
   .theme-switch:hover { background: var(--surface-2); }
 </style>
@@ -121,15 +164,40 @@
       <button type="button" class="theme-switch" id="themeBtn" title="Switch between the dark and light look"></button>
     </header>
 
-    <div class="card">
+    <div class="card" id="peopleCard">
+      <div class="card-head ppl-head">
+        <h2>People and access</h2>
+        <div class="ppl-tools">
+          <input type="search" id="pplSearch" placeholder="Search name or email" aria-label="Search people">
+          <div class="seg" id="pplView" role="tablist" aria-label="What to show">
+            <button type="button" data-view="roles" class="active">Roles</button><button type="button" data-view="depts">Departments</button><button type="button" data-view="cos">Companies</button>
+          </div>
+          <button type="button" id="addLoginBtn">+ Add login</button>
+        </div>
+      </div>
+      <div class="hint" style="margin-top:0;">Tick or untick a box to give or take away access — it saves straight away. <b>Edit</b> has everything else (password, email, inboxes, Pentagon code, calendar names).</div>
+      <div class="mx-wrap"><table class="matrix"><thead id="mxHead"></thead><tbody id="mxBody"></tbody></table></div>
+      <div class="empty" id="userEmpty" style="display:none;">No logins yet — add one.</div>
+      <div class="msg" id="mxMsg"></div>
+    </div>
+
+    <div class="sec-tools"><span class="hint" style="margin:0;">Settings</span><span style="flex:1"></span><button type="button" class="secondary" id="openAllBtn">Open all</button><button type="button" class="secondary" id="closeAllBtn">Close all</button></div>
+
+    <div class="modal" id="userModal" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="formTitle"><div class="card modal-card">
       <div class="card-head">
         <h2 id="formTitle">Add a login</h2>
+        <button type="button" class="secondary" id="closeModalBtn">Close ✕</button>
       </div>
       <div class="editing-banner" id="editingBanner" style="display:none;">
         <span>Editing <strong id="editingUsernameLabel"></strong> — password left blank keeps their current one.</span>
         <button type="button" class="secondary" id="cancelEditBtn">New login instead</button>
       </div>
       <form id="userForm">
+        <div class="field copy-from">
+          <label for="u-copy">Copy access from (optional)</label>
+          <select id="u-copy"><option value="">Pick someone with the same job…</option></select>
+          <div class="hint" style="margin:4px 0 0;">Copies their companies, departments and roles (full access, manager, leadership, team breakdown). Performance and the IT notebook are never copied — tick those yourself if they should have them.</div>
+        </div>
         <div class="field-row">
           <div class="field">
             <label for="u-name">Username</label>
@@ -223,10 +291,9 @@
         </div>
         <div class="hint" id="deptHint">If "Full access" is checked, departments are ignored — they see everything.</div>
 
-        <button type="submit" id="submitBtn">Save login</button>
-        <div class="msg" id="userMsg"></div>
+        <div class="modal-foot"><button type="submit" id="submitBtn">Save login</button><div class="msg" id="userMsg"></div></div>
       </form>
-    </div>
+    </div></div>
 
     <div class="card">
       <h2>HR global calendar</h2>
@@ -311,15 +378,6 @@
         <button type="submit">Save Claude links</button>
         <div class="msg" id="claudeMsg"></div>
       </form>
-    </div>
-
-    <div class="card">
-      <h2>Existing logins</h2>
-      <table id="userTable">
-        <thead><tr><th>Username</th><th>Email</th><th>Companies</th><th>Access</th><th></th></tr></thead>
-        <tbody id="userTableBody"></tbody>
-      </table>
-      <div class="empty" id="userEmpty" style="display:none;">No logins yet — add one above.</div>
     </div>
 
     <button class="secondary" id="signOutBtn">Sign out of admin</button>
@@ -466,60 +524,195 @@
     }
   });
 
+  // ---------- People and access grid ----------
+  // One row per login. Ticking a box saves that login straight away (the
+  // same save as the Edit form, with everything else unchanged).
+  var USERS = [];
+  var mxView = "roles";
+  var ROLES = [
+    ["fullAccess", "Full access", "every department"],
+    ["manager", "Manager", "assigns, ticks off"],
+    ["leadership", "Leadership", "HR calendar, Who's in"],
+    ["breakdown", "Team breakdown", "on Overview"],
+    ["performance", "Performance", "HR only"],
+    ["itNotebook", "IT notebook", "IT only"]
+  ];
+  var SHORT_DEPT = { "Administrative": "Admin", "Accounting & Finance": "Finance", "Business Development": "Business Dev", "US Government": "US Gov" };
+  var SHORT_CO = { "SOI Aviation": "SOI", "RedSun Aviation": "Red Sun", "NanoTech Aviation": "Nanotech" };
+
   function loadUsers() {
     return api("/api/admin/users").then(function (users) {
-      var body = document.getElementById("userTableBody");
-      var empty = document.getElementById("userEmpty");
-      body.innerHTML = "";
-      if (users.length === 0) { empty.style.display = "block"; return; }
-      empty.style.display = "none";
-      users.forEach(function (u) {
-        var tr = document.createElement("tr");
-        var companyTags = (u.companies || []).map(function (c) { return '<span class="tag">' + escapeHtml(c) + '</span>'; }).join("");
-        var accessCell = (u.fullAccess
-          ? '<span class="tag full">Full access</span>'
-          : (u.departments || []).map(function (d) { return '<span class="tag">' + escapeHtml(d) + '</span>'; }).join("") || "—") +
-          (u.manager || u.fullAccess ? ' <span class="tag full">Manager</span>' : "") +
-          (u.breakdown ? ' <span class="tag">In breakdown</span>' : "") +
-          (u.leadership ? ' <span class="tag">Leadership</span>' : "") +
-          (u.itNotebook ? ' <span class="tag">IT notebook</span>' : "") +
-          (u.performance ? ' <span class="tag">Performance</span>' : "") +
-          ((u.extraMailboxes || []).length ? ' <span class="tag" title="' + escapeHtml(u.extraMailboxes.join(", ")) + '">+' + u.extraMailboxes.length + (u.extraMailboxes.length === 1 ? " inbox" : " inboxes") + "</span>" : "");
-        tr.innerHTML =
-          "<td>" + escapeHtml(u.username) + "</td>" +
-          "<td>" + escapeHtml(u.email || "") + "</td>" +
-          "<td>" + companyTags + "</td>" +
-          "<td>" + accessCell + "</td>" +
-          "<td class=\"row-actions\">" +
-          "<button class=\"secondary\" data-edit=\"" + escapeHtml(u.username) + "\">Edit</button>" +
-          "<button class=\"secondary\" data-del=\"" + escapeHtml(u.username) + "\">Remove</button>" +
-          "</td>";
-        body.appendChild(tr);
-      });
-
-      body.querySelectorAll("[data-edit]").forEach(function (btn) {
-        btn.addEventListener("click", function () {
-          var username = btn.getAttribute("data-edit");
-          var user = users.filter(function (u) { return u.username === username; })[0];
-          if (user) startEditing(user);
-        });
-      });
-      body.querySelectorAll("[data-del]").forEach(function (btn) {
-        btn.addEventListener("click", function () {
-          var username = btn.getAttribute("data-del");
-          if (!confirm('Remove login "' + username + '"?')) return;
-          api("/api/admin/users/" + encodeURIComponent(username), { method: "DELETE" })
-            .then(function () {
-              if (editingUsername === username) stopEditing();
-              loadUsers();
-            })
-            .catch(function (err) { alert(err.message); });
-        });
-      });
+      USERS = users;
+      fillCopyFrom();
+      renderMatrix();
     }).catch(function (err) {
       if (err.message && err.message.indexOf("Admin") !== -1) { clearToken(); showLogin(); }
     });
   }
+
+  function renderMatrix() {
+    var q = (document.getElementById("pplSearch").value || "").trim().toLowerCase();
+    var list = USERS.filter(function (u) { return !q || (u.username + " " + (u.email || "")).toLowerCase().indexOf(q) !== -1; })
+      .sort(function (a, b) { return a.username.toLowerCase().localeCompare(b.username.toLowerCase()); });
+    var cols = mxView === "roles" ? ROLES.map(function (r) { return { key: r[0], label: r[1], sub: r[2] }; })
+      : mxView === "depts" ? DEPARTMENTS.map(function (d) { return { key: "d:" + d, label: SHORT_DEPT[d] || d }; })
+      : COMPANIES.map(function (c) { return { key: "c:" + c, label: SHORT_CO[c] || c }; });
+    document.getElementById("mxHead").innerHTML = "<tr><th>Person</th>" + cols.map(function (c) {
+      return "<th>" + escapeHtml(c.label) + (c.sub ? '<span class="sub">' + escapeHtml(c.sub) + "</span>" : "") + "</th>";
+    }).join("") + (mxView === "roles" ? "<th>Departments</th>" : "") + "<th></th></tr>";
+    document.getElementById("userEmpty").style.display = USERS.length ? "none" : "block";
+    document.getElementById("mxBody").innerHTML = list.map(function (u) {
+      var cells = cols.map(function (c) {
+        var on, dis = false, k = c.key;
+        if (k.indexOf("d:") === 0) {
+          if (u.fullAccess) return '<td><span class="all" title="Full access sees every department">all</span></td>';
+          on = (u.departments || []).indexOf(k.slice(2)) !== -1;
+        } else if (k.indexOf("c:") === 0) on = (u.companies || []).indexOf(k.slice(2)) !== -1;
+        else { on = !!u[k]; if (k === "manager" && u.fullAccess) { on = true; dis = true; } }
+        return '<td><input type="checkbox" data-u="' + escapeHtml(u.username) + '" data-k="' + escapeHtml(k) + '"' + (on ? " checked" : "") + (dis ? ' disabled title="Full access logins are managers automatically"' : "") +
+          ' aria-label="' + escapeHtml(c.label + " for " + u.username) + '"></td>';
+      }).join("");
+      var depts = u.fullAccess ? "All" : (u.departments || []).map(function (d) { return SHORT_DEPT[d] || d; }).join(", ") || "—";
+      return '<tr data-row="' + escapeHtml(u.username) + '"><td class="who"><b>' + escapeHtml(u.username) + "</b><small>" + escapeHtml(u.email || "no email") + "</small></td>" + cells +
+        (mxView === "roles" ? '<td style="text-align:left;font-size:11.5px;color:var(--text-dim);">' + escapeHtml(depts) + "</td>" : "") +
+        '<td><div class="row-actions"><button class="secondary" data-edit="' + escapeHtml(u.username) + '">Edit</button><button class="secondary" data-del="' + escapeHtml(u.username) + '">Remove</button></div></td></tr>';
+    }).join("") || '<tr><td colspan="' + (cols.length + 3) + '" class="empty">Nobody matches.</td></tr>';
+  }
+
+  // The full saved record for a login, as the save endpoint takes it.
+  function userPayload(u) {
+    return {
+      username: u.username, password: "", email: u.email || "", extraMailboxes: u.extraMailboxes || [], pentagonCode: u.pentagonCode || "",
+      companies: (u.companies || []).slice(), fullAccess: !!u.fullAccess, manager: !!u.manager, breakdown: !!u.breakdown, leadership: !!u.leadership,
+      itNotebook: !!u.itNotebook, performance: !!u.performance, calendarNames: u.calendarNames || [], departments: (u.departments || []).slice()
+    };
+  }
+  function mxSay(text, ok) { var m = document.getElementById("mxMsg"); m.textContent = text; m.className = "msg" + (ok ? " ok" : ""); }
+
+  document.getElementById("mxBody").addEventListener("change", function (e) {
+    var box = e.target;
+    if (!box.dataset || !box.dataset.u) return;
+    var u = USERS.filter(function (x) { return x.username === box.dataset.u; })[0];
+    if (!u) return;
+    var body = userPayload(u), k = box.dataset.k, label = "";
+    var toggle = function (arr, v, on) { var i = arr.indexOf(v); if (on && i === -1) arr.push(v); if (!on && i !== -1) arr.splice(i, 1); };
+    if (k.indexOf("d:") === 0) { toggle(body.departments, k.slice(2), box.checked); label = k.slice(2); }
+    else if (k.indexOf("c:") === 0) { toggle(body.companies, k.slice(2), box.checked); label = k.slice(2); }
+    else { body[k] = box.checked; label = (ROLES.filter(function (r) { return r[0] === k; })[0] || [k, k])[1]; }
+    if (!body.companies.length) { box.checked = true; mxSay(u.username + " needs at least one company."); return; }
+    if (!body.fullAccess && !body.departments.length) { box.checked = !box.checked; mxSay(u.username + " needs at least one department, or full access."); return; }
+    if ((k === "performance" || k === "fullAccess") && box.checked && !confirm((k === "performance" ? "Give " + u.username + " the Performance tool? It holds HR's confidential notes." : "Give " + u.username + " full access to every department in their companies?"))) { box.checked = false; return; }
+    var row = box.closest("tr");
+    row.classList.add("saving");
+    api("/api/admin/users", { method: "POST", body: JSON.stringify(body) }).then(function () {
+      mxSay((box.checked ? "Gave " : "Took away ") + label + (box.checked ? " to " : " from ") + u.username + ".", true);
+      return loadUsers();
+    }).catch(function (err) {
+      box.checked = !box.checked; row.classList.remove("saving"); mxSay(u.username + ": " + err.message);
+    });
+  });
+  document.getElementById("mxBody").addEventListener("click", function (e) {
+    var ed = e.target.closest("[data-edit]"), del = e.target.closest("[data-del]");
+    if (ed) { var user = USERS.filter(function (u) { return u.username === ed.dataset.edit; })[0]; if (user) startEditing(user); return; }
+    if (del) {
+      var username = del.dataset.del;
+      if (!confirm('Remove login "' + username + '"? They can no longer sign in.')) return;
+      api("/api/admin/users/" + encodeURIComponent(username), { method: "DELETE" })
+        .then(function () { if (editingUsername === username) stopEditing(); mxSay("Removed " + username + ".", true); loadUsers(); })
+        .catch(function (err) { alert(err.message); });
+    }
+  });
+  document.getElementById("pplSearch").addEventListener("input", renderMatrix);
+  document.getElementById("pplView").addEventListener("click", function (e) {
+    var b = e.target.closest("[data-view]");
+    if (!b) return;
+    mxView = b.dataset.view;
+    document.querySelectorAll("#pplView button").forEach(function (x) { x.classList.toggle("active", x === b); });
+    renderMatrix();
+  });
+
+  // ---------- The login pop-up ----------
+  function openModal() { document.getElementById("userModal").style.display = "flex"; document.body.style.overflow = "hidden"; }
+  function closeModal() { document.getElementById("userModal").style.display = "none"; document.body.style.overflow = ""; }
+  document.getElementById("addLoginBtn").addEventListener("click", function () { stopEditing(); openModal(); document.getElementById("u-name").focus(); });
+  document.getElementById("closeModalBtn").addEventListener("click", closeModal);
+  document.getElementById("userModal").addEventListener("click", function (e) { if (e.target.id === "userModal") closeModal(); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && document.getElementById("userModal").style.display !== "none") closeModal(); });
+
+  // Copy access from someone with the same job (never Performance or the
+  // IT notebook — those are granted on purpose, one person at a time).
+  function fillCopyFrom() {
+    var sel = document.getElementById("u-copy");
+    sel.innerHTML = '<option value="">Pick someone with the same job…</option>' + USERS.slice().sort(function (a, b) { return a.username.localeCompare(b.username); }).map(function (u) {
+      return '<option value="' + escapeHtml(u.username) + '">' + escapeHtml(u.username) + " — " + escapeHtml(u.fullAccess ? "full access" : (u.departments || []).join(", ")) + "</option>";
+    }).join("");
+  }
+  document.getElementById("u-copy").addEventListener("change", function () {
+    var u = USERS.filter(function (x) { return x.username === this.value; }, this)[0];
+    if (!u) return;
+    setCheckedValues('#companyChecks input[type="checkbox"]', u.companies || []);
+    setCheckedValues('#deptChecks input[type="checkbox"]', u.departments || []);
+    ["manager", "breakdown", "leadership"].forEach(function (k) { document.getElementById("u-" + k).checked = !!u[k]; });
+    var fa = document.getElementById("u-fullaccess");
+    fa.checked = !!u.fullAccess;
+    fa.dispatchEvent(new Event("change"));
+    var msg = document.getElementById("userMsg");
+    msg.textContent = "Copied " + u.username + "'s companies, departments and roles — check them, then save.";
+    msg.className = "msg ok";
+  });
+
+  // Group the long form into sections you can fold away.
+  function groupForm() {
+    var form = document.getElementById("userForm");
+    var fieldOf = function (id) { return document.getElementById(id).closest(".field"); };
+    var withHint = function (el) { var out = [el]; var n = el.nextElementSibling; if (n && n.classList.contains("hint")) out.push(n); return out; };
+    var make = function (title, open, nodes) {
+      var d = document.createElement("details");
+      d.className = "grp"; d.open = open;
+      d.innerHTML = "<summary>" + title + '</summary><div class="grp-body"></div>';
+      nodes.forEach(function (n) { if (n) d.querySelector(".grp-body").appendChild(n); });
+      return d;
+    };
+    var signIn = [document.querySelector("#userForm > .field-row")].concat(withHint(fieldOf("u-email")));
+    var where = [fieldOf("companyChecks")].concat(withHint(document.getElementById("deptField")));
+    var accessNodes = [];
+    ["u-fullaccess", "u-manager", "u-breakdown", "u-leadership"].forEach(function (id) {
+      var f = document.getElementById(id).closest(".field");
+      if (accessNodes.indexOf(f) === -1) withHint(f).forEach(function (n) { accessNodes.push(n); });
+    });
+    var extra = [].concat(withHint(fieldOf("u-mailboxes")), withHint(fieldOf("u-pentagon")), withHint(fieldOf("u-calnames")));
+    var foot = form.querySelector(".modal-foot");
+    var groups = [make("Sign-in", true, signIn), make("Companies and departments", true, where), make("Roles and access", true, accessNodes), make("Inboxes, Pentagon code and calendar names", false, extra)];
+    groups.forEach(function (g) { form.insertBefore(g, foot); });
+    accessNodes.forEach(function (n) { if (n.querySelector && n.querySelector(".check-grid")) n.querySelector(".check-grid").classList.add("access-grid"); });
+  }
+
+  // Settings cards fold away; which ones are open is remembered here.
+  function collapseSettings() {
+    var KEY = "soi_admin_open";
+    var open = {}; try { open = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (e) {}
+    var cards = Array.prototype.slice.call(document.querySelectorAll("#adminPanel > .card")).filter(function (c) { return c.id !== "peopleCard"; });
+    cards.forEach(function (card) {
+      var h2 = card.querySelector(":scope > h2");
+      if (!h2) return;
+      var hint = card.querySelector(":scope > .hint");
+      var d = document.createElement("details");
+      d.className = "card sec";
+      d.open = !!open[h2.textContent];
+      d.innerHTML = '<summary><h2></h2><span class="sum"></span></summary><div class="sec-body"></div>';
+      d.querySelector("summary h2").textContent = h2.textContent;
+      d.querySelector(".sum").textContent = hint ? hint.textContent.split(/(?<=\.)\s/)[0] : "";
+      var body = d.querySelector(".sec-body");
+      Array.prototype.slice.call(card.childNodes).forEach(function (n) { if (n !== h2) body.appendChild(n); });
+      card.replaceWith(d);
+      d.addEventListener("toggle", function () { open[h2.textContent] = d.open; try { localStorage.setItem(KEY, JSON.stringify(open)); } catch (e) {} });
+    });
+    var all = function (v) { document.querySelectorAll("details.sec").forEach(function (d) { d.open = v; }); };
+    document.getElementById("openAllBtn").addEventListener("click", function () { all(true); });
+    document.getElementById("closeAllBtn").addEventListener("click", function () { all(false); });
+  }
+  groupForm();
+  collapseSettings();
 
   function escapeHtml(s) {
     return String(s || "").replace(/[&<>"']/g, function (c) {
@@ -556,7 +749,8 @@
     fullAccessBox.dispatchEvent(new Event("change"));
 
     document.getElementById("userMsg").textContent = "";
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    document.getElementById("u-copy").value = "";
+    openModal();
   }
 
   function stopEditing() {
@@ -616,9 +810,10 @@
     };
     api("/api/admin/users", { method: "POST", body: JSON.stringify(body) })
       .then(function () {
+        var who = body.username;
         stopEditing();
-        msg.textContent = "Saved.";
-        msg.className = "msg ok";
+        closeModal();
+        mxSay("Saved " + who + ".", true);
         loadUsers();
       })
       .catch(function (err) { msg.textContent = err.message; });

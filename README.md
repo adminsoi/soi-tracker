@@ -97,6 +97,20 @@ department for each person. Each person then signs in at
 `https://<your-private-ip>/` with that username and password (over VPN or
 the office network — this server isn't reachable from outside either).
 
+**The admin page** opens on **People and access**: one row per login with
+checkboxes for roles (Full access, Manager, Leadership, Team breakdown,
+Performance, IT notebook), or switch to **Departments** or **Companies**.
+Ticking a box saves that login straight away (it won't let a login end up
+with no company, or no department without full access, and asks before
+giving Performance or full access). **+ Add login** and **Edit** open a
+pop-up with the rest (password, email, inboxes, Pentagon code, calendar
+names), grouped into sections that fold away. **Copy access from** fills in
+another person's companies, departments and roles; Performance and the IT
+notebook are never copied. The settings below (HR calendar, quarterly
+targets, calendar colours, performance escalation, default people, Claude
+projects) are collapsed; click one to open it, and the page remembers which
+were open.
+
 ### Signing in and "Remember me"
 
 A normal sign-in lasts 12 hours and ends when the browser closes. Ticking
