@@ -21,7 +21,7 @@ var IT_STATUSES = [
   { id: "done", label: "Resolved", note: "Fixed and closed" }
 ];
 var IT_STATUS_LABEL = { new: "New", progress: "In progress", done: "Resolved" };
-var itr = { data: null, at: 0, loading: false, error: "", person: "", tab: "all", sort: "newest", picked: {}, adding: false, form: {}, saving: false };
+var itr = { data: null, at: 0, loading: false, error: "", person: "", tab: "all", sort: "newest", picked: {}, adding: false, form: {}, saving: false, view: "list", open: "", compose: null, kbList: null, posting: false };
 function canSeeItRequests() { return !!(me && (me.fullAccess || me.departments.indexOf("IT") !== -1)); }
 function loadItRequests() {
   if (itr.loading) return;
@@ -211,6 +211,7 @@ function renderItRequests() {
   var tabCount = function (st) {
     if (st === "dupes") return dupes.filter(mineOnly).length;
     if (st === "archived") return archived.filter(mineOnly).length;
+    if (st === "sla") return inPerson.filter(function (r) { var x = itrSla(r); return r.status !== "done" && (x.resp.state === "breached" || x.resol.state === "breached"); }).length;
     return st === "all" ? inPerson.length : inPerson.filter(function (r) { return r.status === st; }).length;
   };
   var short = function (o) { return o ? fmtDate(o.submittedAt) + " — " + (String(o.issue || "").length > 60 ? o.issue.slice(0, 60) + "…" : o.issue || "no description") : "a request that's gone"; };
@@ -252,13 +253,14 @@ function renderItRequests() {
       metric("New", count("new"), "Just came in from the form", count("new") > 0) +
       metric("In progress", count("progress"), unrated ? unrated + " open ones not rated yet" : "All rated") +
       metric("Resolved", count("done"), "Fixed and closed") + "</div>" +
-    '<div class="tabs" role="tablist" style="margin-top:4px;">' + [{ id: "all", label: "All" }].concat(IT_STATUSES, [{ id: "dupes", label: "Duplicates" }, { id: "archived", label: "Archived" }]).map(function (t) {
+    '<div class="tabs" role="tablist" style="margin-top:4px;">' + [{ id: "all", label: "All" }].concat(IT_STATUSES, [{ id: "sla", label: "SLAs" }, { id: "dupes", label: "Duplicates" }, { id: "archived", label: "Archived" }]).map(function (t) {
       var n = tabCount(t.id);
       return '<button type="button" role="tab" class="tab ' + (itr.tab === t.id ? "active" : "") + '" aria-selected="' + (itr.tab === t.id) + '" data-itr-tab="' + t.id + '">' +
-        E(t.label) + (n ? '<span class="badge">' + n + "</span>" : "") + (t.id === "dupes" && hints.length ? '<span class="badge hint-badge" title="Possible repeats to review">' + hints.length + " to review</span>" : "") + "</button>";
+        E(t.label) + (n ? '<span class="badge' + (t.id === "sla" ? " hint-badge" : "") + '"' + (t.id === "sla" ? ' title="Open tickets past an SLA target"' : "") + ">" + n + (t.id === "sla" ? " breached" : "") + "</span>" : "") + (t.id === "dupes" && hints.length ? '<span class="badge hint-badge" title="Possible repeats to review">' + hints.length + " to review</span>" : "") + "</button>";
     }).join("") + "</div>" +
     (itr.tab === "archived" ? '<p class="small-note" style="margin:6px 0 0;">Archived requests stay here, out of the other tabs, the numbers and the charts, until you restore them. <b>Delete forever</b> removes a request, its IT task and its notebook write-up for good.</p>' : "") +
     (itr.tab === "dupes" ? '<p class="small-note" style="margin:6px 0 0;">Possible repeats to review come first (same person, something similar within 7 days), then the ones you\'ve marked. Duplicates don\'t count in the other tabs, the numbers or the charts.</p>' : "") +
+    (itr.tab === "sla" ? renderItSlaTab(inPerson) : (
     '<div class="table-toolbar"><select id="itrPerson" aria-label="Show one person">' + personOpts + "</select>" +
       '<select id="itrSort" aria-label="Sort by">' + [["newest", "Newest first"], ["oldest", "Oldest first"], ["priority", "Priority"], ["person", "Person A–Z"]].map(function (x) {
         return '<option value="' + x[0] + '"' + (itr.sort === x[0] ? " selected" : "") + ">Sort: " + x[1] + "</option>";
@@ -266,9 +268,11 @@ function renderItRequests() {
       (itr.person ? '<button type="button" class="text-button" data-itr-who="">Show everyone</button>' : "") +
       '<span class="grow" style="flex:1"></span>' +
       (can ? '<input type="file" id="itrFile" accept=".xlsx" hidden><button type="button" id="itrImport">Import from Excel</button>' : "") +
+      (["all", "new", "progress", "done"].indexOf(itr.tab) !== -1 ? '<div class="seg"><button type="button" data-itr-view="list" class="' + (itr.view !== "board" ? "active" : "") + '">List</button><button type="button" data-itr-view="board" class="' + (itr.view === "board" ? "active" : "") + '">Board</button></div>' : "") +
       '<button type="button" class="primary" data-itr-add>+ Add ticket</button></div>' +
     (itr.adding ? itrAddForm(plist) : "") +
     bulk +
+    (itr.view === "board" && ["all", "new", "progress", "done"].indexOf(itr.tab) !== -1 ? renderItBoard(inPerson, can) : (
     '<div class="table-wrap"><table class="wide"><thead><tr>' +
       (can ? '<th class="center" style="width:34px;"><input type="checkbox" class="check" data-itr-pickall' + (allShownPicked ? " checked" : "") + ' aria-label="Select all shown"></th>' : "") +
       "<th>Submitted</th><th>Person</th><th>Issue</th><th>Form says</th><th>Priority</th><th>Status</th><th>Contact</th></tr></thead><tbody>" +
@@ -279,7 +283,8 @@ function renderItRequests() {
         "<td>" + when(r.submittedAt) + "</td>" +
         '<td><button type="button" class="itr-person" data-itr-who="' + E(r.pkey) + '">' + E(itrPerson(r)) + "</button>" +
           '<span class="co-note">' + E([r.company, r.remote === "Yes" ? "Remote" : ""].filter(Boolean).join(" · ")) + "</span></td>" +
-        '<td><div class="itr-issue" title="' + E(r.issue) + '">' + E(r.issue || "—") + "</div>" +
+        '<td><button type="button" class="itr-issue itr-open" data-itr-open="' + E(r.id) + '" title="Open the ticket">' + E(r.issue || "—") + "</button>" +
+          ((r.activity || []).length ? '<span class="co-note">' + (r.activity || []).filter(function (a) { return a.type === "reply" || a.type === "note"; }).length + " notes / replies" + (r.ackAt ? " · auto-acknowledged" : "") + "</span>" : "") +
           (r.notes ? '<span class="itr-note"><b>Note:</b> ' + E(r.notes) + "</span>" : "") +
           (r.source === "manual" ? '<span class="co-note">Added by hand' + (r.addedBy ? " · " + E(r.addedBy) : "") + "</span>" : "") +
           (r.status === "done" && (r.resolution || r.notifiedAt) ? '<span class="itr-note" style="border-left-color:#9fbf8f;"><b>Resolved' + (r.resolution ? ":</b> " + E(r.resolution) : "</b>") + (r.notifiedAt ? '<br><span class="small-note">Emailed ' + E(r.email) + " " + E(new Date(r.notifiedAt).toLocaleDateString()) + (r.ref ? " · " + E(r.ref) : "") + "</span>" : "") + "</span>" : "") +
@@ -288,7 +293,7 @@ function renderItRequests() {
         "<td>" + E(r.urgency || "—") + "</td><td>" + prioCell(r) + "</td><td>" + statusCell(r) + "</td>" +
         "<td>" + E(r.contact || "—") + (r.phone ? '<span class="co-note">' + E(r.phone) + "</span>" : "") + (r.email || can ? '<span class="co-note">' + E(r.email || "no email") + (can ? ' <button type="button" class="text-button" data-itr-email="' + E(r.id) + '" title="Change this ticket\'s email address">✎</button>' : "") + "</span>" : "") + "</td></tr>";
     }).join("") : '<tr><td colspan="' + (can ? 8 : 7) + '" class="empty">' + (itr.tab === "archived" ? "Nothing archived. Select requests and choose Archive, or use Archive under a status." : itr.tab === "dupes" ? "No duplicates." : all.length ? "Nothing here." : can ? "No requests yet — use Import from Excel for past form answers." : "No requests yet.") + "</td></tr>") +
-    "</tbody></table></div>" +
+    "</tbody></table></div>")))) +
     '<div class="section-title" style="margin-top:26px;"><div><h2>By person</h2><span class="small-note">Click a name to see only their requests.</span></div></div>' +
     '<div class="table-wrap"><table class="plain"><thead><tr><th>Person</th><th>Company</th><th>Requests</th><th>New</th><th>In progress</th><th>Resolved</th><th>P1 / P2</th><th>Last request</th></tr></thead><tbody>' +
     (plist.length ? plist.map(function (p) {
@@ -310,6 +315,207 @@ function itrReplies(r, can) {
       (last && r.replyPending && can ? '<span class="itr-reply-acts"><button type="button" class="st-btn st-progress" data-itr-reopen="' + E(r.id) + '">Reopen</button><button type="button" class="text-button" data-itr-keep="' + E(r.id) + '">Keep resolved</button></span>' : "") + "</span>";
   }).join("");
 }
+// ---------- Ticket card, board and SLAs ----------
+// Click a ticket to open its card: details, the activity (replies emailed
+// to the requester, internal work notes, status changes, the automatic
+// acknowledgement, the requester's own replies), files, and a box to write
+// a reply (emailed, with attachments and optionally a KB article) or an
+// internal note. SLA targets come from Admin → IT ticket SLAs.
+function itrStart(r) { return r.addedAt || Date.parse(String(r.submittedAt || "").replace(" ", "T")) || 0; }
+function itrResolvedAt(r) {
+  if (r.resolvedAt) return r.resolvedAt;
+  var st = (r.activity || []).filter(function (a) { return a.type === "status" && a.text === "Resolved"; }).pop();
+  return st ? st.at : r.status === "done" ? (r.updatedAt || 0) : 0;
+}
+function itrDur(ms) {
+  var m = Math.round(Math.abs(ms) / 60000);
+  if (m < 60) return m + "m";
+  var h = Math.floor(m / 60), d = Math.floor(h / 24);
+  return d >= 1 ? d + "d " + (h % 24) + "h" : h + "h " + (m % 60) + "m";
+}
+// { resp, resol }: each { state: met | late | due | breached | na, text }.
+function itrSla(r) {
+  var sla = (itr.data && itr.data.sla) || null, start = itrStart(r), now = Date.now();
+  if (!sla || !start || start < (sla.since || 0) || r.source === "import") return { resp: { state: "na", text: "Before SLAs" }, resol: { state: "na", text: "Before SLAs" } };
+  var one = function (doneAt, dueAt) {
+    if (doneAt) return doneAt <= dueAt ? { state: "met", text: "Met in " + itrDur(doneAt - start) } : { state: "late", text: "Late by " + itrDur(doneAt - dueAt) };
+    return now <= dueAt ? { state: "due", text: "Due in " + itrDur(dueAt - now) } : { state: "breached", text: "Breached " + itrDur(now - dueAt) + " ago" };
+  };
+  var hours = sla.resolveHours[r.priority] || sla.resolveHours.P3;
+  return { resp: one(r.firstResponseAt, start + sla.respondMinutes * 60000), resol: one(r.status === "done" ? itrResolvedAt(r) || now : 0, start + hours * 3600000) };
+}
+function itrSlaChip(x, label) { return x.state === "na" ? "" : '<span class="sla-chip sla-' + x.state + '" title="' + E(label) + '">' + E(label.split(" ")[0]) + " · " + E(x.text) + "</span>"; }
+
+// The SLA tab: open tickets first (most urgent first), then the last 30
+// days of resolved ones.
+function renderItSlaTab(list) {
+  var sla = itr.data.sla, cutoff = Date.now() - 30 * 864e5;
+  var rows = list.filter(function (r) { return r.status !== "done" || itrResolvedAt(r) >= cutoff; }).map(function (r) { return { r: r, s: itrSla(r) }; })
+    .filter(function (x) { return x.s.resp.state !== "na"; });
+  var rank = { breached: 0, due: 1, late: 2, met: 3 };
+  rows.sort(function (a, b) { return (a.r.status === "done") - (b.r.status === "done") || rank[a.s.resol.state] - rank[b.s.resol.state] || rank[a.s.resp.state] - rank[b.s.resp.state] || itrStart(a.r) - itrStart(b.r); });
+  var resp = rows.filter(function (x) { return x.s.resp.state === "met" || x.s.resp.state === "late"; });
+  var pct = resp.length ? Math.round(100 * resp.filter(function (x) { return x.s.resp.state === "met"; }).length / resp.length) + "%" : "—";
+  var breached = rows.filter(function (x) { return x.s.resp.state === "breached" || x.s.resol.state === "breached"; }).length;
+  var cell = function (x) { return '<span class="sla-chip sla-' + x.state + '">' + E(x.text) + "</span>"; };
+  return '<div class="summary-cards four">' +
+    metric("Responded on time", pct, "First response within " + sla.respondMinutes + " min (last 30 days)") +
+    metric("Breached now", breached, "Open tickets past a target", breached > 0) +
+    metric("Auto-acknowledged", rows.filter(function (x) { return x.r.ackAt; }).length, sla.ackOn ? "“We got your ticket” after " + sla.ackMinutes + " min" : "Switched off in Admin") +
+    metric("Resolution targets", "P1 " + sla.resolveHours.P1 + "h", "P2 " + sla.resolveHours.P2 + "h · P3 " + sla.resolveHours.P3 + "h · P4 " + sla.resolveHours.P4 + "h") + "</div>" +
+    '<div class="table-wrap"><table class="wide"><thead><tr><th>Ticket</th><th>Person</th><th>Priority</th><th>Status</th><th>Age</th><th>First response</th><th>Resolution</th></tr></thead><tbody>' +
+    (rows.length ? rows.map(function (x) {
+      var r = x.r;
+      return "<tr><td><button type=\"button\" class=\"itr-open\" data-itr-open=\"" + E(r.id) + "\">" + E((r.ref ? r.ref + " · " : "") + String(r.issue || "—").slice(0, 70)) + "</button></td><td>" + E(itrPerson(r)) + "</td><td>" + E(r.priority || "P3 (not rated)") + "</td><td>" + E(IT_STATUS_LABEL[r.status]) + "</td><td>" + E(itrDur(Date.now() - itrStart(r))) + "</td><td>" + cell(x.s.resp) + (r.ackAt ? '<span class="co-note">Auto-acknowledged</span>' : "") + "</td><td>" + cell(x.s.resol) + "</td></tr>";
+    }).join("") : '<tr><td colspan="7" class="empty">No tickets under SLA yet — SLAs count tickets that came in after they were switched on.</td></tr>') +
+    "</tbody></table></div>" +
+    '<p class="small-note" style="margin-top:10px;">First response = your first reply, or moving it off New. Resolution targets go by priority (unrated counts as P3). Change the targets in Admin → IT ticket SLAs.</p>';
+}
+
+// Board view: New / In progress / Resolved (last 14 days).
+function renderItBoard(list, can) {
+  var cutoff = Date.now() - 14 * 864e5;
+  var col = function (st, label) {
+    var cards = list.filter(function (r) { return r.status === st && (st !== "done" || itrResolvedAt(r) >= cutoff); })
+      .sort(function (a, b) { return (a.priority || "P9").localeCompare(b.priority || "P9") || itrStart(a) - itrStart(b); });
+    return '<section class="tk-col"><header><b>' + E(label) + '</b><span class="ib-n">' + cards.length + "</span></header>" + (cards.length ? cards.map(function (r) {
+      var s = itrSla(r);
+      return '<button type="button" class="tk-card" data-itr-open="' + E(r.id) + '">' +
+        '<span class="tk-top">' + (r.priority ? '<span class="prio prio-' + E(r.priority) + '">' + E(r.priority) + "</span>" : "") + '<span class="co-note">' + E(r.ref || "") + "</span>" + (r.replyPending ? '<span class="sla-chip sla-due">Replied</span>' : "") + "</span>" +
+        '<span class="tk-issue">' + E(String(r.issue || "—").slice(0, 110)) + "</span>" +
+        '<span class="tk-who">' + E(itrPerson(r)) + " · " + E(itrDur(Date.now() - itrStart(r))) + " ago</span>" +
+        (st !== "done" ? '<span class="tk-sla">' + itrSlaChip(s.resp, "Response target") + itrSlaChip(s.resol, "Resolution target") + "</span>" : "") + "</button>";
+    }).join("") : '<div class="brd-empty">Nothing here</div>') + "</section>";
+  };
+  return '<div class="tk-cols">' + col("new", "New") + col("progress", "In progress") + col("done", "Resolved (14 days)") + "</div>";
+}
+
+// The card itself.
+function itrCompose() { return itr.compose || (itr.compose = { kind: "reply", text: "", files: [], kbId: "" }); }
+function openItCard(id) { itr.open = id; itr.compose = null; drawItCard(); if (itr.data && itr.data.notebook && !itr.kbList) api("/api/it-notebook").then(function (d) { itr.kbList = d.articles || []; if (itr.open) drawItCard(); }, function () { itr.kbList = []; }); }
+function closeItCard() { itr.open = ""; itr.compose = null; var b = $("#itCard"); if (b) b.remove(); }
+function drawItCard() {
+  var r = itr.data && itr.data.requests.filter(function (x) { return x.id === itr.open; })[0];
+  if (!r) { closeItCard(); return; }
+  var can = itr.data.canRate, c = itrCompose(), s = itrSla(r);
+  var files = r.files || [], fileById = {};
+  files.forEach(function (f) { fileById[f.id] = f; });
+  var when = function (t) { return new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); };
+  var events = [{ at: itrStart(r), type: "submitted", text: r.issue || "", by: itrPerson(r) }].concat(r.activity || [],
+    (r.replies || []).map(function (x) { return { at: x.at, type: "incoming", text: x.text, by: x.name || x.from }; }));
+  events.sort(function (a, b) { return a.at - b.at; });
+  var LABEL = { submitted: "Submitted", reply: "Emailed reply", note: "Internal work note", status: "Status", ack: "Auto-acknowledged", resolved: "Resolved email", incoming: "Requester replied" };
+  var ev = function (a) {
+    var fl = (a.files || []).map(function (fid) { var f = fileById[fid]; return f ? '<button type="button" class="text-button" data-itf-dl="' + E(f.id) + '">📎 ' + E(f.name) + "</button>" : ""; }).join(" ");
+    return '<div class="tk-ev tk-' + a.type + '"><div class="tk-ev-h"><b>' + E(LABEL[a.type] || a.type) + (a.type === "status" ? " → " + E(a.text) : "") + "</b><span>" + E(a.by || "") + " · " + E(when(a.at)) + (a.emailedTo ? " · to " + E(a.emailedTo) : "") + "</span></div>" +
+      (a.type !== "status" && a.text ? '<div class="tk-ev-b">' + E(a.text) + "</div>" : "") +
+      (a.kb ? '<div class="small-note">Included KB-' + String(a.kb.kb).padStart(4, "0") + " · " + E(a.kb.title) + "</div>" : "") + (fl ? '<div class="tk-files">' + fl + "</div>" : "") + "</div>";
+  };
+  var pick = function (field, opts, cur) { return '<select data-itc="' + field + '">' + opts.map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === cur ? " selected" : "") + ">" + E(o[1]) + "</option>"; }).join("") + "</select>"; };
+  var kbs = (itr.kbList || []);
+  var html = '<div class="rs-modal" data-itcard><div class="rs-card tk-card-modal" role="dialog" aria-modal="true" aria-labelledby="itcT">' +
+    '<div class="brd-case-head"><div><div class="eyebrow">IT ticket' + (r.ref ? " · " + E(r.ref) : "") + " · " + E(r.company || "SOI") + '</div><h3 id="itcT">' + E(subjectIssue(r.issue || "IT request")) + "</h3>" +
+      '<div class="small-note">' + E(itrPerson(r)) + " · submitted " + E(when(itrStart(r))) + (r.urgency ? " · form says " + E(r.urgency) : "") + "</div></div>" +
+      '<button type="button" class="text-button" data-itc-close>Close ✕</button></div>' +
+    '<div class="tk-meta">' +
+      (can ? '<label>Status ' + pick("status", [["new", "New"], ["progress", "In progress"], ["done", "Resolved"]], r.status) + "</label>" +
+        '<label>Priority ' + pick("priority", [["", "Not rated"]].concat(IT_PRIOS.map(function (p) { return [p.id, p.label]; })), r.priority || "") + "</label>" : "<span>" + E(IT_STATUS_LABEL[r.status]) + "</span>") +
+      '<span class="tk-contact">' + E(r.email || "no email") + (can ? ' <button type="button" class="text-button" data-itr-email="' + E(r.id) + '">✎</button>' : "") + (r.phone ? " · " + E(r.phone) : "") + (r.contact ? " · prefers " + E(r.contact) : "") + "</span>" +
+      '<span class="tk-sla">' + itrSlaChip(s.resp, "Response target") + itrSlaChip(s.resol, "Resolution target") + "</span></div>" +
+    '<div class="tk-issue-full">' + E(r.issue || "No description.") + (r.notes ? "\n\n" + E(r.notes) : "") + "</div>" +
+    '<div class="card-label" style="margin-top:14px;">Activity</div><div class="tk-timeline">' + events.map(ev).join("") + "</div>" +
+    (can ? '<div class="tk-compose">' +
+      '<div class="seg"><button type="button" data-itc-kind="reply" class="' + (c.kind === "reply" ? "active" : "") + '">Email the requester</button><button type="button" data-itc-kind="note" class="' + (c.kind === "note" ? "active" : "") + '">Internal work note</button></div>' +
+      '<p class="small-note" style="margin:6px 0;">' + (c.kind === "reply" ? (r.email ? "Sent to " + E(r.email) + " as soon as you post it, with the ticket number so their reply comes back here." : "This ticket has no email — fix it with ✎, or add an internal note.") : "Only IT sees work notes; nothing is emailed.") + "</p>" +
+      '<textarea id="itcText" rows="4" placeholder="' + (c.kind === "reply" ? "Update for the requester…" : "What you checked, what you tried, what's next…") + '">' + E(c.text) + "</textarea>" +
+      '<div class="tk-compose-row">' +
+        (c.files.length ? c.files.map(function (f) { return '<span class="fchip">📎 ' + E(f.name) + '<button type="button" data-itc-unfile="' + E(f.id) + '" aria-label="Remove">×</button></span>'; }).join("") : "") +
+        '<input type="file" id="itcFile" multiple hidden><button type="button" data-itc-attach>📎 Attach files</button>' +
+        (itr.data.notebook ? '<select data-itc-kb aria-label="Include a KB article"><option value="">Include a KB article…</option>' + kbs.map(function (a) { return '<option value="' + E(a.id) + '"' + (a.id === c.kbId ? " selected" : "") + ">KB-" + String(a.kb).padStart(4, "0") + " · " + E(a.title) + "</option>"; }).join("") + "</select>" : "") +
+        '<span class="grow"></span><button type="button" class="primary" data-itc-post' + (itr.posting ? " disabled" : "") + ">" + (itr.posting ? "Sending…" : c.kind === "reply" ? "Send to requester" : "Add work note") + "</button></div></div>" : "") +
+    '<div class="tk-foot">' + (can && r.status !== "done" ? '<button type="button" data-itc-resolve>Resolve…</button>' : "") +
+      (itr.data.notebook ? '<button type="button" data-itc-kbnew>Write a KB article from this ticket</button>' : "") +
+      (files.length ? '<span class="small-note">Files: ' + files.map(function (f) { return '<button type="button" class="text-button" data-itf-dl="' + E(f.id) + '">' + E(f.name) + "</button>"; }).join(", ") + "</span>" : "") + "</div>" +
+    "</div></div>";
+  var box = $("#itCard");
+  if (!box) { box = document.createElement("div"); box.id = "itCard"; document.body.appendChild(box); }
+  box.innerHTML = html;
+  var tl = box.querySelector(".tk-timeline"); if (tl) tl.scrollTop = tl.scrollHeight;
+}
+function itcSaved(rec) {
+  var i = itr.data.requests.findIndex(function (x) { return x.id === rec.id; });
+  if (i !== -1) { matchPeople([rec]); itr.data.requests[i] = Object.assign({}, itr.data.requests[i], rec); }
+  render(); drawItCard();
+}
+document.addEventListener("input", function (e) { if (e.target.id === "itcText" && itr.open) itrCompose().text = e.target.value; });
+document.addEventListener("change", function (e) {
+  var t = e.target;
+  if (!itr.open || !t.closest || !t.closest("#itCard")) return;
+  if (t.dataset.itc === "status") {
+    if (t.value === "done") { var rid0 = itr.open; closeItCard(); resolveDialog([rid0]); return; }
+    changeItRequests([itr.open], { status: t.value }); setTimeout(drawItCard, 50); return;
+  }
+  if (t.dataset.itc === "priority") { changeItRequests([itr.open], { priority: t.value }); setTimeout(drawItCard, 50); return; }
+  if ("itcKb" in t.dataset) { itrCompose().kbId = t.value; return; }
+  if (t.id === "itcFile") {
+    var id = itr.open, list = Array.prototype.slice.call(t.files || []);
+    list.reduce(function (p, f) {
+      return p.then(function () {
+        return fetch("/api/it-requests/" + encodeURIComponent(id) + "/files?name=" + encodeURIComponent(f.name), { method: "POST", headers: { Authorization: "Bearer " + token(), "Content-Type": "application/octet-stream" }, body: f })
+          .then(function (res) { return res.json().then(function (x) { if (!res.ok) throw new Error(f.name + ": " + (x.error || "upload failed")); return x; }); })
+          .then(function (meta) {
+            itrCompose().files.push(meta);
+            var r = itr.data.requests.filter(function (x) { return x.id === id; })[0]; if (r) { r.files = r.files || []; r.files.push(meta); }
+          });
+      });
+    }, Promise.resolve()).then(drawItCard, function (err) { toast(err.message, true); drawItCard(); });
+  }
+});
+document.addEventListener("click", function (e) {
+  var t = e.target.closest && e.target.closest("[data-itr-open],[data-itc-close],[data-itc-kind],[data-itc-attach],[data-itc-unfile],[data-itc-post],[data-itc-resolve],[data-itc-kbnew],[data-itf-dl],[data-itr-view]");
+  if (!t) { if (e.target.hasAttribute && e.target.hasAttribute("data-itcard")) closeItCard(); return; }
+  var ds = t.dataset;
+  if ("itrView" in ds) { itr.view = ds.itrView; render(); return; }
+  if ("itrOpen" in ds) { openItCard(ds.itrOpen); return; }
+  if ("itcClose" in ds) { closeItCard(); return; }
+  if ("itcKind" in ds) { itrCompose().kind = ds.itcKind; drawItCard(); return; }
+  if ("itcAttach" in ds) { $("#itcFile").click(); return; }
+  if ("itcUnfile" in ds) { var cc = itrCompose(); cc.files = cc.files.filter(function (f) { return f.id !== ds.itcUnfile; }); drawItCard(); return; }
+  if ("itfDl" in ds) {
+    var rr = itr.data.requests.filter(function (x) { return x.id === itr.open; })[0], meta = rr && (rr.files || []).filter(function (f) { return f.id === ds.itfDl; })[0];
+    fetch("/api/it-requests/" + encodeURIComponent(itr.open) + "/files/" + encodeURIComponent(ds.itfDl), { headers: { Authorization: "Bearer " + token() } })
+      .then(function (res) { if (!res.ok) throw new Error("Couldn't download that file"); return res.blob(); })
+      .then(function (b) { var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = meta ? meta.name : "file"; document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000); }, function (err) { toast(err.message, true); });
+    return;
+  }
+  if ("itcResolve" in ds) { var rid = itr.open; closeItCard(); resolveDialog([rid]); return; }
+  if ("itcPost" in ds) {
+    var c = itrCompose(), id = itr.open;
+    c.text = ($("#itcText") || {}).value || c.text;
+    if (!c.text.trim() && !c.files.length && !c.kbId) { toast("Write something first.", true); return; }
+    itr.posting = true; drawItCard();
+    api("/api/it-requests/" + encodeURIComponent(id) + "/activity", { method: "POST", body: JSON.stringify({ kind: c.kind, text: c.text, fileIds: c.files.map(function (f) { return f.id; }), kbId: c.kbId }) })
+      .then(function (rec) { itr.posting = false; var k = c.kind; itr.compose = { kind: k, text: "", files: [], kbId: "" }; toast(k === "reply" ? "Sent to " + rec.email + "." : "Work note added."); itcSaved(rec); },
+            function (err) { itr.posting = false; drawItCard(); toast(err.message, true); });
+    return;
+  }
+  if ("itcKbnew" in ds) {
+    var r = itr.data.requests.filter(function (x) { return x.id === itr.open; })[0];
+    if (!r) return;
+    var parts = r.resolutionParts || {};
+    var body = "# Problem\n" + (r.issue || "") + (parts.cause ? "\n\n# Cause\n" + parts.cause : "") + "\n\n# Fix\n" + (parts.fix || r.resolution || "") + (parts.action ? "\n\n# What the user needs to do\n" + parts.action : "");
+    api("/api/it-notebook/articles", { method: "POST", body: JSON.stringify({ title: subjectIssue(r.issue || "IT fix"), body: body, fromRequest: r.id }) })
+      .then(function (a) {
+        api("/api/it-notebook/tickets/" + encodeURIComponent(r.id), { method: "PUT", body: JSON.stringify({ articleId: a.id }) }).catch(function () {});
+        (itr.kbList = itr.kbList || []).unshift(a);
+        nb.at = 0;
+        toast("KB-" + String(a.kb).padStart(4, "0") + " created — finish it on IT → Resolved → Knowledge base.");
+        drawItCard();
+      }, function (err) { toast(err.message, true); });
+  }
+});
+document.addEventListener("keydown", function (e) { if (e.key === "Escape" && itr.open && $("#itCard")) closeItCard(); });
+
 // A ticket that didn't come through the form (a call, a walk-up, Teams).
 function itrAddForm(plist) {
   var f = itr.form;

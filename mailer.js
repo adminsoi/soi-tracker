@@ -23,8 +23,10 @@ if (!configured) {
 
 // replyTo: where replies go — one address or a list (e.g. the person who
 // resolved a ticket and the IT mailbox the tracker reads).
+// attachments: [{ name, contentType, content (Buffer) }] — keep the total
+// under about 3 MB (Graph's limit for sending in one request).
 // Returns true when sent, false when email isn't set up.
-async function sendMail({ to, subject, html, replyTo, saveCopy }) {
+async function sendMail({ to, subject, html, replyTo, saveCopy, attachments }) {
   if (!configured || !to) return false;
 
   const token = await getAccessToken();
@@ -39,6 +41,12 @@ async function sendMail({ to, subject, html, replyTo, saveCopy }) {
   };
   const replyList = [...new Set([].concat(replyTo || []).map((a) => String(a || "").trim().toLowerCase()).filter(Boolean))];
   if (replyList.length) payload.message.replyTo = replyList.map((address) => ({ emailAddress: { address } }));
+  if (attachments && attachments.length) {
+    payload.message.attachments = attachments.map((a) => ({
+      "@odata.type": "#microsoft.graph.fileAttachment",
+      name: a.name, contentType: a.contentType || "application/octet-stream", contentBytes: Buffer.from(a.content).toString("base64"),
+    }));
+  }
 
   const res = await fetch(url, {
     method: "POST",

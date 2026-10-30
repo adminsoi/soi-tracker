@@ -599,6 +599,30 @@ department (or full access); only managers change things.
   preview), asking them to reply if they still have the issue. It's sent from
   `MS_FROM_EMAIL` (needs Graph **Mail.Send**, application permission, with
   admin consent).
+- **Ticket card:** click a ticket (its issue text, or a card on the
+  **Board** view) to open it: details, status and priority, SLA chips, the
+  full activity history (submitted, automatic acknowledgement, emailed
+  replies, internal work notes, status changes, the resolved email, the
+  requester's replies) and a box to write:
+  - **Email the requester** — sent as soon as you post it ("Update on your
+    IT request — … [Ticket IT-XXXXX]", Reply-To you and the IT mailbox, so
+    their answer lands back on the ticket). Attach files (kept on the ticket
+    in S3 under `it_request_files/`; up to about 3 MB per email) and, for
+    Private IT notebook logins, include a KB article (its pictures are
+    attached). Replying to a New ticket moves it to In progress.
+  - **Internal work note** — only IT sees it; never emailed.
+  - **Write a KB article from this ticket** (Private IT notebook logins)
+    starts a KB article from the issue and fix, to finish on IT → Resolved.
+- **Board view:** List / Board switch on Requests; the board shows New,
+  In progress and Resolved (last 14 days) as cards.
+- **SLAs:** a ticket's first response (your first reply, or moving it off
+  New) is due within 30 minutes; resolution by priority (P1 4 h, P2 8 h,
+  P3 / unrated 72 h, P4 120 h). The **SLAs** tab lists open tickets most
+  urgent first, plus the last 30 days, with on-time %. A new ticket nobody
+  has answered within 30 minutes gets one automatic "we got your ticket and
+  we're working on it" email. Only tickets that arrive after this was
+  deployed count (never Excel imports). Change the times, or switch the
+  automatic email off, in `/admin.html` → **IT ticket SLAs**.
 - **Wrong address on a ticket?** Resolving one ticket shows the requester's
   email as an editable box (typing a valid address ticks Email), and the
   ✎ next to the email on a ticket changes it any time. The corrected address

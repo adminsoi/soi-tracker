@@ -212,6 +212,40 @@
   .rs-card.rs-wide { width: min(560px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; }
   .rs-card.rs-wide textarea { min-height: 0; }
   .rs-card.rs-wide .nb-field { margin-bottom: 10px; }
+  /* IT ticket card, board and SLA chips */
+  .itr-open { background: none; border: 0; padding: 0; text-align: left; font: inherit; color: inherit; cursor: pointer; }
+  .itr-open:hover { text-decoration: underline; text-underline-offset: 3px; }
+  .sla-chip { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 10.5px; font-weight: 600; white-space: nowrap; margin: 1px 4px 1px 0; }
+  .sla-met { background: #e3eedf; color: #4c6b3c; } .sla-late { background: #f7e6cc; color: #8a5a14; }
+  .sla-due { background: #e6ebf3; color: #3f5f8f; } .sla-breached { background: #f6dcdb; color: #a03d3a; }
+  html[data-theme="dark"] .sla-met { background: rgba(95, 179, 122, .16); color: #93d9a8; } html[data-theme="dark"] .sla-late { background: rgba(230, 160, 60, .17); color: #f3c47e; }
+  html[data-theme="dark"] .sla-due { background: rgba(80, 140, 230, .18); color: #a9c8ff; } html[data-theme="dark"] .sla-breached { background: rgba(230, 90, 80, .18); color: #ff9d92; }
+  .tk-cols { display: grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 12px; margin-top: 12px; overflow-x: auto; }
+  .tk-col { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 8px 2px; min-height: 160px; }
+  .tk-col header { display: flex; justify-content: center; gap: 6px; align-items: baseline; padding-bottom: 8px; }
+  .tk-card { display: flex; flex-direction: column; gap: 4px; width: 100%; text-align: left; background: var(--paper); border: 1.5px solid var(--line); border-radius: 9px; padding: 10px; margin-bottom: 9px; cursor: pointer; font: inherit; color: var(--ink); }
+  html[data-theme="dark"] .tk-card { background: #1a1d22; border-color: #353a45; }
+  .tk-card:hover { border-color: #4f78b8; }
+  .tk-top { display: flex; gap: 6px; align-items: center; }
+  .tk-issue { font-size: 12.5px; font-weight: 600; line-height: 1.35; }
+  .tk-who { font-size: 11px; color: var(--muted); }
+  .rs-card.tk-card-modal { width: min(860px, 100%); max-width: 860px; max-height: calc(100vh - 40px); overflow-y: auto; }
+  .tk-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin: 10px 0; font-size: 12.5px; }
+  .tk-meta select { margin-left: 4px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; }
+  .tk-issue-full { white-space: pre-wrap; background: var(--soft); border-radius: 8px; padding: 10px 12px; font-size: 13px; line-height: 1.5; }
+  .tk-timeline { max-height: 320px; overflow-y: auto; border-left: 2px solid var(--line); margin: 6px 0 0 6px; padding-left: 14px; }
+  .tk-ev { position: relative; margin: 0 0 12px; }
+  .tk-ev::before { content: ""; position: absolute; left: -20px; top: 5px; width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .tk-ev.tk-reply::before, .tk-ev.tk-resolved::before, .tk-ev.tk-ack::before { background: #3d7fd1; } .tk-ev.tk-note::before { background: #e3a04f; } .tk-ev.tk-incoming::before { background: #5fb37a; }
+  .tk-ev-h { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; font-size: 12px; } .tk-ev-h span { color: var(--muted); font-size: 11px; }
+  .tk-ev-b { white-space: pre-wrap; font-size: 12.5px; line-height: 1.5; margin-top: 3px; }
+  .tk-ev.tk-note .tk-ev-b { background: rgba(227, 160, 79, .1); border-radius: 6px; padding: 6px 9px; }
+  .tk-files { margin-top: 3px; }
+  .tk-compose { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+  .tk-compose textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; font: inherit; font-size: 13px; }
+  .tk-compose-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+  .tk-compose-row select { max-width: 260px; padding: 7px 8px; border: 1px solid var(--line); border-radius: 7px; }
+  .tk-foot { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); }
   .rs-email { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin-top: 6px; }
   .rs-email input { flex: 1 1 240px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
   .rs-email .small-note { flex-basis: 100%; }
