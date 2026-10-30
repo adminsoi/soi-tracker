@@ -47,9 +47,23 @@ async function sendMail({ to, subject, html, replyTo, saveCopy }) {
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Graph sendMail failed (${res.status}): ${text}`);
+    const err = new Error(`Graph sendMail failed (${res.status}): ${text}`);
+    err.reason = explainSendError(res.status, text, to);
+    throw err;
   }
   return true;
 }
 
-module.exports = { sendMail, mailConfigured: configured };
+// What went wrong, in plain words, from Microsoft's reply.
+function explainSendError(status, text, to) {
+  let code = "", msg = "";
+  try { const e = JSON.parse(text).error || {}; code = e.code || ""; msg = e.message || ""; } catch (x) { msg = String(text || "").slice(0, 160); }
+  if (status === 401) return "Microsoft rejected the tracker's app sign-in. Check MS_TENANT_ID, MS_CLIENT_ID and MS_CLIENT_SECRET (the secret may have expired).";
+  if (status === 403 || /AccessDenied/i.test(code)) return `The tracker isn't allowed to send as ${FROM_EMAIL}. In Entra: the app needs the Mail.Send application permission with admin consent, and if an Application Access Policy limits which mailboxes it can use, ${FROM_EMAIL} has to be in it.`;
+  if (status === 404 || /ErrorInvalidUser|MailboxNotEnabled|ResourceNotFound/i.test(code)) return `There's no Microsoft 365 mailbox called ${FROM_EMAIL} (MS_FROM_EMAIL). It has to be a real mailbox or shared mailbox in your tenant.`;
+  if (/InvalidRecipients|ErrorInvalidRecipients/i.test(code) || /recipient/i.test(msg)) return `Microsoft didn't accept the address ${to}.`;
+  if (status === 429) return "Microsoft is throttling email right now. Try again in a few minutes.";
+  return `Microsoft said ${status}${code ? " " + code : ""}${msg ? ": " + msg.slice(0, 160) : ""}.`;
+}
+
+module.exports = { sendMail, mailConfigured: configured, MAIL_FROM: FROM_EMAIL || "" };
