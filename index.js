@@ -3290,6 +3290,13 @@ async function changeRequests(req, res, ids) {
     else { change.status = change.status || "progress"; change.notDuplicate = true; }
   }
   if ("notDuplicate" in body) change.notDuplicate = !!body.notDuplicate;
+  // Fix the requester's email (one ticket at a time), e.g. a typo on the form.
+  if ("email" in body) {
+    if (ids.length !== 1) return res.status(400).json({ error: "Change one ticket's email at a time" });
+    const email = String(body.email || "").trim().toLowerCase().slice(0, 120);
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "That email address doesn't look right" });
+    Object.assign(change, { email, emailEditedBy: req.user.username, emailEditedAt: Date.now() });
+  }
   // Resolving: what the issue was, what caused it, how it was fixed and
   // anything they need to do (all optional), and whether to email the
   // requester. The parts are also joined into one note for the ticket.
