@@ -330,6 +330,23 @@ value, and activity by person (Pentagon contact) — from the same Pentagon
 queries as the department tabs. Its tasks are under **Projects**. If a
 query's `TOP 200` limit is hit for the range, the page says so.
 
+## Navigation
+
+- **Sidebar:** Work — **Departments** and **Administration**; You —
+  Mentions you, Work inbox; Tools — Calendar, Overview, Performance, Global,
+  **Master Chat**.
+- **Departments** shows Procurement, Purchasing and Warehouse as one tab
+  (**Procurement / Purchasing / Warehouse**, sharing the AOG board), plus
+  Business Dev and US Government. Inside the shared tab, a small switcher
+  picks whose Tasks, Projects, SOPs and Pentagon lists you're looking at;
+  the board is the same for all three.
+- **Administration** holds IT, Admin, HR and Finance. Each sidebar item
+  reopens the department you last used there.
+- **Master Chat** describes the planned Claude chat (Phase 3 of the AOG CRM
+  spec). It isn't switched on until it can run in SOI's compliant AWS
+  environment and compliance approves its access; meanwhile it opens
+  claude.ai.
+
 ## AOG operations board (Phase 1 of the AOG CRM spec)
 
 **Procurement / Purchasing / Warehouse → Board** (first tab on Procurement
