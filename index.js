@@ -3235,7 +3235,8 @@ app.get(
       const task = r.taskId ? byId.get(r.taskId) : null;
       return Object.assign({}, r, { status: requestStatus(r, task) }, task ? { taskOwner: task.owner || "" } : { taskId: "" });
     }).sort((a, b) => String(b.submittedAt).localeCompare(String(a.submittedAt)));
-    res.json({ requests, canRate: isManager(req.user), mailboxConnected: itRequestsConfigured, sync: itSyncStatus() });
+    const settings = await getSettings();
+    res.json({ requests, canRate: isManager(req.user), mailboxConnected: itRequestsConfigured, sync: itSyncStatus(), sla: itSla(settings), notebook: await hasItNotebook(req.user), mailOn: mailConfigured });
   })
 );
 
@@ -3369,7 +3370,14 @@ async function changeRequests(req, res, ids) {
     const out = [];
     for (const r of list) {
       if (!wanted.has(r.id)) continue;
+      const prevStatus = r.status, prevEmail = r.email;
       Object.assign(r, change, now);
+      if (r.status !== prevStatus) {
+        pushActivity(r, { type: "status", text: { new: "New", progress: "In progress", done: "Resolved" }[r.status] || r.status, by: req.user.username });
+        // Any move by a person off New counts as the first response.
+        if (prevStatus === "new" && !r.firstResponseAt) r.firstResponseAt = Date.now();
+      }
+      if ("email" in change && prevEmail !== r.email) pushActivity(r, { type: "note", text: `Requester email changed from ${prevEmail || "none"} to ${r.email || "none"}`, by: req.user.username });
       touch(r);
       out.push(Object.assign({}, r));
     }
@@ -3424,7 +3432,11 @@ async function changeRequests(req, res, ids) {
       }
     }
     if (emailed) await withItRequests((list) => {
-      for (const r of list) if (sentIds.has(r.id)) { r.notifiedAt = Date.now(); r.notifiedBy = req.user.username; r.ref = sentIds.get(r.id); }
+      for (const r of list) if (sentIds.has(r.id)) {
+        r.notifiedAt = Date.now(); r.notifiedBy = req.user.username; r.ref = sentIds.get(r.id);
+        pushActivity(r, { type: "resolved", text: r.resolution || "", by: req.user.username, emailedTo: r.email });
+        if (!r.firstResponseAt) r.firstResponseAt = Date.now();
+      }
     });
   }
   if ((parts.fix || resolution) && change.status === "done") {
@@ -3480,6 +3492,215 @@ app.post(
   authMiddleware,
   asyncHandler((req, res) => changeRequests(req, res, Array.isArray((req.body || {}).ids) ? req.body.ids : []))
 );
+
+// ---------- IT ticket card: activity, files, acknowledgement, SLAs ----------
+// Each request keeps an activity list: emailed replies to the requester,
+// internal work notes (never emailed), status changes, the automatic
+// acknowledgement and the resolved email. Replies go out with the ticket
+// number in the subject, so the requester's answers come back onto the
+// ticket. Files are kept in S3 under it_request_files/<request>/.
+const IT_SLA_DEFAULTS = { ackOn: true, ackMinutes: 30, respondMinutes: 30, resolveHours: { P1: 4, P2: 8, P3: 72, P4: 120 } };
+function itSla(settings) {
+  const s = settings.itSla || {};
+  const h = Object.assign({}, IT_SLA_DEFAULTS.resolveHours, s.resolveHours || {});
+  const n = (v, d, max) => (Number(v) > 0 && Number(v) <= max ? Number(v) : d);
+  return {
+    ackOn: s.ackOn !== false,
+    ackMinutes: n(s.ackMinutes, IT_SLA_DEFAULTS.ackMinutes, 1440),
+    respondMinutes: n(s.respondMinutes, IT_SLA_DEFAULTS.respondMinutes, 1440),
+    resolveHours: { P1: n(h.P1, 4, 2000), P2: n(h.P2, 8, 2000), P3: n(h.P3, 72, 2000), P4: n(h.P4, 120, 2000) },
+    since: Number(settings.itSlaSince) || 0,
+  };
+}
+const EMAIL_OK = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MAX_EMAIL_ATTACH = 3 * 1024 * 1024;
+function pushActivity(r, entry) {
+  r.activity = Array.isArray(r.activity) ? r.activity : [];
+  r.activity.push(Object.assign({ id: newId(), at: Date.now() }, entry));
+  if (r.activity.length > 300) r.activity = r.activity.slice(-300);
+}
+// A plain-HTML version of a KB article body (headings, bullets, paragraphs;
+// pictures are attached instead).
+function kbToHtml(body) {
+  return String(body || "").replace(/!\[[^\]]*\]\(kb-img:[a-z0-9]+\)/g, "").split(/\n{2,}/).map((block) => {
+    const lines = block.split("\n").filter((l) => l.trim());
+    if (!lines.length) return "";
+    if (/^#{1,3}\s/.test(lines[0]) && lines.length === 1) return `<p style="margin:10px 0 4px;"><b>${escapeHtml(lines[0].replace(/^#+\s*/, ""))}</b></p>`;
+    if (lines.every((l) => /^\s*([-*•]|\d+[.)])\s+/.test(l))) return "<ul style=\"margin:4px 0 8px;\">" + lines.map((l) => `<li>${escapeHtml(l.replace(/^\s*([-*•]|\d+[.)])\s+/, ""))}</li>`).join("") + "</ul>";
+    return lines.map((l) => /^#{1,3}\s/.test(l) ? `<p style="margin:10px 0 4px;"><b>${escapeHtml(l.replace(/^#+\s*/, ""))}</b></p>` : `<p style="margin:0 0 8px;">${escapeHtml(l)}</p>`).join("");
+  }).join("");
+}
+function ticketEmailHtml(rec, me, inner) {
+  const who = (me && (me.name || me.username)) || "IT";
+  const whoName = who.charAt(0).toUpperCase() + who.slice(1);
+  return `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.5;color:#222;max-width:600px;">` +
+    `<p>Hi ${escapeHtml((rec.name || "").split(" ")[0] || "there")},</p>` + inner +
+    `<p>Just reply to this email to add anything — it'll come straight to ${escapeHtml(whoName)}.</p>` +
+    `<p>Thanks,<br>${escapeHtml(whoName)}<br>SOI Aviation IT</p>` +
+    `<p style="color:#888;font-size:12px;">Ticket ${escapeHtml(rec.ref || ticketRef(rec.id))}${rec.issue ? " · " + escapeHtml(subjectIssue(rec.issue)) : ""}</p></div>`;
+}
+async function findRequest(id) {
+  return (await getItRequests()).find((x) => x.id === id) || null;
+}
+const itManagerOnly = (req, res, next) => (canSeeItRequests(req.user) && isManager(req.user) ? next() : res.status(403).json({ error: "Only IT managers can do this" }));
+
+app.post(
+  "/api/it-requests/:id/files",
+  authMiddleware,
+  itManagerOnly,
+  express.raw({ type: () => true, limit: "10mb" }),
+  asyncHandler(async (req, res) => {
+    const name = String(req.query.name || "file").replace(/[\\/\r\n"]+/g, "_").slice(0, 160);
+    const ext = (name.match(/\.([a-z0-9]{2,5})$/i) || [])[1];
+    const type = ext && PERF_FILE_TYPES[ext.toLowerCase()];
+    if (!type) return res.status(400).json({ error: "Attach a PDF, image, Word, Excel, PowerPoint, text or email file" });
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "No file came through" });
+    if (!(await findRequest(req.params.id))) return res.status(404).json({ error: "That ticket isn't here" });
+    const file = { id: newId(), name, type, size: req.body.length, at: Date.now(), by: req.user.username };
+    await putFile(`it_request_files/${req.params.id}/${file.id}`, req.body, type);
+    await withItRequests((list) => { const r = list.find((x) => x.id === req.params.id); if (r) { r.files = r.files || []; r.files.push(file); } });
+    res.status(201).json(file);
+  })
+);
+app.get(
+  "/api/it-requests/:id/files/:fid",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!canSeeItRequests(req.user)) return res.status(403).json({ error: "Only IT can see this" });
+    const r = await findRequest(req.params.id);
+    const meta = r && (r.files || []).find((f) => f.id === req.params.fid);
+    const file = meta && (await getFile(`it_request_files/${r.id}/${meta.id}`));
+    if (!file) return res.status(404).json({ error: "That file isn't here" });
+    res.set({ "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${meta.name.replace(/[^\w .()-]+/g, "_")}"`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" });
+    res.send(file.body);
+  })
+);
+
+// A reply to the requester (emailed, with any attachments and a KB article)
+// or an internal work note (never emailed).
+app.post(
+  "/api/it-requests/:id/activity",
+  authMiddleware,
+  itManagerOnly,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const kind = b.kind === "reply" ? "reply" : "note";
+    const text = String(b.text || "").trim().slice(0, 8000);
+    const rec = await findRequest(req.params.id);
+    if (!rec) return res.status(404).json({ error: "That ticket isn't here" });
+    const files = (Array.isArray(b.fileIds) ? b.fileIds : []).map((fid) => (rec.files || []).find((f) => f.id === fid)).filter(Boolean);
+    let kb = null;
+    if (b.kbId) {
+      if (!(await hasItNotebook(req.user))) return res.status(403).json({ error: "KB articles are in the private IT notebook" });
+      const a = nbShape(await getItNotebook()).articles.find((x) => x.id === b.kbId);
+      if (!a) return res.status(400).json({ error: "That KB article isn't there any more" });
+      kb = a;
+    }
+    if (!text && !files.length && !kb) return res.status(400).json({ error: "Write something first" });
+    const entry = { type: kind, text, by: req.user.username, files: files.map((f) => f.id), kb: kb ? { id: kb.id, kb: kb.kb, title: kb.title } : null };
+    if (kind === "reply") {
+      if (!rec.email || !EMAIL_OK.test(rec.email)) return res.status(400).json({ error: "This ticket has no valid email — fix it with ✎ first, or add an internal note" });
+      if (!mailConfigured) return res.status(400).json({ error: "Email isn't set up on the server (see Admin → Email)" });
+      const attachments = [];
+      for (const f of files) { const x = await getFile(`it_request_files/${rec.id}/${f.id}`); if (x) attachments.push({ name: f.name, contentType: f.type, content: x.body }); }
+      if (kb) for (const m of String(kb.body || "").matchAll(KB_IMG_RE)) {
+        const x = await getFile(`it_notebook_images/${m[1]}`);
+        if (x) attachments.push({ name: `KB-${String(kb.kb).padStart(4, "0")}-${m[1].slice(0, 6)}.${(x.contentType || "image/png").split("/")[1]}`, contentType: x.contentType, content: x.body });
+      }
+      const total = attachments.reduce((s, a) => s + a.content.length, 0);
+      if (total > MAX_EMAIL_ATTACH) return res.status(400).json({ error: `Attachments add up to ${(total / 1048576).toFixed(1)} MB — email can carry about 3 MB. Remove some, or keep them as an internal note.` });
+      const users = await getUsers();
+      const me = users.find((u) => sameUser(u.username, req.user.username));
+      const ref = rec.ref || ticketRef(rec.id);
+      rec.ref = ref;
+      const inner = (text ? `<div style="margin:0 0 14px;">${escapeHtml(text).replace(/\n/g, "<br>")}</div>` : "") +
+        (kb ? `<div style="border-left:3px solid #3d7fd1;padding:4px 0 2px 14px;margin:16px 0;"><p style="margin:0 0 6px;color:#555;font-size:12px;">From our knowledge base · KB-${String(kb.kb).padStart(4, "0")}</p><p style="margin:0 0 8px;"><b>${escapeHtml(kb.title)}</b></p>${kbToHtml(kb.body)}</div>` : "") +
+        (attachments.length ? `<p style="color:#555;font-size:12px;">Attached: ${attachments.map((a) => escapeHtml(a.name)).join(", ")}</p>` : "");
+      try {
+        await sendMail({
+          to: rec.email, replyTo: [me && me.email, IT_REQUESTS_MAILBOX], saveCopy: true, attachments,
+          subject: `Update on your IT request — ${subjectIssue(rec.issue || "IT request")} [Ticket ${ref}]`,
+          html: ticketEmailHtml(rec, me, inner),
+        });
+      } catch (err) {
+        console.error("Ticket reply email failed:", err.message);
+        return res.status(502).json({ error: err.reason || "Couldn't send the email" });
+      }
+      entry.emailedTo = rec.email;
+    }
+    const saved = await withItRequests((list) => {
+      const r = list.find((x) => x.id === rec.id);
+      if (!r) return null;
+      pushActivity(r, entry);
+      if (kind === "reply") {
+        r.ref = rec.ref;
+        if (!r.firstResponseAt) r.firstResponseAt = Date.now();
+        r.replyPending = false;
+        // Answering a new ticket starts work on it.
+        if (r.status === "new") { r.status = "progress"; pushActivity(r, { type: "status", text: "In progress", by: req.user.username }); }
+      }
+      r.updatedAt = Date.now(); r.updatedBy = req.user.username;
+      return JSON.parse(JSON.stringify(r));
+    });
+    if (!saved) return res.status(404).json({ error: "That ticket isn't here any more" });
+    res.status(201).json(saved);
+  })
+);
+
+// "We got your ticket" — sent once to a new ticket nobody has answered
+// within the set time (Admin → IT ticket SLAs). Only tickets that came in
+// after this was switched on; never Excel imports.
+let ackRunning = false;
+async function sendAcknowledgements() {
+  if (ackRunning || !mailConfigured) return;
+  ackRunning = true;
+  try {
+    let settings = await getSettings();
+    if (!settings.itSlaSince) { await withSettings((s) => { if (!s.itSlaSince) s.itSlaSince = Date.now(); }); settings = await getSettings(); }
+    const sla = itSla(settings);
+    if (!sla.ackOn) return;
+    const due = (await getItRequests()).filter((r) => r.status === "new" && !r.ackAt && !r.firstResponseAt && !r.archived && !r.duplicateOf &&
+      r.source !== "import" && (r.addedAt || 0) >= sla.since && Date.now() - (r.addedAt || 0) >= sla.ackMinutes * 60000 && r.email && EMAIL_OK.test(r.email)).slice(0, 10);
+    for (const rec of due) {
+      const ref = rec.ref || ticketRef(rec.id);
+      rec.ref = ref;
+      try {
+        await sendMail({
+          to: rec.email, replyTo: [IT_REQUESTS_MAILBOX], saveCopy: true,
+          subject: `We got your IT request — ${subjectIssue(rec.issue || "IT request")} [Ticket ${ref}]`,
+          html: ticketEmailHtml(rec, null, `<p>Thanks for letting us know. We've got your IT request${rec.submittedAt ? " from " + escapeHtml(String(rec.submittedAt).slice(0, 16)) : ""} and we're working on it. We'll email you as soon as there's an update.</p>`),
+        });
+        await withItRequests((list) => { const r = list.find((x) => x.id === rec.id); if (r && !r.ackAt) { r.ackAt = Date.now(); r.ref = ref; pushActivity(r, { type: "ack", text: "Automatic “we got your ticket” email", by: "tracker", emailedTo: rec.email }); } });
+      } catch (err) {
+        console.error(`Acknowledgement for ${rec.id} failed (will retry):`, err.message);
+        break;
+      }
+    }
+  } catch (err) {
+    console.error("Acknowledgement check failed:", err.message);
+  } finally {
+    ackRunning = false;
+  }
+}
+setInterval(sendAcknowledgements, 60 * 1000);
+setTimeout(sendAcknowledgements, 20 * 1000);
+
+// SLA settings (admin page).
+app.get("/api/admin/it-sla", adminMiddleware, asyncHandler(async (req, res) => res.json(itSla(await getSettings()))));
+app.put(
+  "/api/admin/it-sla",
+  adminMiddleware,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const next = await withSettings((s) => {
+      s.itSla = { ackOn: b.ackOn !== false, ackMinutes: Number(b.ackMinutes), respondMinutes: Number(b.respondMinutes), resolveHours: b.resolveHours || {} };
+      if (!s.itSlaSince) s.itSlaSince = Date.now();
+      return itSla(s);
+    });
+    res.json(next);
+  })
+);
+
 
 // ---- Private IT notebook (IT → Resolved) ----
 // Write-ups on resolved requests (the fix, private notes, a category) and

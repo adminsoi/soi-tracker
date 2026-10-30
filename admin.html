@@ -307,6 +307,26 @@
     </div>
 
     <div class="card">
+      <h2>IT ticket SLAs</h2>
+      <div class="hint" style="margin-bottom:12px;">Targets shown on IT → Requests → SLAs and on each ticket. A new ticket nobody has answered within the acknowledgement time gets one automatic "we got your ticket and we're working on it" email (only tickets that come in after this was switched on; never Excel imports).</div>
+      <form id="slaForm">
+        <label class="check-row" style="max-width:420px;margin-bottom:12px;"><input type="checkbox" id="sla-ack"> Send the automatic "we got your ticket" email</label>
+        <div class="field-row">
+          <div class="field" style="max-width:220px;"><label for="sla-ackmin">…after this many minutes with no answer</label><input type="number" id="sla-ackmin" min="1" max="1440" required></div>
+          <div class="field" style="max-width:220px;"><label for="sla-resp">First response target (minutes)</label><input type="number" id="sla-resp" min="1" max="1440" required></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label for="sla-P1">P1 resolve within (hours)</label><input type="number" id="sla-P1" min="1" max="2000" required></div>
+          <div class="field"><label for="sla-P2">P2 (hours)</label><input type="number" id="sla-P2" min="1" max="2000" required></div>
+          <div class="field"><label for="sla-P3">P3 and unrated (hours)</label><input type="number" id="sla-P3" min="1" max="2000" required></div>
+          <div class="field"><label for="sla-P4">P4 (hours)</label><input type="number" id="sla-P4" min="1" max="2000" required></div>
+        </div>
+        <button type="submit">Save SLAs</button>
+        <div class="msg" id="slaMsg"></div>
+      </form>
+    </div>
+
+    <div class="card">
       <h2>HR global calendar</h2>
       <div class="hint" style="margin-bottom:12px;">Shown as its own tab on the Calendar page (List or Month), and used to fill in "Who's in office" from entries like "Greg – PTO" or "Alexis WFH". Leadership logins only. In Outlook on the web: Settings → Calendar → Shared calendars → Publish a calendar → pick the calendar → choose <b>"Can view titles and locations"</b> (or all details — "busy only" has no names) → Publish → copy the <b>ICS</b> link. The link is kept on the server and never shown to other users, but anyone who has it can read the calendar, so don't share it elsewhere.</div>
       <form id="calendarForm">
@@ -1011,8 +1031,26 @@
       .catch(function (err) { msg.textContent = err.message; msg.className = "msg"; });
   });
 
+  // ---------- IT ticket SLAs ----------
+  function loadSla() {
+    return api("/api/admin/it-sla").then(function (x) {
+      document.getElementById("sla-ack").checked = !!x.ackOn;
+      document.getElementById("sla-ackmin").value = x.ackMinutes;
+      document.getElementById("sla-resp").value = x.respondMinutes;
+      ["P1", "P2", "P3", "P4"].forEach(function (p) { document.getElementById("sla-" + p).value = x.resolveHours[p]; });
+    }).catch(function () {});
+  }
+  document.getElementById("slaForm").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var msg = document.getElementById("slaMsg"), hours = {};
+    ["P1", "P2", "P3", "P4"].forEach(function (p) { hours[p] = Number(document.getElementById("sla-" + p).value); });
+    api("/api/admin/it-sla", { method: "PUT", body: JSON.stringify({ ackOn: document.getElementById("sla-ack").checked, ackMinutes: Number(document.getElementById("sla-ackmin").value), respondMinutes: Number(document.getElementById("sla-resp").value), resolveHours: hours }) })
+      .then(function () { msg.textContent = "Saved."; msg.className = "msg ok"; loadSla(); }, function (err) { msg.textContent = err.message; msg.className = "msg"; });
+  });
+
   function start() {
     showPanel();
+    loadSla();
     loadEmailState();
     Promise.all([loadCompanies(), loadDepartments()]).then(function () {
       loadClaudeProjects();
