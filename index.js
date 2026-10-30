@@ -3247,6 +3247,18 @@ const RESOLUTION_LABEL = { issue: "The issue", cause: "What caused it", fix: "Ho
 function ticketRef(id) {
   return "IT-" + parseInt(require("crypto").createHash("sha1").update(String(id)).digest("hex").slice(0, 10), 16).toString(36).toUpperCase().slice(0, 5);
 }
+// The issue as it appears in the "Resolved: your IT request — …" subject.
+// Raise RESOLVED_SUBJECT_MAX for longer subjects (most inboxes show about
+// 80–100 characters before cutting it off themselves). Uses the first
+// sentence when that's long enough, and never cuts a word in half.
+const RESOLVED_SUBJECT_MAX = 100;
+function subjectIssue(text) {
+  const t = String(text || "").replace(/\s+/g, " ").trim();
+  const first = (t.match(/^.*?[.!?](?=\s|$)/) || [t])[0];
+  const pick = first.length >= 20 ? first : t;
+  if (pick.length <= RESOLVED_SUBJECT_MAX) return pick.replace(/[.!?]+$/, "");
+  return pick.slice(0, RESOLVED_SUBJECT_MAX).replace(/\s+\S*$/, "") + "…";
+}
 function resolvedEmailHtml(rec, me) {
   const p = rec.resolutionParts || {};
   const who = (me && (me.name || me.username)) || "IT";
@@ -3398,7 +3410,7 @@ async function changeRequests(req, res, ids) {
           // where the tracker picks them up and shows them on the ticket.
           replyTo: [me && me.email, IT_REQUESTS_MAILBOX],
           saveCopy: true,
-          subject: `Resolved: your IT request${rec.issue ? " — " + String(rec.issue).replace(/\s+/g, " ").slice(0, 60) : ""} [Ticket ${ref}]`,
+          subject: `Resolved: your IT request${rec.issue ? " — " + subjectIssue(rec.issue) : ""} [Ticket ${ref}]`,
           html: resolvedEmailHtml(rec, me),
         });
         if (!ok) { emailProblems.push("Email isn't set up on the server: MS_FROM_EMAIL (and MS_TENANT_ID / MS_CLIENT_ID / MS_CLIENT_SECRET) must be set on the stack"); break; }
