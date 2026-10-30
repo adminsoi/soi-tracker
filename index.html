@@ -2010,6 +2010,15 @@
   // Resolving asks how it was resolved and offers to email the requester
   // (the email asks them to reply if the issue is still there; replies come
   // to you).
+  // Same as the server's subject line (index.js subjectIssue): first sentence
+  // if it's long enough, up to 100 characters, never cutting a word.
+  function subjectIssue(text) {
+    var t = String(text || "").replace(/\s+/g, " ").trim();
+    var first = (t.match(/^.*?[.!?](?=\s|$)/) || [t])[0];
+    var pick = first.length >= 20 ? first : t;
+    if (pick.length <= 100) return pick.replace(/[.!?]+$/, "");
+    return pick.slice(0, 100).replace(/\s+\S*$/, "") + "…";
+  }
   function resolveDialog(ids) {
     var list = itr.data.requests.filter(function (r) { return ids.indexOf(r.id) !== -1; });
     var withEmail = list.filter(function (r) { return r.email; });
@@ -2050,7 +2059,7 @@
       pv.hidden = !(n && n.checked);
       var r = one ? Object.assign({}, one, { email: (($("#rsEmail") || {}).value || "").trim() }) : withEmail[0], p = parts();
       var sec = function (label, t) { return t ? "<p><b>" + label + "</b><br>" + E(t).replace(/\n/g, "<br>") + "</p>" : ""; };
-      pv.innerHTML = '<div class="rs-pv-head">Preview' + (one ? " — to " + E(r.email || "(no address yet)") : withEmail.length > 1 ? " (first of " + withEmail.length + ")" : "") + '</div><div class="rs-pv-subj">Resolved: your IT request — ' + E(String(r.issue || "").replace(/\s+/g, " ").slice(0, 60)) + "</div>" +
+      pv.innerHTML = '<div class="rs-pv-head">Preview' + (one ? " — to " + E(r.email || "(no address yet)") : withEmail.length > 1 ? " (first of " + withEmail.length + ")" : "") + '</div><div class="rs-pv-subj">Resolved: your IT request — ' + E(subjectIssue(r.issue)) + "</div>" +
         "<p>Hi " + E((r.name || "").split(" ")[0] || "there") + ",</p><p>Good news — your IT request" + (r.submittedAt ? " from " + E(String(r.submittedAt).slice(0, 10)) : "") + " has been <b>resolved</b>.</p>" +
         '<div class="rs-pv-box">' + sec("The issue", p.issue || r.issue) + sec("What caused it", p.cause) + sec("How it was fixed", p.fix || "…") + sec("What you need to do", p.action) + "</div>" +
         "<p>If you're still having this issue, just reply to this email and it'll come straight to " + E(who) + ".</p><p>Thanks,<br>" + E(who) + "<br>SOI Aviation IT</p>";
