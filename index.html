@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Libre+Caslon+Display&display=swap">
 <script src="/chart.umd.min.js"></script>
+<script>try { document.documentElement.dataset.theme = localStorage.getItem("soi_tracker_theme") || "dark"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
 <style>
   /* Look and feel follows "The Daily Edit": paper, serif headings, sage and rose. */
   :root {
@@ -547,6 +548,97 @@
     footer.foot { padding: 16px; display: block; line-height: 2; }
     .table-toolbar .primary { margin-left: 0; }
   }
+  /* Dark theme (the AOG CRM mockup): near-black page, charcoal panels, white
+     text, blue accents, sans-serif headings. The sidebar's Light / Dark
+     switch sets html[data-theme]; dark is the default. */
+  html[data-theme="dark"] {
+    --paper: #0b0c0e; --card: #15171b; --ink: #eceef2; --muted: #9aa1ad; --line: #2b2f37;
+    --pink: #1c2b46; --sage: #5fb37a; --forest: #2f6fdf; --soft: #1c1f24; --rose-ink: #9cc1ff;
+    --danger: #ef7d7d; --side: #111316;
+    color-scheme: dark;
+  }
+  html[data-theme="dark"] h1, html[data-theme="dark"] h2, html[data-theme="dark"] h3,
+  html[data-theme="dark"] .rs-card h3, html[data-theme="dark"] .qbr-h h3,
+  html[data-theme="dark"] .metric strong, html[data-theme="dark"] .qbr-big { font-family: 'DM Sans', system-ui, sans-serif; font-weight: 600; letter-spacing: -.4px; }
+  html[data-theme="dark"] .brand { font-family: 'DM Sans', system-ui, sans-serif; font-weight: 500; letter-spacing: -1px; color: #fff; }
+  html[data-theme="dark"] .sidebar-foot button { color: #d5d9e0; }
+  html[data-theme="dark"] a { color: #8fb6ff; }
+  html[data-theme="dark"] .text-button { color: #8fb6ff; }
+  html[data-theme="dark"] .primary { background: #2f6fdf; border-color: #4a86f0; color: #fff; }
+  html[data-theme="dark"] .primary:hover { background: #3b7bea; }
+  html[data-theme="dark"] #quickAdd { background: rgba(47, 111, 223, .14); border-color: #3d7fd1; color: #cfe0ff; }
+  html[data-theme="dark"] nav a { color: #d5d9e0; }
+  html[data-theme="dark"] nav a.active { background: #1a2a47; color: #fff; box-shadow: inset 0 0 0 1px #2c4370; }
+  html[data-theme="dark"] .tab { color: #b9bec8; }
+  html[data-theme="dark"] .tab.active { background: transparent; color: #fff; box-shadow: inset 0 -2px #3d7fd1; }
+  html[data-theme="dark"] .seg { background: #15171b; box-shadow: inset 0 0 0 1px var(--line); }
+  html[data-theme="dark"] .seg button { color: #b9bec8; }
+  html[data-theme="dark"] .seg button.active { background: #262a31; color: #fff; box-shadow: none; }
+  html[data-theme="dark"] .co { color: #d5d9e0; }
+  html[data-theme="dark"] .co:hover { background: #23272e; }
+  html[data-theme="dark"] .co.active { background: #2f6fdf; color: #fff; }
+  html[data-theme="dark"] .co.active .badge { background: #fff; color: #2f6fdf; }
+  html[data-theme="dark"] .badge { background: #24314d; color: #c3d6ff; }
+  html[data-theme="dark"] input:not([type=checkbox]):not([type=radio]):not([type=file]),
+  html[data-theme="dark"] select, html[data-theme="dark"] textarea { background-color: #0f1114 !important; border-color: var(--line); color: var(--ink); }
+  html[data-theme="dark"] .fb-in { background-color: transparent !important; }
+  html[data-theme="dark"] .fb-in:focus { background-color: #0f1114 !important; border-color: #3d7fd1; }
+  html[data-theme="dark"] ::placeholder { color: #6f7682; }
+  html[data-theme="dark"] th { background: #1a1d22; border-bottom-color: var(--line); }
+  html[data-theme="dark"] td { border-bottom-color: #22262d; }
+  html[data-theme="dark"] tr.picked td, html[data-theme="dark"] .perf-table tr.picked td { background: #18233a; }
+  html[data-theme="dark"] tr.project td { background: #181b20; }
+  html[data-theme="dark"] tr.draft td { background: #1d1a22; }
+  html[data-theme="dark"] .banner { background: #16191e; box-shadow: inset 0 0 0 1px var(--line); }
+  html[data-theme="dark"] .rs-modal { background: rgba(0, 0, 0, .62); }
+  html[data-theme="dark"] .rs-card { box-shadow: 0 20px 60px rgba(0, 0, 0, .6), inset 0 0 0 1px var(--line); }
+  /* Tinted chips: translucent fills with light text */
+  html[data-theme="dark"] .pink, html[data-theme="dark"] .pill.rose, html[data-theme="dark"] .who.out, html[data-theme="dark"] .toggle.no { background: rgba(220, 120, 160, .16); border-color: rgba(220, 120, 160, .35); color: #f2a9c6; }
+  html[data-theme="dark"] .pill, html[data-theme="dark"] .who.in, html[data-theme="dark"] .qa-all, html[data-theme="dark"] .nb-chip, html[data-theme="dark"] .src,
+  html[data-theme="dark"] .toggle.yes, html[data-theme="dark"] .nstate.yes, html[data-theme="dark"] .st-done { background: rgba(95, 179, 122, .16); border-color: rgba(95, 179, 122, .35); color: #93d9a8; }
+  html[data-theme="dark"] .st-new, html[data-theme="dark"] .prio-P3, html[data-theme="dark"] .bf-appr, html[data-theme="dark"] .fu-tag.waiting { background: rgba(80, 140, 230, .18); color: #a9c8ff; }
+  html[data-theme="dark"] .st-progress, html[data-theme="dark"] .prio-P2, html[data-theme="dark"] .dup-hint, html[data-theme="dark"] .hint-badge,
+  html[data-theme="dark"] .bf-due, html[data-theme="dark"] .fu-tag.reply { background: rgba(230, 160, 60, .17); color: #f3c47e; }
+  html[data-theme="dark"] .prio-P1, html[data-theme="dark"] .flag.risk, html[data-theme="dark"] .mn-badge-red, html[data-theme="dark"] .bf-over,
+  html[data-theme="dark"] .fu-tag.overdue, html[data-theme="dark"] .bf-rej { background: rgba(230, 90, 80, .18); color: #ff9d92; }
+  html[data-theme="dark"] .bf-hi { background: rgba(160, 110, 220, .18); color: #cfaef5; }
+  html[data-theme="dark"] .st-dup, html[data-theme="dark"] .st-archived, html[data-theme="dark"] .dup-note, html[data-theme="dark"] .who.remote,
+  html[data-theme="dark"] .prio-P4 { background: rgba(255, 255, 255, .07); color: #c3c8d1; }
+  html[data-theme="dark"] .fchip { background: #1a2a47; border-color: #2c4370; color: #c3d6ff; }
+  /* Notes, panels, callouts */
+  html[data-theme="dark"] .itr-note, html[data-theme="dark"] .cf-text, html[data-theme="dark"] .brd-checks, html[data-theme="dark"] .brd-approval,
+  html[data-theme="dark"] .juris, html[data-theme="dark"] .step-card.later, html[data-theme="dark"] .fb-notes:not(:placeholder-shown) { background: #1a1d22; border-left-color: #3a3f48; }
+  html[data-theme="dark"] .brd-mnote { background: rgba(230, 90, 80, .1); border-left-color: #d9473a; }
+  html[data-theme="dark"] .itr-reply.pending { background: rgba(230, 160, 60, .12); }
+  html[data-theme="dark"] .qbr-missing, html[data-theme="dark"] .perf-alerts { background: rgba(230, 160, 60, .1); border-color: rgba(230, 160, 60, .3); }
+  /* Calendar */
+  html[data-theme="dark"] .cal-event { background: #151b17; border-left-color: #4f6b52; }
+  html[data-theme="dark"] .cal-event.all-day, html[data-theme="dark"] .mg-ev.all-day { background: #1f1820; border-color: #6b3f55; }
+  html[data-theme="dark"] .mg-cell.out { background: #101215; }
+  html[data-theme="dark"] .mg-cell.holiday-day { background: #1d1a12; }
+  html[data-theme="dark"] .mg-more:hover { background: #1f1820; }
+  html[data-theme="dark"] th.who-today, html[data-theme="dark"] td.who-today { background: #18233a; }
+  html[data-theme="dark"] .glance-group.in { background: #142019; } html[data-theme="dark"] .glance-group.remote { background: #141b29; }
+  html[data-theme="dark"] .glance-group.part { background: #211b11; } html[data-theme="dark"] .glance-group.out { background: #23161a; }
+  /* Work inbox */
+  html[data-theme="dark"] .ib-main:hover { background: #1b1e23; }
+  html[data-theme="dark"] .ib-row.open { background: #171a1f; }
+  html[data-theme="dark"] .ib-dot { background: #4a4f58; }
+  html[data-theme="dark"] .ib-row.is-read .ib-main { color: #a9afba; }
+  /* AOG board, as in the mockup */
+  html[data-theme="dark"] .brd-col { background: #121418; border-color: #2b2f37; }
+  html[data-theme="dark"] .brd-col.mine { border-color: #3a4150; }
+  html[data-theme="dark"] .brd-card { background: #1a1d22; border-color: #353a45; color: var(--ink); }
+  html[data-theme="dark"] .brd-card:hover { border-color: #4f78b8; }
+  html[data-theme="dark"] .bd-dots .bd { box-shadow: 0 0 0 2px #1a1d22; }
+  html[data-theme="dark"] .bd-leg.active { background: #1a1d22; border-color: var(--line); }
+  html[data-theme="dark"] .bd-leg:hover { background: #1a1d22; }
+  html[data-theme="dark"] .cf-box { background: #11151b; border-color: #3d7fd1; }
+  html[data-theme="dark"] .cf-tab { background: #1a1d22; border-color: #353a45; }
+  html[data-theme="dark"] .cf-tab.active { border-color: #3d7fd1; box-shadow: inset 0 0 0 1px #3d7fd1; color: #fff; }
+  html[data-theme="dark"] .bk-file { background: #000; box-shadow: inset 0 0 0 1px #555; }
+  html[data-theme="dark"] .brd-foot .av { background: #24314d; color: #c3d6ff; }
+  .theme-switch { margin-left: 6px; }
 </style>
 </head>
 <body>
@@ -573,7 +665,7 @@
       <span class="live-dot off" id="syncDot"></span><span id="syncText">Connecting…</span>
       <strong id="whoName"></strong>
       <small id="whoRole"></small>
-      <button type="button" id="logoutBtn">Sign out</button>
+      <button type="button" id="logoutBtn">Sign out</button><button type="button" id="themeBtn" class="theme-switch" title="Switch between the dark and light look"></button>
     </div>
   </aside>
   <main>
@@ -826,6 +918,20 @@
   }
   function signOut() { clearToken(); me = null; showLogin(); }
   $("#logoutBtn").addEventListener("click", signOut);
+  // Light / Dark look (remembered on this device; dark is the default).
+  function applyTheme() {
+    var dark = document.documentElement.dataset.theme !== "light";
+    $("#themeBtn").textContent = dark ? "☀ Light" : "☾ Dark";
+    if (window.Chart) { Chart.defaults.color = dark ? "#a9afba" : "#666"; Chart.defaults.borderColor = dark ? "#2b2f37" : "rgba(0,0,0,0.1)"; }
+  }
+  $("#themeBtn").addEventListener("click", function () {
+    var next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem("soi_tracker_theme", next); } catch (e) {}
+    applyTheme();
+    if (me) render();
+  });
+  applyTheme();
 
   $("#loginForm").addEventListener("submit", function (e) {
     e.preventDefault();

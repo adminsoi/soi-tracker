@@ -332,6 +332,12 @@ query's `TOP 200` limit is hit for the range, the page says so.
 
 ## Navigation
 
+**Look:** dark by default, to match the AOG CRM mockup: near-black page,
+charcoal panels, white text, blue accents (active sidebar item, active tab,
+company switcher, primary buttons, the case file box) and sans-serif
+headings. **☀ Light / ☾ Dark** under Sign out switches to the original light
+"Daily Edit" look; the choice is remembered on that device.
+
 - **Sidebar:** Work — **Departments** and **Administration**; You —
   Mentions you, Work inbox; Tools — Calendar, Overview, Performance, Global,
   **Master Chat**.
