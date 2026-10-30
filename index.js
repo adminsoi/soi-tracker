@@ -1372,6 +1372,27 @@ app.post(
   })
 );
 
+// Links on the case file: websites (with an optional screenshot added as a
+// file), emails and Teams messages (link and / or the text pasted in).
+const BOARD_FILE_KINDS = ["picture", "pdf", "website", "email", "teams", "other"];
+app.post(
+  "/api/board/:id/links",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const kind = ["website", "email", "teams"].includes(b.kind) ? b.kind : "";
+    if (!kind) return res.status(400).json({ error: "Website, email or Teams message" });
+    const url = board.text(b.url, 1000), title = board.text(b.title, 200), note = String(b.text || "").trim().slice(0, 4000);
+    if (url && !/^https?:\/\//i.test(url)) return res.status(400).json({ error: "Links start with https://" });
+    if (!url && !note) return res.status(400).json({ error: "Add a link or paste the text" });
+    await changeCard(req, res, (c) => {
+      c.links = c.links || [];
+      c.links.push({ id: newId(), kind, url, title, text: note, by: req.user.username, at: Date.now(), stage: c.stage });
+      logCard(c, req.user.username, `Added ${kind === "teams" ? "a Teams message" : kind === "email" ? "an email" : "a website"}${title ? ": " + title : ""}`);
+    });
+  })
+);
+
 app.post(
   "/api/board/:id/archive",
   authMiddleware,
@@ -1408,7 +1429,10 @@ app.post(
     if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "No file came through" });
     const c0 = await boardCard(req, res);
     if (!c0) return;
-    const file = { id: newId(), name, type, size: req.body.length, at: Date.now(), by: req.user.username, kind: board.text(req.query.kind, 30) };
+    // Kind is the case-file tab it was added on; stage says whether it's
+    // part of the black file (RFQ / Quoted) or the red file (Sale on).
+    const kind = BOARD_FILE_KINDS.includes(req.query.kind) ? req.query.kind : type.startsWith("image/") ? "picture" : type === "application/pdf" ? "pdf" : /outlook|rfc822/.test(type) ? "email" : "other";
+    const file = { id: newId(), name, type, size: req.body.length, at: Date.now(), by: req.user.username, kind, stage: c0.stage };
     await putFile(`board_files/${c0.id}/${file.id}`, req.body, type);
     await changeCard(req, res, (c) => { c.files = c.files || []; c.files.push(file); logCard(c, req.user.username, `Attached ${name}`); });
   })

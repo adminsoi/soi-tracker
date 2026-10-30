@@ -360,10 +360,18 @@ to right through six columns:
 - **Board tools:** Refresh, search by quote no., order no., P/N or customer,
   filter by flag and by person, and the company switcher.
 - **Case file** (click a card): quote / order numbers, customer, due date,
-  owner, P/N lines (price follows cost × mark-up), checklists, approval,
-  move buttons, notes (managers can mark a note as a to-do), files and the
-  full history. Files (PDFs, pictures, invoices, screenshots, saved emails,
-  up to 15 MB) go to S3 under `board_files/<card>/`.
+  owner, P/N lines (price follows cost × mark-up), checklists, approval and
+  move buttons, then the case file box with tabs: **Notes** (managers can
+  mark a note as a to-do), **Pictures**, **PDFs** (and invoices),
+  **Websites** (link, what it shows, screenshots), **Emails** (saved .msg /
+  .eml, or an Outlook link and pasted text), **Teams** (link and pasted
+  message) and **+ Add**. Everything added in RFQ / Quoted is tagged
+  **Black file** (sourcing), from Sale on **Red file** (the order). Files
+  (up to 15 MB) go to S3 under `board_files/<card>/`. The full history is at
+  the bottom.
+- **Look:** a dot legend (red Due, amber For approval, blue Highlighted) that
+  doubles as filters, search and Refresh on the right, bordered columns, and
+  cards showing the number and P/N lines with coloured corner dots.
 - **Customer file** (click the customer): every RFQ and order you can see
   for them, plus documents (export licences, certificates…) under
   `board_customers/`.

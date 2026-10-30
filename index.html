@@ -236,24 +236,53 @@
   .itr-reply.pending { border-left-color: #d08a3a; background: #fdf3e6; }
   .itr-reply-acts { display: flex; gap: 10px; align-items: center; margin-top: 6px; }
   /* AOG board */
-  .brd-bar input[type=search] { min-width: 260px; flex: 1 1 260px; max-width: 380px; }
-  .brd-cols { display: grid; grid-template-columns: repeat(6, minmax(190px, 1fr)); gap: 10px; overflow-x: auto; padding-bottom: 6px; margin-top: 12px; }
-  .brd-col { background: var(--soft); border-radius: 10px; padding: 8px; min-height: 160px; }
-  .brd-col.mine { box-shadow: inset 0 0 0 1px #d9c8b2; }
-  .brd-col header { display: flex; align-items: baseline; gap: 6px; padding: 2px 4px 8px; font-size: 12.5px; }
-  .brd-mgr { margin-left: auto; font-size: 10.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 90px; }
-  .brd-empty { font-size: 11.5px; color: var(--muted); padding: 10px 4px; }
-  .brd-card { display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; margin-bottom: 8px; cursor: pointer; font: inherit; color: var(--ink); }
+  .brd-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-top: 14px; }
+  .brd-legend { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .bd-leg { display: inline-flex; align-items: center; gap: 7px; border: 1px solid transparent; background: none; border-radius: 999px; padding: 5px 10px; font-size: 12.5px; color: var(--ink); cursor: pointer; }
+  .bd-leg:hover { background: var(--soft); }
+  .bd-leg.active { border-color: var(--line); background: var(--card); font-weight: 600; }
+  .brd-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .brd-tools input[type=search] { width: 220px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+  .bd { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .bd-due { background: #d9473a; } .bd-appr { background: #e8a33a; } .bd-hi { background: #3d7fd1; } .bd-rej { background: #6b2f2f; }
+  .bd-dots { position: absolute; top: -4px; right: -4px; display: flex; gap: 3px; }
+  .bd-dots .bd { box-shadow: 0 0 0 2px var(--card); }
+  .brd-cap { margin-top: 10px; text-align: center; }
+  .cf-box { margin-top: 16px; border: 2px solid #3d7fd1; border-radius: 12px; padding: 14px 16px; background: #fdfdff; }
+  .cf-head { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; margin-bottom: 10px; }
+  .cf-head b { font-size: 15px; }
+  .cf-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+  .cf-tab { border: 1px solid var(--line); background: var(--card); border-radius: 9px; padding: 8px 14px; font-size: 12.5px; cursor: pointer; color: var(--ink); }
+  .cf-tab.active { border-color: #3d7fd1; box-shadow: inset 0 0 0 1px #3d7fd1; font-weight: 600; }
+  .cf-body { margin-top: 12px; }
+  .cf-body textarea, .cf-linkform input, .cf-linkform textarea { width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; font-size: 12.5px; margin-top: 6px; background: #fff; }
+  .cf-linkform { display: grid; grid-template-columns: 1fr 2fr; gap: 0 8px; margin: 8px 0; }
+  .cf-linkform textarea { grid-column: 1 / -1; }
+  .cf-linkform button { grid-column: 1 / -1; justify-self: end; margin-top: 6px; }
+  .cf-adds { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+  .cf-link { margin: 6px 0; }
+  .cf-link a { font-weight: 600; }
+  .cf-text { white-space: pre-wrap; font-size: 12.5px; background: #fbf8f3; border-radius: 6px; padding: 6px 9px; margin-top: 4px; }
+  .bk-file, .rd-file { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 4px; margin: 0 6px; }
+  .bk-file { background: #2b2b2b; color: #fff; } .rd-file { background: #b3261e; color: #fff; }
+  .brd-cols { display: grid; grid-template-columns: repeat(6, minmax(150px, 1fr)); gap: 10px; overflow-x: auto; padding-bottom: 6px; margin-top: 12px; }
+  .brd-col { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 8px 2px; min-height: 200px; min-width: 0; }
+  .brd-col.mine { border-color: #cdb9a0; }
+  .brd-col header { display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 2px 4px 10px; }
+  .brd-col header b { font-size: 14px; }
+  .brd-mgr { font-size: 10.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+  .brd-empty { font-size: 11.5px; color: var(--muted); padding: 14px 4px; text-align: center; }
+  .brd-card { position: relative; display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left; background: #fff; border: 1.5px solid var(--line); border-radius: 9px; padding: 10px 11px; margin-bottom: 10px; cursor: pointer; font: inherit; color: var(--ink); }
   .brd-card:hover { border-color: #cdb9a0; }
-  .brd-no { font-weight: 700; font-size: 12.5px; }
-  .brd-cust { font-size: 12.5px; }
-  .brd-pn { font-size: 11.5px; color: var(--muted); }
+  .brd-no { font-weight: 700; font-size: 13.5px; }
+  .brd-pn { font-size: 12px; }
+  .brd-cust { font-size: 11.5px; color: var(--muted); }
   .brd-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 3px; }
   .brd-foot .av { width: 22px; height: 22px; border-radius: 50%; background: var(--pink); color: var(--rose-ink); font-size: 9.5px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
   .bf { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; }
   .bf-due { background: #fdebd3; color: #9a5a0c; } .bf-over { background: #f9dcd7; color: #a3321f; }
   .bf-appr { background: #e3ecf6; color: #2f5e8c; } .bf-hi { background: #efe3f6; color: #6b3d8c; } .bf-rej { background: #f3e6e6; color: #8c3d3d; }
-  .rs-card.brd-case { width: min(1100px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; }
+  .rs-card.brd-case { width: min(1100px, 100%); max-width: 1100px; max-height: calc(100vh - 40px); overflow-y: auto; }
   .brd-case-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
   .brd-case-head h3 { margin: 2px 0; }
   .brd-flags { display: flex; gap: 5px; margin: 6px 0 10px; }
@@ -265,13 +294,11 @@
   .brd-appr-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .brd-appr-row input { flex: 1 1 220px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; }
   .brd-move { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 16px 0; padding: 10px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-  .brd-two { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-  .brd-two textarea { width: 100%; margin-top: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; font-size: 12.5px; }
   .brd-mnote { border-left-color: #c9503a; background: #fdf1ee; }
   .brd-file { display: flex; gap: 8px; align-items: baseline; margin: 3px 0; }
   .brd-hist { margin-top: 14px; }
   .brd-hist summary { cursor: pointer; font-size: 12px; color: var(--muted); }
-  @media (max-width: 760px) { .brd-grid, .brd-two { grid-template-columns: 1fr; } }
+  @media (max-width: 760px) { .brd-grid, .cf-linkform { grid-template-columns: 1fr; } }
   /* Column filters */
   .filter-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 12px; flex-basis: 100%; }
   .fchip { display: inline-flex; align-items: center; gap: 6px; background: #fbeef2; color: var(--rose-ink); border: 1px solid #ecd2db; border-radius: 999px; padding: 4px 6px 4px 11px; font-size: 12px; }
@@ -3807,6 +3834,14 @@
   var BOARD_DEPTS = ["Procurement", "Purchasing", "Warehouse"];
   var brd = { data: null, at: 0, loading: false, error: "", q: "", flag: "", person: "", open: "", customer: "", settings: false, adding: false, draft: null, busy: false };
   var BRD_FLAG = { overdue: ["Overdue", "bf-over"], due: ["Due", "bf-due"], approval: ["For approval", "bf-appr"], highlighted: ["Highlighted", "bf-hi"], rejected: ["Quote rejected", "bf-rej"] };
+  var BRD_DOTS = [["due", "Due", "bd-due"], ["approval", "For approval", "bd-appr"], ["highlighted", "Highlighted", "bd-hi"]];
+  // Coloured corner dots on a card (overdue and due share red).
+  function brdDots(c) {
+    var on = function (f) { return c.flags.indexOf(f) !== -1; };
+    return '<span class="bd-dots">' + (on("due") || on("overdue") ? '<span class="bd bd-due" title="' + (on("overdue") ? "Overdue" : "Due soon") + '"></span>' : "") +
+      (on("approval") ? '<span class="bd bd-appr" title="For approval"></span>' : "") + (on("highlighted") ? '<span class="bd bd-hi" title="Highlighted: not on the open market"></span>' : "") +
+      (on("rejected") ? '<span class="bd bd-rej" title="Quote rejected"></span>' : "") + "</span>";
+  }
   function canSeeBoardUi() { return me.fullAccess || me.leadership || BOARD_DEPTS.some(function (d) { return me.departments.indexOf(d) !== -1; }); }
   function canAddRfq() { return me.fullAccess || me.leadership || me.departments.indexOf("Procurement") !== -1; }
   function loadBoard() {
@@ -3842,37 +3877,36 @@
     if (!brd.data) return '<div class="empty">Loading the board…</div>';
     var d = brd.data, all = d.cards, shown = all.filter(brdMatch);
     var count = function (f) { return all.filter(function (c) { return c.flags.indexOf(f) !== -1 || (f === "due" && c.flags.indexOf("overdue") !== -1); }).length; };
-    var chips = [["", "All"], ["due", "Due"], ["approval", "For approval"], ["highlighted", "Highlighted"]].map(function (f) {
-      var n = f[0] ? count(f[0]) : all.length;
-      return '<button type="button" data-brd-flag="' + f[0] + '" class="' + (brd.flag === f[0] ? "active" : "") + '">' + E(f[1]) + ' <span class="ib-n">' + n + "</span></button>";
+    var legend = BRD_DOTS.map(function (f) {
+      return '<button type="button" class="bd-leg' + (brd.flag === f[0] ? " active" : "") + '" data-brd-flag="' + (brd.flag === f[0] ? "" : f[0]) + '" title="' + (brd.flag === f[0] ? "Show everything" : "Show only " + f[1]) + '"><span class="bd ' + f[2] + '"></span>' + E(f[1]) + ' <span class="ib-n">' + count(f[0]) + "</span></button>";
     }).join("");
     var people = '<select id="brdPerson" aria-label="Assigned to"><option value="">Everyone</option>' + d.people.map(function (p) {
       return '<option value="' + E(p) + '"' + (sameUser(p, brd.person) ? " selected" : "") + ">" + E(p) + "</option>";
     }).join("") + "</select>";
-    var head = '<div class="table-toolbar brd-bar"><input type="search" id="brdSearch" placeholder="Search quote no., order no., P/N or customer" value="' + E(brd.q) + '" aria-label="Search the board">' +
-      '<div class="seg">' + chips + "</div>" + people +
-      '<span class="grow" style="flex:1"></span><button type="button" data-brd-refresh title="Reload the board">Refresh</button>' +
+    var head = '<div class="brd-bar"><div class="brd-legend">' + legend + (brd.flag ? '<button type="button" class="text-button" data-brd-flag="">Show all</button>' : "") + "</div>" +
+      '<div class="brd-tools"><input type="search" id="brdSearch" placeholder="Search # or P/N" value="' + E(brd.q) + '" aria-label="Search by quote number, order number, P/N or customer">' +
+      '<button type="button" data-brd-refresh title="Reload the board">Refresh</button>' + people +
       (d.can.settings ? '<button type="button" data-brd-settings>Stage managers</button>' : "") +
-      (canAddRfq() ? '<button type="button" class="primary" data-brd-new>+ New RFQ</button>' : "") + "</div>";
+      (canAddRfq() ? '<button type="button" class="primary" data-brd-new>+ New RFQ</button>' : "") + "</div></div>";
     var cols = d.stages.map(function (s) {
       var list = shown.filter(function (c) { return c.stage === s.id; })
         .sort(function (a, b) { return String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999")) || b.updatedAt - a.updatedAt; });
-      return '<section class="brd-col' + (s.dept === dept ? " mine" : "") + '"><header><b>' + E(s.label) + '</b><span class="ib-n">' + list.length + "</span>" +
-        '<span class="brd-mgr" title="Cards moved here are assigned to ' + E(d.managers[s.id] || "nobody yet") + '">' + E(d.managers[s.id] || s.dept) + "</span></header>" +
+      return '<section class="brd-col' + (s.dept === dept ? " mine" : "") + '"><header><b>' + E(s.label) + "</b>" +
+        '<span class="brd-mgr" title="Cards moved here are assigned to ' + E(d.managers[s.id] || "nobody yet") + '">' + list.length + " · " + E(d.managers[s.id] || s.dept) + "</span></header>" +
         (list.length ? list.map(brdCardHtml).join("") : '<div class="brd-empty">Nothing here</div>') + "</section>";
     }).join("");
     return head + '<div class="brd-cols">' + cols + "</div>" +
-      '<p class="small-note" style="margin-top:10px;">Each card is one quote. It moves one column at a time and goes to that column\'s manager. Hard stops: sourcing ✓ before Quoted, quote ✓ and order no. before Sale, purchase ✓ and export licence field on every line before Purchased, location and date in before Received, quality sign-off before Sent. Numbers, certificates and licences are copied from Pentagon and source documents — the tracker never makes them up.</p>' +
+      '<p class="small-note brd-cap">Quote number in RFQ and Quoted; order number from Sale onward. Moving a card to the next column auto-assigns it to that stage\'s manager. Hard stops: sourcing ✓ before Quoted, quote ✓ and order no. before Sale, purchase ✓ and export licence field on every line before Purchased, location and date in before Received, quality sign-off before Sent. Numbers, certificates and licences are copied from Pentagon and source documents — the tracker never makes them up.</p>' +
       (brd.adding ? brdNewForm() : "");
   }
   function brdCardHtml(c) {
     var lines = c.lines || [];
-    return '<button type="button" class="brd-card" data-brd-open="' + E(c.id) + '">' +
+    var pns = lines.map(function (l) { return l.pn; }).filter(Boolean);
+    return '<button type="button" class="brd-card" data-brd-open="' + E(c.id) + '">' + brdDots(c) +
       '<span class="brd-no">' + E(brdLabel(c)) + "</span>" +
-      '<span class="brd-cust">' + E(c.customer) + (activeCompany === ALL ? ' <span class="co-note">' + E(shortCo(c.company)) + "</span>" : "") + "</span>" +
-      '<span class="brd-pn">' + (lines.length ? E(lines[0].pn || "—") + (lines.length > 1 ? " +" + (lines.length - 1) + " more" : "") : "No P/N yet") + "</span>" +
-      '<span class="brd-foot">' + c.flags.map(function (f) { var x = BRD_FLAG[f]; return x ? '<span class="bf ' + x[1] + '">' + x[0] + "</span>" : ""; }).join("") +
-      '<span class="grow"></span>' + (c.dueDate ? '<span class="co-note">' + E(fmtDate(c.dueDate)) + "</span>" : "") +
+      '<span class="brd-pn">' + (pns.length ? E(pns.slice(0, 2).join(", ")) + (pns.length > 2 ? " +" + (pns.length - 2) : "") + ' <span class="co-note">· ' + pns.length + " P/N line" + (pns.length === 1 ? "" : "s") + "</span>" : "No P/N lines yet") + "</span>" +
+      '<span class="brd-cust">' + E(c.customer) + (activeCompany === ALL ? " · " + E(shortCo(c.company)) : "") + "</span>" +
+      '<span class="brd-foot">' + (c.dueDate ? '<span class="co-note">Due ' + E(fmtDate(c.dueDate)) + "</span>" : "") + '<span class="grow"></span>' +
       (c.assignee ? '<span class="av" title="' + E(c.assignee) + '">' + E(initialsOf(c.assignee)) + "</span>" : "") + "</span></button>";
   }
 
@@ -3953,18 +3987,57 @@
       '<div class="brd-move">' + (si > 0 ? '<button type="button" class="text-button" data-brd-move="' + d.stages[si - 1].id + '">← Back to ' + E(d.stages[si - 1].label) + "</button>" : "") + '<span class="grow"></span>' +
         (next ? (c.moveBlockers.length ? '<span class="small-note">Before ' + E(next.label) + ": " + E(c.moveBlockers.join("; ")) + "</span>" : "") +
           '<button type="button" class="primary" data-brd-move="' + next.id + '"' + (c.moveBlockers.length ? " disabled" : "") + ">Move to " + E(next.label) + " →</button>" : '<span class="small-note">Shipped.</span>') + "</div>" +
-      '<div class="brd-two"><div><div class="card-label">Notes</div>' +
-        (c.notes || []).slice().reverse().map(function (n) { return '<div class="itr-note' + (n.manager ? " brd-mnote" : "") + '"><b>' + (n.manager ? "Manager to-do · " : "") + E(n.by) + "</b> · " + E(new Date(n.at).toLocaleString()) + "<br>" + E(n.text) + "</div>"; }).join("") +
-        '<textarea id="brdNote" rows="3" placeholder="Add a note (what was found, what still needs doing…)"></textarea>' +
-        '<div class="nb-foot">' + (can.assign ? '<label class="small-note"><input type="checkbox" class="check" id="brdNoteMgr"> Manager to-do</label>' : "") + '<span class="grow"></span><button type="button" data-brd-note>Add note</button></div></div>' +
-      '<div><div class="card-label">Files</div>' +
-        (c.files || []).map(function (f) { return '<div class="brd-file"><button type="button" class="text-button" data-brd-dl="' + E(f.id) + '">' + E(f.name) + '</button><span class="co-note">' + E(f.by) + " · " + E(new Date(f.at).toLocaleDateString()) + "</span></div>"; }).join("") +
-        '<input type="file" id="brdFile" multiple hidden><button type="button" data-brd-upload>+ Add files</button>' +
-        '<p class="small-note">PDFs, pictures, invoices, screenshots, saved emails (.msg/.eml). Saved to the tracker\'s AWS storage, one folder per card. Don\'t add export-controlled technical data until the compliance lead confirms this storage.</p></div></div>' +
+      brdCaseBox(c) +
       '<details class="brd-hist"><summary>History (' + (c.history || []).length + ")</summary>" + (c.history || []).slice().reverse().map(function (h) { return '<div class="small-note">' + E(new Date(h.at).toLocaleString()) + " · <b>" + E(h.by) + "</b> · " + E(h.what) + "</div>"; }).join("") + "</details>" +
       (can.assign ? '<div class="nb-foot" style="margin-top:10px;"><span class="grow"></span><button type="button" class="text-button" data-brd-archive="' + (c.archived ? "0" : "1") + '">' + (c.archived ? "Restore card" : "Archive card") + "</button></div>" : "") +
       "</div></div>";
     brdModal(html);
+  }
+
+  // The case file box: Notes · Pictures · PDFs · Websites · Emails · Teams ·
+  // + Add. Files and links carry the stage they were added in: RFQ / Quoted
+  // make up the black file (sourcing), Sale on the red file (the order).
+  var BRD_TABS = [["notes", "Notes"], ["picture", "Pictures"], ["pdf", "PDFs"], ["website", "Websites"], ["email", "Emails"], ["teams", "Teams"], ["add", "+ Add"]];
+  function brdFileOf(x) { return ["rfq", "quoted"].indexOf(x.stage) !== -1 ? '<span class="bk-file">Black file</span>' : x.stage ? '<span class="rd-file">Red file</span>' : ""; }
+  function brdCaseBox(c) {
+    var tab = brd.tab || "notes", d = brd.data;
+    var files = (c.files || []).filter(function (f) { return (f.kind || "other") === tab; });
+    var links = (c.links || []).filter(function (l) { return l.kind === tab; });
+    var n = function (k) { return k === "notes" ? (c.notes || []).length : k === "add" ? 0 : (c.files || []).filter(function (f) { return (f.kind || "other") === k; }).length + (c.links || []).filter(function (l) { return l.kind === k; }).length; };
+    var tabs = '<div class="cf-tabs" role="tablist">' + BRD_TABS.map(function (t) {
+      var k = n(t[0]);
+      return '<button type="button" role="tab" class="cf-tab' + (tab === t[0] ? " active" : "") + '" aria-selected="' + (tab === t[0]) + '" data-brd-tab="' + t[0] + '">' + E(t[1]) + (k ? ' <span class="ib-n">' + k + "</span>" : "") + "</button>";
+    }).join("") + "</div>";
+    var fileRow = function (f) { return '<div class="brd-file"><button type="button" class="text-button" data-brd-dl="' + E(f.id) + '">' + E(f.name) + "</button>" + brdFileOf(f) + '<span class="co-note">' + E(f.by) + " · " + E(new Date(f.at).toLocaleDateString()) + "</span></div>"; };
+    var linkRow = function (l) {
+      var href = safeLink(l.url);
+      return '<div class="cf-link">' + (href ? '<a href="' + E(href) + '" target="_blank" rel="noopener noreferrer">' + E(l.title || l.url) + " ↗</a>" : "<b>" + E(l.title || "Pasted in") + "</b>") + brdFileOf(l) +
+        '<span class="co-note">' + E(l.by) + " · " + E(new Date(l.at).toLocaleDateString()) + "</span>" + (l.text ? '<div class="cf-text">' + E(l.text) + "</div>" : "") + "</div>";
+    };
+    var upload = function (kind, label, accept) { return '<button type="button" data-brd-upload="' + kind + '"' + (accept ? ' data-accept="' + accept + '"' : "") + ">" + label + "</button>"; };
+    var linkForm = function (kind, ph) {
+      return '<div class="cf-linkform"><input id="cfTitle" placeholder="Title (optional)"><input id="cfUrl" placeholder="' + E(ph) + '"><textarea id="cfText" rows="2" placeholder="' + (kind === "website" ? "What it shows (optional)" : "Paste the message text (optional)") + '"></textarea>' +
+        '<button type="button" data-brd-link="' + kind + '">Add</button></div>';
+    };
+    var body;
+    if (tab === "notes") {
+      body = (c.notes || []).slice().reverse().map(function (x) { return '<div class="itr-note' + (x.manager ? " brd-mnote" : "") + '"><b>' + (x.manager ? "Manager to-do · " : "") + E(x.by) + "</b> · " + E(new Date(x.at).toLocaleString()) + "<br>" + E(x.text) + "</div>"; }).join("") +
+        '<textarea id="brdNote" rows="3" placeholder="Add a note: what was found, what still needs doing to complete the file…"></textarea>' +
+        '<div class="nb-foot">' + (d.can.assign ? '<label class="small-note"><input type="checkbox" class="check" id="brdNoteMgr"> Manager to-do</label>' : "") + '<span class="grow"></span><button type="button" data-brd-note>Add note</button></div>';
+    } else if (tab === "add") {
+      body = '<p class="small-note">Add anything to this case file:</p><div class="cf-adds">' + upload("picture", "Pictures", "image/*") + upload("pdf", "PDFs or invoices", ".pdf") + upload("website", "Website screenshots", "image/*,.pdf") + upload("email", "Saved emails (.msg / .eml)", ".msg,.eml") + upload("other", "Other files", "") + "</div>" +
+        ((c.files || []).filter(function (f) { return f.kind === "other" || !f.kind; }).map(fileRow).join("") || "");
+    } else {
+      var empty = { picture: "No pictures yet.", pdf: "No PDFs or invoices yet.", website: "No websites yet.", email: "No emails yet.", teams: "No Teams messages yet." }[tab];
+      body = (files.length || links.length ? links.map(linkRow).join("") + files.map(fileRow).join("") : '<p class="small-note">' + empty + "</p>") +
+        (tab === "picture" ? upload("picture", "+ Add pictures", "image/*") : tab === "pdf" ? upload("pdf", "+ Add PDFs / invoices", ".pdf") :
+          tab === "website" ? linkForm("website", "https://… (the listing or page)") + upload("website", "+ Add a screenshot", "image/*,.pdf") :
+          tab === "email" ? upload("email", "+ Add saved emails (.msg / .eml)", ".msg,.eml") + linkForm("email", "Outlook link (optional)") :
+          linkForm("teams", "Teams message link (optional)"));
+    }
+    return '<div class="cf-box"><div class="cf-head"><b>Case file</b><span class="small-note">Saved to AWS, one folder per card; the black file (sourcing) and red file (order) are built from it.</span></div>' + tabs +
+      '<div class="cf-body">' + body + "</div>" +
+      '<input type="file" id="brdFile" multiple hidden><p class="small-note" style="margin:8px 0 0;">Don\'t add export-controlled technical data until the compliance lead confirms this storage. Certificate and approval references are copied from source documents, never made up.</p></div>';
   }
 
   // Customer file: their RFQs and orders, and documents (export licences, certificates…).
@@ -4035,7 +4108,7 @@
   document.addEventListener("change", function (e) {
     var t = e.target;
     if (t.id === "brdPerson") { brd.person = t.value; render(); return; }
-    if (t.id === "brdFile") { var c = brdCard(brd.open); if (c) brdUpload(t.files, function (f) { return "/api/board/" + encodeURIComponent(c.id) + "/files?name=" + encodeURIComponent(f.name); }, function () { brd.at = 0; loadBoard(); }); return; }
+    if (t.id === "brdFile") { var c = brdCard(brd.open), kd = brd.upKind || ""; if (c) brdUpload(t.files, function (f) { return "/api/board/" + encodeURIComponent(c.id) + "/files?name=" + encodeURIComponent(f.name) + (kd ? "&kind=" + encodeURIComponent(kd) : ""); }, function () { brd.at = 0; loadBoard(); }); return; }
     if (t.id === "brdCFile") { var name = brd.customer; brdUpload(t.files, function (f) { return "/api/board-customers/files?customer=" + encodeURIComponent(name) + "&name=" + encodeURIComponent(f.name); }, function () { brd.at = 0; loadBoard(); setTimeout(function () { if (brd.customer) drawCustomerFile(); }, 600); }); return; }
     if (t.dataset && t.dataset.brdCheck && brd.open) { var o = {}; o[t.dataset.brdCheck] = t.checked; brdApi("/api/board/" + encodeURIComponent(brd.open), { checks: o }, "PATCH"); return; }
     if (t.dataset && t.dataset.bl != null && t.type === "checkbox") return; // saved with the lines
@@ -4046,7 +4119,7 @@
   });
   document.addEventListener("keydown", function (e) { if (e.key === "Escape" && $("#brdModal")) { closeBrdModal(); } });
   document.addEventListener("click", function (e) {
-    var t = e.target.closest && e.target.closest("[data-brd-flag],[data-brd-refresh],[data-brd-new],[data-brd-close],[data-brd-create],[data-brd-open],[data-brd-customer],[data-brd-settings],[data-brd-savesettings],[data-brd-addline],[data-brd-rmline],[data-brd-savelines],[data-brd-approve],[data-brd-reject],[data-brd-move],[data-brd-note],[data-brd-upload],[data-brd-dl],[data-brd-cupload],[data-brd-cdl],[data-brd-archive]");
+    var t = e.target.closest && e.target.closest("[data-brd-flag],[data-brd-refresh],[data-brd-new],[data-brd-close],[data-brd-create],[data-brd-open],[data-brd-customer],[data-brd-settings],[data-brd-savesettings],[data-brd-addline],[data-brd-rmline],[data-brd-savelines],[data-brd-approve],[data-brd-reject],[data-brd-move],[data-brd-note],[data-brd-upload],[data-brd-dl],[data-brd-cupload],[data-brd-cdl],[data-brd-archive],[data-brd-tab],[data-brd-link]");
     if (!t) { if (e.target.classList && e.target.classList.contains("rs-modal") && e.target.closest("#brdModal")) closeBrdModal(); return; }
     var ds = t.dataset, id = brd.open;
     if ("brdFlag" in ds) { brd.flag = ds.brdFlag; render(); return; }
@@ -4061,7 +4134,7 @@
         .then(function (card) { brd.busy = false; brd.adding = false; brdPut(card); brd.open = card.id; brd.lineDraft = null; drawCaseFile(); }, function (err) { brd.busy = false; render(); toast(err.message, true); });
       return;
     }
-    if ("brdOpen" in ds) { brd.open = ds.brdOpen; brd.customer = ""; brd.lineDraft = null; drawCaseFile(); return; }
+    if ("brdOpen" in ds) { brd.open = ds.brdOpen; brd.customer = ""; brd.lineDraft = null; brd.tab = "notes"; drawCaseFile(); return; }
     if ("brdCustomer" in ds) { brd.customer = ds.brdCustomer; brd.open = ""; drawCustomerFile(); return; }
     if ("brdSettings" in ds) { brd.settings = true; drawBoardSettings(); return; }
     if ("brdSavesettings" in ds) {
@@ -4095,7 +4168,13 @@
       brdApi("/api/board/" + encodeURIComponent(id) + "/notes", { text: tx, manager: !!($("#brdNoteMgr") && $("#brdNoteMgr").checked) });
       return;
     }
-    if ("brdUpload" in ds) { $("#brdFile").click(); return; }
+    if ("brdUpload" in ds) { var fi = $("#brdFile"); brd.upKind = ds.brdUpload || ""; fi.accept = t.dataset.accept || ""; fi.click(); return; }
+    if ("brdTab" in ds) { brd.tab = ds.brdTab; drawCaseFile(); return; }
+    if ("brdLink" in ds) {
+      var lk = { kind: ds.brdLink, title: ($("#cfTitle") || {}).value || "", url: ($("#cfUrl") || {}).value || "", text: ($("#cfText") || {}).value || "" };
+      brdApi("/api/board/" + encodeURIComponent(id) + "/links", lk).then(function () { toast("Added."); }, function () {});
+      return;
+    }
     if ("brdCupload" in ds) { $("#brdCFile").click(); return; }
     if ("brdDl" in ds) { var c1 = brdCard(id), meta = c1 && (c1.files || []).filter(function (x) { return x.id === ds.brdDl; })[0]; brdDownload("/api/board/" + encodeURIComponent(id) + "/files/" + encodeURIComponent(ds.brdDl), meta && meta.name); return; }
     if ("brdCdl" in ds) { var fl = (((brd.data.customers || {})[brd.customer] || {}).files || []).filter(function (x) { return x.id === ds.brdCdl; })[0]; brdDownload("/api/board-customers/files/" + encodeURIComponent(ds.brdCdl), fl && fl.name); return; }
