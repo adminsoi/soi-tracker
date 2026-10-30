@@ -3120,6 +3120,9 @@ app.get("/chart.umd.min.js", (req, res) => {
   res.sendFile(path.join(__dirname, "chart.umd.min.js"));
 });
 
+// The dashboard's stylesheet and scripts (index.html lists them in load order).
+app.use("/public", express.static(path.join(__dirname, "public"), { index: false }));
+
 // ---------- Self-signed HTTPS ----------
 // This is an internal-only server (VPN / office network), so instead of a
 // public certificate authority, we generate one self-signed certificate

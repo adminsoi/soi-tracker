@@ -8,12 +8,23 @@ in an S3 bucket — no separate database container needed.
 ## What's here
 
 ```
-server/       Express API (login, tasks, admin user management)
-public/       Frontend — index.html (the tracker) and admin.html (manage logins)
-Dockerfile    Builds one image that serves both the API and the frontend
+index.js        Express API and the server entry point
+*.js            Server helpers (auth, S3 storage, Microsoft Graph mail and
+                calendar, IT requests, Pentagon queries, the AOG board rules)
+index.html      The tracker page: its layout only
+public/         The tracker's stylesheet and scripts, one file per area
+                (core, departments, aog-board, inbox, …), loaded in the
+                order index.html lists them
+admin.html      Manage logins and settings
+Dockerfile      Builds one image that serves both the API and the frontend
 docker-compose.yml   Stack file for Portainer
-.env.example  Required environment variables
+ROADMAP.md      The redesign plan, phase by phase
 ```
+
+The tracker's scripts share one global scope and run in the order
+`index.html` lists them, so anything a file runs while loading must be
+defined in that file or an earlier one; `app.js` (event listeners and
+start-up) loads last.
 
 ## 1. Set up the S3 bucket
 
