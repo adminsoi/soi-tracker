@@ -862,7 +862,8 @@
     el.textContent = msg;
     el.className = (isError ? "error " : "") + "show";
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { el.className = ""; }, 3400);
+    // Long messages and problems stay up long enough to read.
+    toastTimer = setTimeout(function () { el.className = ""; }, Math.min(15000, Math.max(isError ? 8000 : 3400, String(msg).length * 55)));
   }
   function setSync(state, text) {
     $("#syncDot").className = "live-dot" + (state === "off" ? " off" : state === "busy" ? " busy" : "");
@@ -2077,7 +2078,7 @@
       if (hit.some(function (r) { return r.taskId; })) refresh();
       if (change.notify && res) {
         var probs = res.emailProblems || [];
-        toast((res.emailed ? "Resolved — emailed " + res.emailed + " requester" + (res.emailed === 1 ? "" : "s") + "." : "Resolved.") + (probs.length ? " Not emailed: " + probs.join("; ") : ""), !!probs.length && !res.emailed);
+        toast((res.emailed ? "Resolved — emailed " + res.emailed + " requester" + (res.emailed === 1 ? "" : "s") + "." : "Resolved.") + (probs.length ? " Not emailed — " + probs.join("; ") : ""), !!probs.length);
         itr.at = 0; requestRender();
       } else if (change.parts) { itr.at = 0; requestRender(); if (ids.length > 1) toast(ids.length + " requests marked Resolved."); }
       else if (change.status && ids.length > 1) toast(ids.length + " requests marked " + IT_STATUS_LABEL[change.status] + ".");

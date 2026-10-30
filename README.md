@@ -588,6 +588,11 @@ department (or full access); only managers change things.
   preview), asking them to reply if they still have the issue. It's sent from
   `MS_FROM_EMAIL` (needs Graph **Mail.Send**, application permission, with
   admin consent).
+- **When an email doesn't go:** the message after resolving says why in plain
+  words (for example the app lacks Mail.Send consent, an Application Access
+  Policy leaves out the sending mailbox, `MS_FROM_EMAIL` isn't a real
+  mailbox, or the client secret expired). `/admin.html` → **Email** shows
+  the sending mailbox and has **Send test email**.
 - **Replies show up on the ticket:** the email's Reply-To is you *and*
   `IT_REQUESTS_MAILBOX`. You get the reply in Outlook, and the tracker picks
   it up from the IT mailbox on its next check (every few minutes) by the

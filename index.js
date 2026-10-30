@@ -49,7 +49,7 @@ const {
   getQbr,
   withQbr,
 } = require("./s3store");
-const { sendMail, mailConfigured } = require("./mailer");
+const { sendMail, mailConfigured, MAIL_FROM } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError, nameFromTitle } = require("./calendar");
 const { hrEvents, cleanFeedUrl, FeedError } = require("./hrcal");
 const { itRequestsConfigured, fetchItRequests, IT_REQUESTS_MAILBOX, parseFormWorkbook, recordFromEmail, FormFileError, officeStamp } = require("./itrequests");
@@ -2984,6 +2984,28 @@ app.put(
   })
 );
 
+// Email check for /admin.html: is sending set up, and does a test email go
+// through? Says exactly what Microsoft objected to when it doesn't.
+app.get("/api/admin/email", adminMiddleware, (req, res) => {
+  res.json({ configured: mailConfigured, from: MAIL_FROM, itMailbox: IT_REQUESTS_MAILBOX || "" });
+});
+app.post(
+  "/api/admin/email/test",
+  adminMiddleware,
+  asyncHandler(async (req, res) => {
+    const to = String((req.body || {}).to || "").trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return res.status(400).json({ error: "Enter an email address to send the test to" });
+    if (!mailConfigured) return res.status(400).json({ error: "Email isn't set up: set MS_FROM_EMAIL (plus MS_TENANT_ID, MS_CLIENT_ID and MS_CLIENT_SECRET) on the stack in Portainer and redeploy." });
+    try {
+      await sendMail({ to, subject: "AOG Tracker — test email", html: `<p>This is a test from the AOG Tracker admin page. If you're reading it, the tracker can send email as <b>${escapeHtml(MAIL_FROM)}</b>.</p>`, saveCopy: true });
+      res.json({ ok: true, from: MAIL_FROM });
+    } catch (err) {
+      console.error("Test email failed:", err.message);
+      res.status(502).json({ error: err.reason || err.message.slice(0, 300) });
+    }
+  })
+);
+
 app.post(
   "/api/admin/users",
   adminMiddleware,
@@ -3372,12 +3394,14 @@ async function changeRequests(req, res, ids) {
           subject: `Resolved: your IT request${rec.issue ? " — " + String(rec.issue).replace(/\s+/g, " ").slice(0, 60) : ""} [Ticket ${ref}]`,
           html: resolvedEmailHtml(rec, me),
         });
-        if (!ok) { emailProblems.push("Email isn't set up on the server (MS_FROM_EMAIL / Mail.Send)"); break; }
+        if (!ok) { emailProblems.push("Email isn't set up on the server: MS_FROM_EMAIL (and MS_TENANT_ID / MS_CLIENT_ID / MS_CLIENT_SECRET) must be set on the stack"); break; }
         emailed++;
         sentIds.set(rec.id, rec.ref);
       } catch (err) {
         console.error("Resolution email failed:", err.message);
-        emailProblems.push(`${rec.email}: couldn't send`);
+        emailProblems.push(`${rec.email}: ${err.reason || "couldn't send (" + err.message.slice(0, 120) + ")"}`);
+        // The same setup problem would stop every other one too.
+        if (err.reason && !/didn't accept the address/.test(err.reason)) break;
       }
     }
     if (emailed) await withItRequests((list) => {

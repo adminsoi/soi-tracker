@@ -296,6 +296,17 @@
     </div></div>
 
     <div class="card">
+      <h2>Email</h2>
+      <div class="hint" style="margin-bottom:12px;">Resolved-ticket emails and assignment emails are sent from one Microsoft 365 mailbox. Send yourself a test to check it works; if it doesn't, this shows what Microsoft objected to.</div>
+      <p class="hint" id="emailState" style="margin-top:0;"></p>
+      <form id="emailTestForm">
+        <div class="field" style="max-width:360px;"><label for="et-to">Send a test to</label><input id="et-to" type="email" placeholder="you@soiaviation.com" required></div>
+        <button type="submit">Send test email</button>
+        <div class="msg" id="emailTestMsg"></div>
+      </form>
+    </div>
+
+    <div class="card">
       <h2>HR global calendar</h2>
       <div class="hint" style="margin-bottom:12px;">Shown as its own tab on the Calendar page (List or Month), and used to fill in "Who's in office" from entries like "Greg – PTO" or "Alexis WFH". Leadership logins only. In Outlook on the web: Settings → Calendar → Shared calendars → Publish a calendar → pick the calendar → choose <b>"Can view titles and locations"</b> (or all details — "busy only" has no names) → Publish → copy the <b>ICS</b> link. The link is kept on the server and never shown to other users, but anyone who has it can read the calendar, so don't share it elsewhere.</div>
       <form id="calendarForm">
@@ -983,8 +994,26 @@
       .catch(function (err) { msg.textContent = err.message; });
   });
 
+  // ---------- Email check ----------
+  function loadEmailState() {
+    return api("/api/admin/email").then(function (x) {
+      document.getElementById("emailState").innerHTML = x.configured
+        ? "Sending as <b>" + escapeHtml(x.from) + "</b>. Replies to resolved tickets go to the person who resolved it" + (x.itMailbox ? " and to <b>" + escapeHtml(x.itMailbox) + "</b> (so they show on the ticket)" : "") + "."
+        : "<b>Email isn't set up.</b> Set MS_FROM_EMAIL (plus MS_TENANT_ID, MS_CLIENT_ID and MS_CLIENT_SECRET) on the stack in Portainer and redeploy.";
+    }).catch(function () {});
+  }
+  document.getElementById("emailTestForm").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var msg = document.getElementById("emailTestMsg");
+    msg.textContent = "Sending…"; msg.className = "msg ok";
+    api("/api/admin/email/test", { method: "POST", body: JSON.stringify({ to: document.getElementById("et-to").value.trim() }) })
+      .then(function (x) { msg.textContent = "Sent from " + x.from + " — check the inbox (and junk folder)."; msg.className = "msg ok"; })
+      .catch(function (err) { msg.textContent = err.message; msg.className = "msg"; });
+  });
+
   function start() {
     showPanel();
+    loadEmailState();
     Promise.all([loadCompanies(), loadDepartments()]).then(function () {
       loadClaudeProjects();
       loadSharedCalendar();
