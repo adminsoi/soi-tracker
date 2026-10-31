@@ -72,7 +72,7 @@ it's merged and redeployed.
 ## Already built (commits #64–#70, 30 Oct 2026)
 
 An earlier session built parts of this from the "AOG CRM spec" — see the
-README's *Navigation* and *AOG operations board* sections. Build on it
+README's *Navigation* and *Operations board* sections. Build on it
 rather than starting over:
 
 - Sidebar: **Departments** and **Administration** (IT, Admin, HR, Finance);
@@ -85,7 +85,7 @@ rather than starting over:
   flag and person, customer files, history.
 - Dark theme with a Light / Dark switch; new access grid in `/admin.html`.
 
-Still different from the decisions above (to do in Phases 1 and 2):
+Still different from the decisions above (done in Phases 1 and 2):
 "Departments" → "Operations"; the sidebar order; Overview out of Tools;
 Strategy Meeting, SOP, People and Documents pages; the board as one row per
 file with line items underneath (instead of cards), a Flag on each line item
@@ -100,8 +100,14 @@ Mentions of You, and files created automatically from Pentagon.
       read the part they change.
 - [x] **1. Sidebar and navigation** per the decisions above; empty
       Staff-Facing / Department-Facing tabs; BD / US Gov tabs trimmed.
-- [ ] **2. Operations Kanban** — reshape the existing AOG board
+- [x] **2. Operations Kanban** — reshape the existing AOG board
       (`public/js/aog-board.js`, `board.js`) to the decisions above.
+      Built 31 Oct 2026 and tested against a local mock (not yet pushed or
+      redeployed). Kept all approvals and hard stops, and cost / mark-up /
+      margin with the same roles. Column headers show the stage colour; each
+      file's stripe shows its responsible person's department. Attachments
+      stay in `board_files/<file id>/`. Staging stack still to decide
+      before redeploying.
 - [ ] **3. US Gov Kanban** (reuses Phase 2).
 - [ ] **4. Administration** — IT, Admin, HR (incl. leave, payroll,
       performance), Finance.

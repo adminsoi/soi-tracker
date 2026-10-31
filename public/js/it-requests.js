@@ -21,12 +21,14 @@ var IT_STATUSES = [
   { id: "done", label: "Resolved", note: "Fixed and closed" }
 ];
 var IT_STATUS_LABEL = { new: "New", progress: "In progress", done: "Resolved" };
-var itr = { data: null, at: 0, loading: false, error: "", person: "", tab: "all", sort: "newest", picked: {}, adding: false, form: {}, saving: false, view: "list", open: "", compose: null, kbList: null, posting: false };
+var itr = { data: null, at: 0, loading: false, error: "", retryIn: 15000, person: "", tab: "all", sort: "newest", picked: {}, adding: false, form: {}, saving: false, view: "list", open: "", compose: null, kbList: null, posting: false };
 function canSeeItRequests() { return !!(me && (me.fullAccess || me.departments.indexOf("IT") !== -1)); }
+// After an error, wait before asking again (15 s, doubling to 5 min) instead
+// of asking on every render; "Try again" asks straight away.
 function loadItRequests() {
   if (itr.loading) return;
   itr.loading = true;
-  api("/api/it-requests").then(function (d) { matchPeople(d.requests); itr.data = d; itr.error = ""; }, function (err) { itr.error = err.message; })
+  api("/api/it-requests").then(function (d) { matchPeople(d.requests); itr.data = d; itr.error = ""; itr.retryIn = 15000; }, function (err) { if (itr.error) itr.retryIn = Math.min(itr.retryIn * 2, 300000); itr.error = err.message; })
     .then(function () { itr.loading = false; itr.at = Date.now(); requestRender(); });
 }
 
@@ -133,8 +135,8 @@ function findRepeats(list) {
 }
 
 function renderItRequests() {
-  if (!itr.data || Date.now() - itr.at > 120000) loadItRequests();
-  if (itr.error) return '<div class="banner">' + E(itr.error) + "</div>";
+  if (!itr.loading && (itr.error ? Date.now() - itr.at > itr.retryIn : !itr.data || Date.now() - itr.at > 120000)) loadItRequests();
+  if (itr.error) return '<div class="banner">' + E(itr.error) + ' <button type="button" class="text-button" data-itr-retry>Try again</button></div>';
   if (!itr.data) return '<div class="empty">Loading requests…</div>';
   // Archived requests sit on their own tab, out of everything else.
   var archived = itr.data.requests.filter(function (r) { return r.archived; });
@@ -779,4 +781,8 @@ document.addEventListener("change", function (e) {
       .then(function (d) { toast("Imported " + d.rows + " responses: " + d.added + " new, " + d.updated + " updated."); itr.at = 0; render(); },
             function (err) { toast(err.message, true); });
   }
+});
+document.addEventListener("click", function (e) {
+  if (!(e.target.closest && e.target.closest("[data-itr-retry]"))) return;
+  itr.at = 0; itr.retryIn = 15000; itr.error = ""; loadItRequests(); render();
 });

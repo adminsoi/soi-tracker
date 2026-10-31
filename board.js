@@ -1,20 +1,23 @@
-// AOG operations board: one card per quote, moving left to right through six
-// stages (RFQ → Quoted → Sale → Purchased → Received → Sent). This file is
-// the rules — stages, case-file checks, approvals, hard stops, flags and who
-// sees what. index.js has the routes; cards are stored in S3 as
-// aog_board.json (case-file attachments under board_files/).
+// Operations board (Procurement + Purchasing + Warehouse): one file per quote,
+// moving left to right through six stages (RFQ → Quoted → Sale Received →
+// Purchased → Item Received → Item Sent), with its line items as rows. This
+// file is the rules — stages, case-file checks, approvals, hard stops, flags,
+// on-time and who sees what. index.js has the routes; files are stored in S3
+// as aog_board.json (one "card" each; attachments under board_files/<card>/).
+// Stage ids are unchanged from the earlier AOG board so stored cards keep
+// working; only the labels and colours changed.
 //
 // The tracker is a working layer: quote and order numbers, certificate and
 // approval references, and export licence numbers are typed or copied from
 // Pentagon and source documents. Nothing here generates them.
 
 const STAGES = [
-  { id: "rfq", label: "RFQ", dept: "Procurement" },
-  { id: "quoted", label: "Quoted", dept: "Procurement" },
-  { id: "sale", label: "Sale", dept: "Purchasing" },
-  { id: "purchased", label: "Purchased", dept: "Purchasing" },
-  { id: "received", label: "Received", dept: "Warehouse" },
-  { id: "sent", label: "Sent", dept: "Warehouse" },
+  { id: "rfq", label: "RFQ", dept: "Procurement", colour: "blue" },
+  { id: "quoted", label: "Quoted", dept: "Procurement", colour: "blue" },
+  { id: "sale", label: "Sale Received", dept: "Purchasing", colour: "indigo" },
+  { id: "purchased", label: "Purchased", dept: "Purchasing", colour: "indigo" },
+  { id: "received", label: "Item Received", dept: "Warehouse", colour: "violet" },
+  { id: "sent", label: "Item Sent", dept: "Warehouse", colour: "violet" },
 ];
 const STAGE_IDS = STAGES.map((s) => s.id);
 const stageOf = (id) => STAGES.find((s) => s.id === id) || STAGES[0];
@@ -39,6 +42,11 @@ const CHECKS = {
 // to the client) and purchase (Sale, before the PO is sent).
 const APPROVALS = { rfq: "sourcing", quoted: "quote", sale: "purchase" };
 const APPROVAL_LABEL = { sourcing: "Sourcing", quote: "Quote", purchase: "Purchase" };
+
+// Pentagon documents that become files on the board: the column they land in
+// and the file field their number goes into.
+const PENTAGON_STAGE = { rfqs: ["rfq", "rfqNo"], quotes: ["quoted", "quoteNo"], sales_orders: ["sale", "orderNo"], purchase_orders: ["purchased", "poNo"] };
+const NUMBER_FIELDS = ["fileNo", "rfqNo", "quoteNo", "orderNo", "poNo"];
 
 const DUE_SOON_DAYS = 2;
 const text = (v, n) => String(v == null ? "" : v).replace(/[\u0000-\u001f]+/g, " ").trim().slice(0, n);
@@ -94,7 +102,40 @@ function moveBlockers(card, to) {
   return out;
 }
 
-// Flags shown on cards and used by the filters.
+// The file heading: highlighted when any line item is (or, for files from the
+// old board that haven't had their lines saved since, the whole file was).
+function highlightedFile(card) {
+  return !!card.highlighted || (card.lines || []).some((l) => l.highlighted);
+}
+// When the quote was done: the first move into Quoted (older files: from the
+// history), or when Pentagon entered a quote that came in as a file.
+function quotedAt(card) {
+  if (card.quotedAt) return card.quotedAt;
+  if (STAGE_IDS.indexOf(card.stage) < 1) return 0;
+  const h = (card.history || []).find((x) => /^Moved to Quoted/.test(x.what || ""));
+  return h ? h.at : card.pentagonView === "quotes" ? card.createdAt || 0 : 0;
+}
+// Was the quote done by its due date? "yes", "no", or "" while it's still
+// open and not late (or there's no due date to judge by).
+function onTime(card, now) {
+  if (!card.dueDate) return "";
+  const due = Date.parse(card.dueDate + "T23:59:59");
+  const at = quotedAt(card);
+  if (at) return at <= due ? "yes" : "no";
+  if (STAGE_IDS.indexOf(card.stage) >= 1) return "";
+  return now > due ? "no" : "";
+}
+// Files from the old board kept "highlighted" on the whole card; it now lives
+// on line items. Moves the flag onto the lines once there are lines to hold it.
+function migrateCard(card) {
+  if (card.highlighted && (card.lines || []).length) {
+    if (!card.lines.some((l) => l.highlighted)) for (const l of card.lines) l.highlighted = true;
+    delete card.highlighted;
+  }
+  return card;
+}
+
+// Flags shown on files and used by the filters.
 function flagsOf(card, now) {
   const flags = [];
   if (card.dueDate && card.stage !== "sent") {
@@ -103,7 +144,7 @@ function flagsOf(card, now) {
   }
   const kind = APPROVALS[card.stage];
   if (kind && approval(card, kind).state !== "approved" && approval(card, kind).state !== "rejected" && !approvalBlockers(card, kind).length) flags.push("approval");
-  if (card.highlighted) flags.push("highlighted");
+  if (highlightedFile(card)) flags.push("highlighted");
   if (approval(card, "quote").state === "rejected" && card.stage === "quoted") flags.push("rejected");
   return flags;
 }
@@ -117,6 +158,9 @@ function cleanLine(input, prev, may) {
   if ("qty" in input) l.qty = num(input.qty) || 1;
   if ("dateIn" in input) l.dateIn = /^\d{4}-\d{2}-\d{2}$/.test(input.dateIn) ? input.dateIn : "";
   if ("listOnWebsite" in input) l.listOnWebsite = !!input.listOnWebsite;
+  // Highlighted: not found online (Google, ILS, PartsBase, Locatory) — ticked
+  // by hand. (Flags have their own route so saving lines never undoes one.)
+  if ("highlighted" in input) l.highlighted = !!input.highlighted;
   if (may.cost) {
     if ("cost" in input) l.cost = num(input.cost);
     if ("markup" in input) l.markup = num(input.markup);
@@ -131,6 +175,7 @@ function cleanLine(input, prev, may) {
 }
 
 module.exports = {
-  STAGES, STAGE_IDS, stageOf, CHECKS, APPROVALS, APPROVAL_LABEL,
-  checksDone, approval, approvalBlockers, moveBlockers, flagsOf, quoteTotal, cleanLine, text, num,
+  STAGES, STAGE_IDS, stageOf, CHECKS, APPROVALS, APPROVAL_LABEL, PENTAGON_STAGE, NUMBER_FIELDS,
+  checksDone, approval, approvalBlockers, moveBlockers, flagsOf, highlightedFile, quotedAt, onTime, migrateCard,
+  quoteTotal, cleanLine, text, num,
 };

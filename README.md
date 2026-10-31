@@ -10,7 +10,7 @@ in an S3 bucket — no separate database container needed.
 ```
 index.js        Express API and the server entry point
 *.js            Server helpers (auth, S3 storage, Microsoft Graph mail and
-                calendar, IT requests, Pentagon queries, the AOG board rules)
+                calendar, IT requests, Pentagon queries, the Operations board rules)
 index.html      The tracker page: its layout only
 public/         The tracker's stylesheet and scripts, one file per area
                 (core, departments, aog-board, inbox, …), loaded in the
@@ -374,7 +374,7 @@ dark ones like SOI green stay visible.
   Operations tabs and the board. Old `#performance` links open HR's
   Performance tab.
 - **Operations** shows Procurement, Purchasing and Warehouse as one tab
-  (**Procurement / Purchasing / Warehouse**, sharing the AOG board), plus
+  (**Procurement / Purchasing / Warehouse**, sharing the Operations board), plus
   Business Dev and US Government. Inside the shared tab, a small switcher
   picks whose Tasks, Projects, SOPs and Pentagon lists you're looking at;
   the board is the same for all three. Business Dev and US Government have
@@ -398,60 +398,103 @@ dark ones like SOI green stay visible.
   environment and compliance approves its access; meanwhile it opens
   claude.ai.
 
-## AOG operations board (Phase 1 of the AOG CRM spec)
+## Operations board (Procurement · Purchasing · Warehouse)
 
-**Procurement / Purchasing / Warehouse → Board** (first tab on Procurement
-and Purchasing, after Insights on Warehouse). One card per quote, moving left
-to right through six columns:
+**Operations → Procurement / Purchasing / Warehouse → Board.** One board for
+all three departments. Each quote is a **file**: a heading with its line
+items as rows underneath, moving left to right through six columns. Column
+headers are coloured by stage; each file has a left stripe in its
+responsible person's department colour (teal Procurement, amber Purchasing,
+green Warehouse — the key is above the board).
 
-| Column | Department | Before the card can move on |
-|---|---|---|
-| RFQ | Procurement | All sourcing checks ticked (ILS, PartsBase, Locatory, Pentagon) and a manager's ✓ on sourcing |
-| Quoted | Procurement | A price on every line, a manager's ✓ on the quote, and the order number from Pentagon |
-| Sale | Purchasing | Red-file checks (sales order, supplier PO, deeper research) and a manager's ✓ on the purchase; export licence field filled on every line |
-| Purchased | Purchasing | Warehouse location and date in on every line |
-| Received | Warehouse | Quality sign-off on every line (warehouse manager) and the export licence field on every line |
-| Sent | Warehouse | — |
+| Column | Colour | Department | Before the file can move on |
+|---|---|---|---|
+| RFQ | blue | Procurement | All sourcing checks ticked (ILS, PartsBase, Locatory, Pentagon) and a manager's ✓ on sourcing |
+| Quoted | blue | Procurement | A price on every line, a manager's ✓ on the quote, and the Sales Order no. from Pentagon |
+| Sale Received | indigo | Purchasing | Red-file checks (sales order, supplier PO, deeper research) and a manager's ✓ on the purchase; export licence field filled on every line |
+| Purchased | indigo | Purchasing | Warehouse location and date in on every line |
+| Item Received | violet | Warehouse | Quality sign-off on every line (warehouse manager) and the export licence field on every line |
+| Item Sent | violet | Warehouse | — |
 
-- **Labels:** quote number in RFQ and Quoted, order number from Sale on.
-- **Auto-assign:** moving a card assigns it to that column's manager (and
-  emails them). Set them under **Stage managers** on the board (full-access /
+The stage ids stored in `aog_board.json` are unchanged (`rfq`, `quoted`,
+`sale`, `purchased`, `received`, `sent`), so files from the earlier AOG
+board show up as they were; only the labels changed.
+
+- **File heading:** file number (the file no., else the quote no., else the
+  RFQ no.), platform(s), customer, a **Highlighted Items** box, due date,
+  responsible person, and **on-time ✓ / ✗** — ✓ if the file reached Quoted
+  by its due date, ✗ if it got there late or is still in RFQ past its due
+  date, – while that can't be judged yet (older files: taken from the
+  history). From **Sale Received** on, the heading also shows the **Sales
+  Order** number. The heading is rebuilt every time the file changes or
+  moves.
+- **Line items** are rows under the heading, each with a **⚑ Flag** at the
+  start (anyone who can see the file can flag or unflag; it records who).
+  **Highlighted** is ticked by hand on a line item when the part can't be
+  found online (Google, ILS, PartsBase, Locatory) — the tracker doesn't
+  check those sites. The heading box ticks itself when any line item is
+  highlighted. (Files from the old board that were highlighted as a whole
+  have the mark moved onto their line items the first time they change.)
+- **Filters:** the legend (Due, For approval, Highlighted, Flagged) and
+  person picker apply to the whole board; each column's **Filter** box
+  filters that column by file no., platform, customer, Sales Order no. (from
+  Sale Received on), Highlighted Items, due, responsible person and quote
+  on-time, plus **line items: flagged only / unflagged only** — handy in
+  meetings. **Search** covers the headings and everything inside the files:
+  line items, notes, attachment names and links.
+- **Side panel:** click a heading or a line item. It slides in from the
+  right with the file's numbers (file, RFQ, quote, Sales Order, PO —
+  typed or copied from Pentagon), customer, platform(s), due, responsible
+  person, the line items (the clicked one picked out; cost × mark-up = price
+  as before), **documents and notes** (Notes, Pictures, PDFs, Websites,
+  Emails, Teams, + Add — PDFs, JPEGs and other documents up to 15 MB each),
+  the checklists, approvals and move buttons, and the history.
+- **Manager feedback / next steps:** managers (and full-access /
+  leadership) can mark a note as feedback for someone (the responsible
+  person by default) with a **deadline**. It shows on the file and also
+  becomes a task for that person, so it appears on their **Mentions of You**
+  with the deadline (and they get an email if email is configured).
+- **From Pentagon:** every RFQ, Quote, Sales Order and Purchase Order the
+  dashboard's Pentagon queries return (`pentagonViews.js`) shows on the
+  board as a file — RFQs in RFQ, Quotes in Quoted, SOs in Sale Received, POs
+  in Purchased — one file per document number, one line item per P/N, with
+  the Pentagon contact as the responsible person. They're built on the fly
+  (dashed border, "From Pentagon") and stored the first time someone works on
+  one (a note, file, flag, move…). A Pentagon document stops showing
+  separately as soon as its number is on a stored file, so typing the quote
+  no. on the RFQ's file links the two. Pentagon can't say which RFQ a quote
+  came from, so until someone types the number in, the RFQ and its quote
+  show as two files. **+ Add file** (Procurement, full-access, leadership)
+  adds one by hand; it starts in RFQ.
+- **Auto-assign:** moving a file assigns it to that column's manager (and
+  emails them). Set them under **Stage managers** (full-access /
   leadership); blank uses the department default from `/admin.html`.
 - **Approvals:** the column's manager, managers in that department, or
   full-access / leadership give ✓ / ✗. Unticking a check or changing a line's
   price after a ✓ resets that approval. A rejected quote adds a feedback
-  follow-up task for the card's owner; a rejected quote at or above the
+  follow-up task for the file's owner; a rejected quote at or above the
   big-ticket amount (default $25,000) also adds a task for the global manager.
-- **Flags** on cards and as filters: **Due** (within 2 days) / **Overdue**,
-  **For approval** (ready for a ✓ / ✗), **Highlighted** (not on the open
-  market — ticked by the buyer), **Quote rejected**.
-- **Board tools:** Refresh, search by quote no., order no., P/N or customer,
-  filter by flag and by person, and the company switcher.
-- **Case file** (click a card): quote / order numbers, customer, due date,
-  owner, P/N lines (price follows cost × mark-up), checklists, approval and
-  move buttons, then the case file box with tabs: **Notes** (managers can
-  mark a note as a to-do), **Pictures**, **PDFs** (and invoices),
-  **Websites** (link, what it shows, screenshots), **Emails** (saved .msg /
-  .eml, or an Outlook link and pasted text), **Teams** (link and pasted
-  message) and **+ Add**. Everything added in RFQ / Quoted is tagged
-  **Black file** (sourcing), from Sale on **Red file** (the order). Files
-  (up to 15 MB) go to S3 under `board_files/<card>/`. The full history is at
-  the bottom.
-- **Look:** a dot legend (red Due, amber For approval, blue Highlighted) that
-  doubles as filters, search and Refresh on the right, bordered columns, and
-  cards showing the number and P/N lines with coloured corner dots.
-- **Customer file** (click the customer): every RFQ and order you can see
-  for them, plus documents (export licences, certificates…) under
-  `board_customers/`.
-- **Who sees what:** staff see cards they own or created and cards in their
-  department's columns; full-access and leadership see everything in their
-  companies. Cost and mark-up show to Procurement, Purchasing and
-  full-access / leadership; the **margin** column to full-access /
-  leadership only. Cards are archived, never deleted; every change is in the
-  card's history.
-- **Numbers are never made up:** quote and order numbers, export licence
-  entries, certificate and approval references are typed or copied from
-  Pentagon and source documents.
+- **Customer file** (click the customer in the side panel): every RFQ and
+  order you can see for them, plus documents (export licences,
+  certificates…) under `board_customers/`.
+- **Who sees what:** staff see files they're responsible for or created and
+  files in their department's columns; full-access and leadership see
+  everything in their companies. Cost and mark-up show to Procurement,
+  Purchasing and full-access / leadership; the **margin** column to
+  full-access / leadership only. Files are archived, never deleted; every
+  change is in the file's history.
+- **Attachments in S3:** one folder per file, `board_files/<file id>/<attachment id>`
+  — the same folders as before, so nothing was moved. The folders are named
+  by the file's internal id rather than its number because numbers get
+  typed in or changed later; `aog_board.json` maps each id to its file
+  number, customer and attachment names, which is what the Phase 6
+  Documents page will use to show them by name.
+- **When the server errors**, the board (and IT Requests) shows the error
+  with **Try again** and waits before asking again (15 seconds, doubling up
+  to 5 minutes) instead of re-asking on every redraw.
+- **Numbers are never made up:** file, RFQ, quote, Sales Order and PO
+  numbers, export licence entries, certificate and approval references are
+  typed or copied from Pentagon and source documents.
 
 Data: `aog_board.json` in the S3 bucket.
 
@@ -459,10 +502,10 @@ Data: `aog_board.json` in the S3 bucket.
 GovCloud hosting and U.S.-persons administration; Microsoft SSO with MFA;
 an unalterable audit log (needs S3 Object Lock — today's history is
 append-only in the app); writing back to Pentagon (the Transmute API is
-read-only); creating cards from Outlook / Pentagon automatically; sending
+read-only); creating files from Outlook automatically; sending
 quotes and POs from Outlook templates; Teams capture and alerts; Xero
 receivables; carrier tracking; voice-to-text notes (browser dictation sends
-audio to Google — needs a compliant alternative); BD / US Gov workspaces;
+audio to Google — needs a compliant alternative); the US Gov Kanban (Phase 3);
 Administration forms; the master chat (Claude on Bedrock). Until the
 compliance lead confirms the storage, don't upload export-controlled
 technical data to case files.
