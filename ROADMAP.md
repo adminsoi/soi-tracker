@@ -162,8 +162,16 @@ Mentions of You, and files created automatically from Pentagon.
         submission as a task with a person responsible, status and
         department-only notes.
       - HR's forms, leave and payroll: HR, Leadership and full access
-        only, checked on the server. Leave waiting for someone's approval
-        shows on HR → Staff-Facing for them.
+        only, checked on the server.
+      - Leave (changed 31 Oct 2026 at the user's request): the requester
+        picks who covers for them (any login sharing one of their
+        companies). Approved one step at a time — the cover person, then
+        a manager in the requester's department, then an HR manager —
+        each on their Mentions of You (also HR → Staff-Facing), with the
+        request opening there. No HR shortcut. If the cover person says
+        no, it goes back to the requester ("Needs a new cover person") to
+        pick someone else; a no from the manager or HR declines it. Only
+        fully approved leave reaches Payroll. Withdraw until approved.
       - **Payroll never works out pay.** Per entity and pay week it shows
         base pay, approved leave days and adjustments; each entity has an
         empty "Leave rules" box for HR, and the base-pay total is marked

@@ -27,14 +27,15 @@ var SF_FORMS = {
       { k: "details", label: "What's happening", type: "textarea", ph: "Facts: what happened, when, and who was involved." },
       { k: "urgent", label: "This is urgent", type: "check" }] },
   leave: { title: "Leave request", dept: "HR", send: "Request leave",
-    intro: "A manager in your department approves it first, then HR. Approved leave goes to Payroll.",
+    intro: "The person covering for you agrees first, then a manager in your department approves it, then HR. Approved leave goes to Payroll.",
     fields: [
       { k: "type", label: "Type of leave", type: "select", opts: SF_LEAVE },
       { k: "otherType", label: "What kind of leave", type: "text", ph: "e.g. Study leave", when: function (f) { return f.type === "other"; } },
       { k: "from", label: "First day off", type: "date" },
       { k: "to", label: "Last day off", type: "date" },
       { k: "days", label: "Working days", type: "number", step: "0.5", hint: "Filled in as the weekdays between the two dates. Change it for half days or public holidays." },
-      { k: "notes", label: 'Notes <span class="opt">optional</span>', type: "textarea", ph: "Anything your manager should know. Don't include medical details." }] },
+      { k: "cover", label: "Who's covering for you", type: "select", opts: function () { return sfCoverPeople(); }, hint: "They're asked to agree on their Mentions of You." },
+      { k: "notes", label: 'Notes <span class="opt">optional</span>', type: "textarea", ph: "Anything your cover, manager or HR should know. Don't include medical details." }] },
   perf_comment: { title: "Performance comment", dept: "HR", send: "Send to HR",
     intro: "Recognition, a concern or a suggestion about someone's work. HR reads it; it doesn't go on anyone's record by itself.",
     fields: [
@@ -54,10 +55,10 @@ var SF_STATUSES = {
   admin: ["new", "progress", "done", "declined", "cancelled"],
   hr_issue: ["new", "progress", "done", "cancelled"],
   perf_comment: ["new", "progress", "done", "cancelled"],
-  leave: ["manager", "hr", "approved", "declined", "cancelled"],
+  leave: ["cover", "recover", "manager", "hr", "approved", "declined", "cancelled"],
   reimburse: ["draft", "submitted", "checked", "approved", "paid", "rejected", "cancelled"]
 };
-var SF_STATUS_LABEL = { new: "New", progress: "In progress", done: "Done", declined: "Declined", manager: "Waiting for manager", hr: "Waiting for HR",
+var SF_STATUS_LABEL = { new: "New", progress: "In progress", done: "Done", declined: "Declined", cover: "Waiting for cover", recover: "Needs a new cover person", manager: "Waiting for manager", hr: "Waiting for HR",
   approved: "Approved", cancelled: "Cancelled", draft: "Needs a receipt", submitted: "Submitted", checked: "Finance checked", paid: "Paid", rejected: "Rejected" };
 function sfStatusLabel(kind, st) { return kind === "reimburse" && st === "approved" ? "Approved to pay" : SF_STATUS_LABEL[st] || st; }
 function sfChip(kind, st) {
@@ -65,7 +66,7 @@ function sfChip(kind, st) {
   return '<span class="st ' + cls + '">' + E(sfStatusLabel(kind, st)) + "</span>";
 }
 function sfCanWithdraw(i) {
-  return ({ admin: ["new"], hr_issue: ["new"], perf_comment: ["new"], leave: ["manager", "hr"], reimburse: ["draft", "submitted", "checked"] }[i.kind] || []).indexOf(i.status) !== -1;
+  return ({ admin: ["new"], hr_issue: ["new"], perf_comment: ["new"], leave: ["cover", "recover", "manager", "hr"], reimburse: ["draft", "submitted", "checked"] }[i.kind] || []).indexOf(i.status) !== -1;
 }
 function sfAmount(n, cur) {
   n = Number(n);
@@ -78,7 +79,7 @@ function sfWhat(i) {
   if (i.kind === "admin") return f.category + " — " + f.details;
   if (i.kind === "hr_issue") return (f.urgent ? "Urgent · " : "") + f.topic + " — " + f.subject;
   if (i.kind === "perf_comment") return f.type + " about " + f.about;
-  if (i.kind === "leave") return (f.type === "other" ? f.otherType : SF_LEAVE_LABEL[f.type]) + " · " + fmtDate(f.from) + (f.to !== f.from ? " to " + fmtDate(f.to) : "") + " · " + f.days + " day" + (f.days === 1 ? "" : "s");
+  if (i.kind === "leave") return (f.type === "other" ? f.otherType : SF_LEAVE_LABEL[f.type]) + " · " + fmtDate(f.from) + (f.to !== f.from ? " to " + fmtDate(f.to) : "") + " · " + f.days + " day" + (f.days === 1 ? "" : "s") + (f.cover ? " · covered by " + f.cover : "");
   if (i.kind === "reimburse") return f.description + " · " + sfAmount(f.amount, f.currency);
   return "";
 }
@@ -90,6 +91,24 @@ function sfWeekdays(from, to) {
 }
 function sfFiles(i) {
   return (i.files || []).map(function (x) { return '<button type="button" class="text-button" data-sf-dl="' + E(i.id) + ":" + E(x.id) + '">📎 ' + E(x.name) + "</button>"; }).join(" ");
+}
+
+// Who can cover your leave: anyone sharing one of your companies (the
+// server checks the same). Loaded once from /api/users.
+var sfPeople = null, sfPeopleLoading = false;
+function sfCoverPeople() {
+  if (!sfPeople && !sfPeopleLoading) {
+    sfPeopleLoading = true;
+    Promise.all(myCompanies().map(function (c) { return api("/api/users?company=" + encodeURIComponent(c)).catch(function () { return []; }); })).then(function (r) {
+      var seen = {};
+      sfPeople = [];
+      r.forEach(function (list) { list.forEach(function (u) { var k = u.username.toLowerCase(); if (!seen[k] && !sameUser(u.username, me.username)) { seen[k] = 1; sfPeople.push(u.username); } }); });
+      sfPeople.sort(function (a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); });
+      sfPeopleLoading = false;
+      requestRender();
+    });
+  }
+  return sfPeople || [];
 }
 
 // ---- Your submissions (GET /api/staff-forms/mine) ----
@@ -123,7 +142,7 @@ function sfField(kind, d) {
   var id = "sf-" + kind + "-" + d.k, attr = ' id="' + id + '" data-sf-f="' + kind + ":" + d.k + '"';
   var v = f[d.k] == null ? "" : f[d.k], html;
   if (d.type === "select") {
-    html = "<select" + attr + '><option value="">Pick…</option>' + d.opts.map(function (o) {
+    html = "<select" + attr + '><option value="">Pick…</option>' + (typeof d.opts === "function" ? d.opts() : d.opts).map(function (o) {
       var val = typeof o === "string" ? o : o[0], label = typeof o === "string" ? o : o[1];
       return '<option value="' + E(val) + '"' + (val === v ? " selected" : "") + ">" + E(label) + "</option>";
     }).join("") + "</select>";
@@ -194,6 +213,11 @@ function sfMine(kinds) {
       tools += '<label class="text-button sf-attach">Attach receipt<input type="file" data-sf-attach="' + E(i.id) + '" multiple hidden></label>' +
         ((i.files || []).length ? ' <button type="button" class="text-button" data-sf-submit="' + E(i.id) + '">Send to Finance</button>' : "");
     }
+    // The cover person said no: pick someone else.
+    if (i.kind === "leave" && i.status === "recover") {
+      tools += '<select class="fb-in" data-sf-recover="' + E(i.id) + '" aria-label="Ask someone else to cover"><option value="">Ask someone else…</option>' +
+        sfCoverPeople().filter(function (u) { return !sameUser(u, i.fields.cover); }).map(function (u) { return '<option value="' + E(u) + '">' + E(u) + "</option>"; }).join("") + "</select>";
+    }
     if (sfCanWithdraw(i)) tools += ' <button type="button" class="text-button" data-sf-cancel="' + E(i.id) + '">Withdraw</button>';
     return '<tr class="' + (["cancelled", "declined", "rejected"].indexOf(i.status) !== -1 ? "done" : "") + '"><td>' + E(sfAge(i)) + "</td><td>" + E(SF_FORMS[i.kind].title) +
       (i.company && myCompanies().length > 1 ? '<span class="co-note">' + E(shortCo(i.company)) + "</span>" : "") + '</td><td class="sf-what">' + E(sfWhat(i)) + (sfFiles(i) ? '<span class="co-note">' + sfFiles(i) + "</span>" : "") + "</td>" +
@@ -204,15 +228,27 @@ function sfMine(kinds) {
     '<div class="table-wrap"><table class="narrow"><thead><tr><th>Sent</th><th>Form</th><th>What</th><th>Status</th><th></th></tr></thead><tbody>' +
     (list.length ? list.map(row).join("") : '<tr><td colspan="5" class="empty">Nothing sent yet.</td></tr>') + "</tbody></table></div>";
 }
-// Leave waiting for you: as a manager in the person's department, or as HR.
-function sfApprovals() {
+// Leave waiting for you, one step at a time: as the person covering, as a
+// manager in their department, or as HR. On HR → Staff-Facing and on
+// Mentions of You (where each one opens to show the whole request).
+var SF_STEP_LABEL = { cover: "Cover (you)", manager: "Manager (you)", hr: "HR (you)" };
+function sfApprovals(onMentions) {
+  if (onMentions && !sf.loading && (!sf.data || Date.now() - sf.at > 60000) && !(sf.error && Date.now() - sf.at < 15000)) loadStaffForms();
   var list = (sf.data && sf.data.approvals) || [];
   if (!list.length) return "";
-  return '<div class="section-title"><div><h2>Leave waiting for your approval</h2><span class="small-note">A manager in their department approves first, then HR. An HR manager\'s approval approves it outright.</span></div></div>' +
+  var so = function (i) {
+    return [i.coverOk ? "Cover: " + i.coverOk.by : "", i.managerOk ? "Manager: " + i.managerOk.by : ""].filter(Boolean).join(" · ");
+  };
+  return '<div class="section-title"><div><h2>Leave waiting for your approval</h2><span class="small-note">The person covering agrees first, then a manager in their department, then HR. If you decline, they see your reason.</span></div></div>' +
     '<div class="table-wrap"><table class="narrow"><thead><tr><th>Person</th><th>Leave</th><th>Notes</th><th>Waiting for</th><th></th></tr></thead><tbody>' +
     list.map(function (i) {
-      return "<tr><td>" + E(i.by) + '</td><td class="sf-what">' + E(sfWhat(i)) + '</td><td class="sf-what">' + E((i.fields || {}).notes || "—") + "</td><td>" + (i.step === "hr" ? "HR (you)" : "Manager (you)") +
-        (i.managerOk ? '<span class="co-note">Manager: ' + E(i.managerOk.by) + "</span>" : "") + '</td><td class="row-tools"><button type="button" class="primary" data-sf-leave="approve" data-id="' + E(i.id) + '">Approve</button> <button type="button" class="text-button" data-sf-leave="decline" data-id="' + E(i.id) + '">Decline</button></td></tr>';
+      var f = i.fields || {};
+      var more = onMentions ? '<details class="sf-more"><summary>Open the request</summary><div class="sf-body">' +
+        E([(f.type === "other" ? f.otherType : SF_LEAVE_LABEL[f.type]) + " leave", "First day off: " + fmtDate(f.from), "Last day off: " + fmtDate(f.to), "Working days: " + f.days, "Covering: " + (f.cover || "—"),
+          "Sent: " + sfAge(i)].concat((i.history || []).map(function (h) { return h.what + " (" + h.by + ")"; })).join("\n")) + "</div></details>" : "";
+      return "<tr><td>" + E(i.by) + '</td><td class="sf-what">' + E(sfWhat(i)) + more + '</td><td class="sf-what">' + E(f.notes || "—") + "</td><td>" + E(SF_STEP_LABEL[i.step] || i.step) +
+        (so(i) ? '<span class="co-note">' + E(so(i)) + "</span>" : "") + '</td><td class="row-tools"><button type="button" class="primary" data-sf-leave="approve" data-step="' + E(i.step) + '" data-id="' + E(i.id) + '">' + (i.step === "cover" ? "I'll cover" : "Approve") +
+        '</button> <button type="button" class="text-button" data-sf-leave="decline" data-step="' + E(i.step) + '" data-id="' + E(i.id) + '">' + (i.step === "cover" ? "Can't cover" : "Decline") + "</button></td></tr>";
     }).join("") + "</tbody></table></div>";
 }
 
@@ -258,6 +294,7 @@ function sfSend(kind) {
   }
   var files = sf.files[kind] || [];
   if (kind === "reimburse" && !files.length) { toast("Attach the receipt first.", true); return; }
+  if (kind === "leave" && !f.cover) { toast("Pick who's covering for you.", true); return; }
   var fields = {};
   SF_FORMS[kind].fields.forEach(function (d) { if (f[d.k] != null) fields[d.k] = f[d.k]; });
   sf.saving = kind; render();
@@ -290,6 +327,12 @@ document.addEventListener("change", function (e) {
     var p = ds.sfF.split(":"), f = sf.form[p[0]] || (sf.form[p[0]] = {});
     f[p[1]] = t.type === "checkbox" ? t.checked : t.value;
     if (p[0] === "leave" && p[1] === "type") render();
+    return;
+  }
+  if (ds.sfRecover && t.value) {
+    api("/api/staff-forms/" + encodeURIComponent(ds.sfRecover) + "/cover", { method: "POST", body: JSON.stringify({ cover: t.value }) })
+      .then(function () { toast("Asked " + t.value + " to cover."); }, function (err) { toast(err.message, true); })
+      .then(function () { sf.at = 0; loadStaffForms(); });
     return;
   }
   if (ds.sfReceipt) { sf.files[ds.sfReceipt] = (sf.files[ds.sfReceipt] || []).concat(Array.prototype.slice.call(t.files || [])); render(); return; }
@@ -326,10 +369,10 @@ document.addEventListener("click", function (e) {
   if (ds.sfLeave) {
     var id = ds.id, send = function (note) {
       api("/api/staff-forms/" + encodeURIComponent(id) + "/leave", { method: "POST", body: JSON.stringify({ decision: ds.sfLeave, note: note || "" }) })
-        .then(function () { toast(ds.sfLeave === "approve" ? "Approved." : "Declined."); }, function (err) { toast(err.message, true); })
-        .then(function () { sf.at = 0; loadStaffForms(); sfDeptReload("HR"); });
+        .then(function () { toast(ds.sfLeave === "approve" ? (ds.step === "cover" ? "Thanks — it goes to their manager next." : "Approved.") : ds.step === "cover" ? "Sent back so they can ask someone else." : "Declined."); }, function (err) { toast(err.message, true); })
+        .then(function () { sf.at = 0; loadStaffForms(); sfDeptReload("HR"); if (typeof loadMineCount === "function") loadMineCount(); });
     };
-    if (ds.sfLeave === "decline") sfAsk("Decline this leave", "Why? They'll see this.", send); else send("");
+    if (ds.sfLeave === "decline") sfAsk(ds.step === "cover" ? "Can't cover this leave" : "Decline this leave", "Why? They'll see this.", send); else send("");
     return;
   }
   if (ds.sfDl) {

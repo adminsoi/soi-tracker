@@ -5,14 +5,17 @@
 // defined in that file or an earlier one.
 
 // ---------- Mentions you ----------
-// Everything assigned to you: tracker tasks (any company or department you
-// have) and Pentagon rows a manager assigned you. Then, for SOI logins,
+// Everything assigned to you: leave waiting for your approval, tracker
+// tasks (any company or department you have) and Pentagon rows a manager
+// assigned you. Then, for SOI logins,
 // Pentagon documents tied to your Pentagon code.
 var mineOpen = 0; // open items assigned to you, for the sidebar badge
 function loadMineCount() {
   var pentagon = hasSOI() && me.pentagonMentions ? api("/api/rfq-marks/mine").catch(function () { return []; }) : Promise.resolve([]);
-  return Promise.all([api("/api/tasks/mine"), pentagon]).then(function (r) {
-    var n = r[0].filter(function (t) { return !isDone(t); }).length + r[1].filter(function (m) { return !m.done; }).length;
+  // Leave waiting for your approval counts too (staff-forms.js).
+  var leave = api("/api/staff-forms/mine").then(function (d) { sf.data = d; sf.at = Date.now(); return d.approvals; }, function () { return []; });
+  return Promise.all([api("/api/tasks/mine"), pentagon, leave]).then(function (r) {
+    var n = r[0].filter(function (t) { return !isDone(t); }).length + r[1].filter(function (m) { return !m.done; }).length + r[2].length;
     if (n !== mineOpen) { mineOpen = n; renderNav(); }
     return r;
   });
@@ -50,6 +53,7 @@ function renderMentionsShell() {
   return '<div class="intro"><div><div class="eyebrow">You</div><h1>Mentions of You</h1><p>Everything assigned to you' +
     (hasSOI() && me.pentagonMentions ? ", and every Pentagon document where you're the contact" : "") + " — sorted by what's urgent.</p></div></div>" +
     (hasSOI() && me.pentagonMentions && !me.pentagonCode ? '<div class="banner">No Pentagon code is set on your login yet — ask an admin to add one at <b>/admin.html</b> so your RFQs, Quotes, Sales Orders, Purchase Orders and Invoices show up here.</div>' : "") +
+    sfApprovals(true) +
     '<div id="mn-dash"><div class="empty">Loading…</div></div>' +
     (wantPentagon
       ? '<details class="mn-group" id="mn-all"><summary><span class="mn-title">All your Pentagon documents</span><span class="small-note" id="mn-msg"></span></summary>' +
@@ -195,7 +199,7 @@ function drawMentions() {
         : '<div class="small-note" style="padding:6px 2px 10px;">Nothing here.</div>') +
       "</details>";
   }).join("");
-  box.innerHTML = rows.length || mnFilter !== "all" ? html : '<div class="card empty">Nothing is assigned to you right now.' + (mnPentError ? " (Couldn't load your Pentagon documents: " + E(mnPentError.message) + ")" : "") + "</div>";
+  box.innerHTML = rows.length || mnFilter !== "all" ? html : '<div class="card empty">Nothing ' + (sf.data && sf.data.approvals.length ? "else " : "") + "is assigned to you right now." + (mnPentError ? " (Couldn't load your Pentagon documents: " + E(mnPentError.message) + ")" : "") + "</div>";
   if (open.length) drawMentionCharts(open);
 }
 

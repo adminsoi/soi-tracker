@@ -4310,7 +4310,7 @@ app.post(
 
 // Send a form. Reimbursements start as "draft" until a receipt is attached
 // (POST …/files, then …/submit).
-const FORM_START = { admin: "new", hr_issue: "new", perf_comment: "new", leave: "manager", reimburse: "draft" };
+const FORM_START = { admin: "new", hr_issue: "new", perf_comment: "new", leave: "cover", reimburse: "draft" };
 app.post(
   "/api/staff-forms",
   authMiddleware,
@@ -4320,6 +4320,11 @@ app.post(
     const clean = forms.cleanFields(kind, b.fields);
     if (clean.error) return res.status(400).json({ error: clean.error });
     const company = req.user.companies.includes(b.company) ? b.company : req.user.companies[0];
+    if (kind === "leave") {
+      const login = (await getUsers()).map(normalizeUser).find((u) => sameUser(u.username, clean.fields.cover));
+      if (!forms.canCover(login, req.user)) return res.status(400).json({ error: "Pick someone in your company to cover for you" });
+      clean.fields.cover = login.username;
+    }
     const item = {
       id: newId(), kind, company, by: req.user.username, at: Date.now(), status: FORM_START[kind],
       fields: clean.fields, assignee: "", notes: "", files: [], history: [],
@@ -4351,6 +4356,30 @@ app.post(
       if (!forms.canWithdraw(item)) { problem = "It's already being handled — ask the department instead"; return; }
       item.status = "cancelled";
       formLog(item, req.user.username, "Withdrawn", true);
+      out = forms.forRequester(item);
+    });
+    if (problem) return res.status(400).json({ error: problem });
+    res.json(out);
+  })
+);
+
+// A new cover person for your own leave request, after the last one said
+// no (or before they've answered). It goes to them to agree.
+app.post(
+  "/api/staff-forms/:id/cover",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const login = (await getUsers()).map(normalizeUser).find((u) => sameUser(u.username, (req.body || {}).cover));
+    if (!forms.canCover(login, req.user)) return res.status(400).json({ error: "Pick someone in your company to cover for you" });
+    let out = null, problem = "";
+    await withStaffForms((doc) => {
+      const item = doc.items.find((i) => i.id === req.params.id && i.kind === "leave");
+      if (!item || !sameUser(item.by, req.user.username)) { problem = "That isn't one of yours"; return; }
+      if (item.status !== "recover" && item.status !== "cover") { problem = "Your cover has already agreed"; return; }
+      item.fields.cover = login.username;
+      item.status = "cover";
+      delete item.reason;
+      formLog(item, req.user.username, "Asked " + login.username + " to cover", true);
       out = forms.forRequester(item);
     });
     if (problem) return res.status(400).json({ error: problem });
@@ -4475,9 +4504,10 @@ app.post(
   })
 );
 
-// Leave approvals: a manager in the person's department first, then HR. An
-// HR manager's approval at either step approves it outright. HR can cancel
-// approved leave (it then drops out of Payroll).
+// Leave approvals, one step at a time: the person covering, then a manager
+// in the requester's department, then HR. A no from the cover person sends
+// it back to the requester to pick someone else; a no from the manager or
+// HR declines it. HR can cancel approved leave (it then drops out of Payroll).
 app.post(
   "/api/staff-forms/:id/leave",
   authMiddleware,
@@ -4502,9 +4532,16 @@ app.post(
       if (!step) { problem = "This leave request isn't waiting for you"; return; }
       const mark = { by: req.user.username, at: Date.now(), note };
       if (decision === "approve") {
-        if (step === "manager") { item.managerOk = mark; item.status = "hr"; }
-        else { if (item.status === "manager") item.managerOk = mark; item.hrOk = mark; item.status = "approved"; }
-        formLog(item, req.user.username, (step === "manager" ? "Approved by manager" : "Approved by HR") + (note ? ": " + note : ""), true);
+        if (step === "cover") { item.coverOk = mark; item.status = "manager"; }
+        else if (step === "manager") { item.managerOk = mark; item.status = "hr"; }
+        else { item.hrOk = mark; item.status = "approved"; }
+        formLog(item, req.user.username, { cover: "Cover agreed", manager: "Approved by manager", hr: "Approved by HR" }[step] + (note ? ": " + note : ""), true);
+      } else if (decision === "decline" && step === "cover") {
+        if (!note) { problem = "Say why you can't cover"; return; }
+        item.coverDeclined = mark;
+        item.status = "recover";
+        item.reason = note;
+        formLog(item, req.user.username, "Can't cover: " + note, true);
       } else if (decision === "decline") {
         if (!note) { problem = "Say why it's declined"; return; }
         item.declined = Object.assign({ step }, mark);

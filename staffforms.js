@@ -44,10 +44,12 @@ const KINDS = {
   },
   leave: {
     dept: "HR", label: "Leave request",
-    fields: { type: LEAVE_TYPES.map((t) => t.id), otherType: 80, from: "date", to: "date", days: "days", notes: 500 },
-    need: ["type", "from", "to", "days"],
-    // Waiting for a manager in their department, then for HR.
-    statuses: ["manager", "hr", "approved", "declined", "cancelled"],
+    fields: { type: LEAVE_TYPES.map((t) => t.id), otherType: 80, from: "date", to: "date", days: "days", cover: 80, notes: 500 },
+    need: ["type", "from", "to", "days", "cover"],
+    // Approved one step at a time: the person covering for them, then a
+    // manager in their department, then HR. If the cover person says no it
+    // goes back to the requester to pick someone else ("recover").
+    statuses: ["cover", "recover", "manager", "hr", "approved", "declined", "cancelled"],
   },
   reimburse: {
     dept: "Accounting & Finance", label: "Reimbursement",
@@ -60,7 +62,7 @@ const KINDS = {
 };
 const STATUS_LABEL = {
   new: "New", progress: "In progress", done: "Done", declined: "Declined",
-  manager: "Waiting for manager", hr: "Waiting for HR", approved: "Approved", cancelled: "Cancelled",
+  cover: "Waiting for cover", recover: "Needs a new cover person", manager: "Waiting for manager", hr: "Waiting for HR", approved: "Approved", cancelled: "Cancelled",
   draft: "Needs a receipt", submitted: "Submitted", checked: "Finance checked", paid: "Paid", rejected: "Rejected",
 };
 const statusLabel = (kind, st) => (kind === "reimburse" && st === "approved" ? "Approved to pay" : STATUS_LABEL[st] || st);
@@ -135,15 +137,21 @@ function managesPerson(u, requester) {
 }
 
 /**
- * What the person may do to a leave request right now: "manager" (first
- * approval), "hr" (final approval) or "". An HR manager can give the first
- * approval too, which approves it outright.
+ * What the person may do to a leave request right now: "cover" (the person
+ * covering agrees), "manager" (a manager in the requester's department) or
+ * "hr" (an HR manager), one step at a time. Never on your own request.
  */
 function leaveStep(u, item, requester) {
   if (sameUser(u.username, item.by)) return "";
-  if (item.status === "manager") return hrManager(u) ? "hr" : managesPerson(u, requester) ? "manager" : "";
+  if (item.status === "cover") return sameUser(u.username, (item.fields || {}).cover) ? "cover" : "";
+  if (item.status === "manager") return managesPerson(u, requester) ? "manager" : "";
   if (item.status === "hr") return hrManager(u) ? "hr" : "";
   return "";
+}
+/** Who may be picked to cover: a login sharing one of the requester's companies. */
+function canCover(login, requester) {
+  if (!login || !requester || sameUser(login.username, requester.username)) return false;
+  return (login.companies || []).some((c) => (requester.companies || []).includes(c));
 }
 
 /**
@@ -174,7 +182,7 @@ function moveBlocker(u, item, to) {
 /** Whether the person who sent it may still withdraw it: until someone acts
  * on it (leave: until it's approved; reimbursements: until Approved to pay). */
 function canWithdraw(item) {
-  return ({ admin: ["new"], hr_issue: ["new"], perf_comment: ["new"], leave: ["manager", "hr"], reimburse: ["draft", "submitted", "checked"] }[item.kind] || []).includes(item.status);
+  return ({ admin: ["new"], hr_issue: ["new"], perf_comment: ["new"], leave: ["cover", "recover", "manager", "hr"], reimburse: ["draft", "submitted", "checked"] }[item.kind] || []).includes(item.status);
 }
 
 /** A copy for the person who sent it: no internal notes. */
@@ -187,5 +195,5 @@ function forRequester(item) {
 
 module.exports = {
   KINDS, LEAVE_TYPES, CURRENCIES, STATUS_LABEL, statusLabel, FINANCE_APPROVALS, FINANCE_TRANSFERS, HR_KINDS, kindsOf,
-  cleanFields, weekdaysBetween, text, canSeeHr, hrManager, canSeeKind, canWorkKind, managesPerson, leaveStep, moveBlocker, canWithdraw, forRequester,
+  cleanFields, weekdaysBetween, text, canSeeHr, hrManager, canSeeKind, canWorkKind, managesPerson, leaveStep, canCover, moveBlocker, canWithdraw, forRequester,
 };

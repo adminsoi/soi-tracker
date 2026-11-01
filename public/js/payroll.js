@@ -49,7 +49,7 @@ function renderPayroll() {
     "It lines up each person's base pay, their approved leave and any adjustments. <b>A qualified person must check every figure before any real payroll is sent.</b></div>" +
     '<div class="table-toolbar"><button type="button" data-pay-week="-7" aria-label="Previous week">←</button><b>Week of ' + E(fmtDate(ws)) + " – " + E(fmtDate(we)) + '</b><button type="button" data-pay-week="7" aria-label="Next week">→</button>' +
     (ws !== payMonday(today) ? '<button type="button" class="text-button" data-pay-week="0">This week</button>' : "") +
-    '<span class="small-note">Only fully approved leave counts. ' + d.leave.filter(function (i) { return i.status === "manager" || i.status === "hr"; }).length + " request(s) still waiting for approval.</span></div>";
+    '<span class="small-note">Only fully approved leave counts. ' + d.leave.filter(function (i) { return ["cover", "recover", "manager", "hr"].indexOf(i.status) !== -1; }).length + " request(s) still waiting for approval.</span></div>";
 
   var sections = PAY_ENTITIES.map(function (ent) {
     var logins = d.logins.filter(function (l) { return payEntityOf(d, l) === ent; });
@@ -119,12 +119,12 @@ function renderPayroll() {
   ];
   var all = d.leave.slice().sort(function (a, b) { return String(b.fields.from).localeCompare(String(a.fields.from)); });
   var list = applyColFilters("pay:leave", lfields, all);
-  var leaveTable = '<div class="section-title" style="margin-top:26px;"><div><h2>Leave requests</h2><span class="small-note">Everyone\'s leave, newest first. Approve or decline from HR → Staff-Facing.</span></div></div>' +
+  var leaveTable = '<div class="section-title" style="margin-top:26px;"><div><h2>Leave requests</h2><span class="small-note">Everyone\'s leave, newest first. Approvals happen on each approver\'s Mentions of You (and HR → Staff-Facing).</span></div></div>' +
     filterUi("pay:leave", lfields, all, list.length) +
     '<div class="table-wrap"><table class="narrow"><thead><tr><th>Person</th><th>Leave</th><th>Status</th><th>Approvals</th><th></th></tr></thead><tbody>' +
     (list.length ? list.map(function (i) {
       return "<tr><td>" + E(i.by) + '</td><td class="sf-what">' + E(sfWhat(i)) + (i.fields.notes ? '<span class="co-note">' + E(i.fields.notes) + "</span>" : "") + "</td><td>" + sfChip("leave", i.status) + (i.reason ? '<span class="co-note">' + E(i.reason) + "</span>" : "") + "</td>" +
-        '<td class="small-note">' + (i.managerOk ? "Manager: " + E(i.managerOk.by) : "") + (i.hrOk ? "<br>HR: " + E(i.hrOk.by) : "") + "</td>" +
+        '<td class="small-note">' + [i.coverOk ? "Cover: " + E(i.coverOk.by) : "", i.managerOk ? "Manager: " + E(i.managerOk.by) : "", i.hrOk ? "HR: " + E(i.hrOk.by) : ""].filter(Boolean).join("<br>") + "</td>" +
         '<td class="row-tools">' + (can && i.status === "approved" ? '<button type="button" class="text-button" data-pay-cancelleave="' + E(i.id) + '">Cancel leave</button>' : "") + "</td></tr>";
     }).join("") : '<tr><td colspan="5" class="empty">' + (all.length ? "Nothing matches these filters." : "No leave requests yet.") + "</td></tr>") + "</tbody></table></div>";
 
