@@ -401,7 +401,7 @@ function navItems() {
   items.push({ id: "inbox", ic: "✉", label: "Emails", badge: inboxNeeds });
   items.push({ group: "COMPANY", id: "strategy", ic: "◇", label: "Strategy Meeting" });
   items.push({ id: "sop", ic: "☰", label: "SOP" });
-  // Leadership only (the server checks too, once the page loads data).
+  // Leadership only (the server checks every People request too).
   if (me.leadership) items.push({ id: "people", ic: "☺", label: "People" });
   items.push({ id: "documents", ic: "▢", label: "Documents" });
   items.push({ id: "chat", ic: "✳", label: "Department Chat" });

@@ -92,7 +92,7 @@ function renderPayroll() {
           "<td>" + (can ? '<input class="fb-in fb-num" type="number" step="0.01" min="0" data-pay-person="' + E(r.l.username) + '" data-k="basePay" value="' + E(r.p.basePay == null ? "" : r.p.basePay) + '" placeholder="Not entered" aria-label="Weekly base pay">' : r.p.basePay == null ? '<span class="dim">Not entered</span>' : E(sfAmount(r.p.basePay, r.cur))) + "</td>" +
           "<td>" + (r.lv.length ? r.lv.join("<br>") : '<span class="dim">—</span>') + "</td>" +
           "<td>" + (r.adj.length ? r.adj.map(function (a) {
-            return E(sfAmount(a.amount, a.currency || r.cur)) + ' <span class="small-note">' + E(a.reason) + (a.source && a.source !== "manual" ? " · " + E(a.source) : "") + "</span>" + (can ? ' <button type="button" class="del" data-pay-deladj="' + E(a.id) + '" aria-label="Remove adjustment">×</button>' : "");
+            return E(sfAmount(a.amount, a.currency || r.cur)) + ' <span class="small-note">' + E(a.reason) + (a.source && a.source !== "manual" ? " · " + E(a.source === "spot-bonus" ? "Spot bonus from " + (a.by || "Leadership") : a.source) : "") + "</span>" + (can ? ' <button type="button" class="del" data-pay-deladj="' + E(a.id) + '" aria-label="Remove adjustment">×</button>' : "");
           }).join("<br>") : '<span class="dim">—</span>') + "</td>" +
           '<td><span class="small-note">Waiting for HR\'s leave rules</span></td></tr>';
       }).join("") : '<tr><td colspan="5" class="empty">Nobody on this entity yet.</td></tr>') +
