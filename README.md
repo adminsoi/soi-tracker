@@ -451,9 +451,20 @@ access alone isn't enough).
   "Spot bonus from …") and in the file's history. Leadership can remove it
   from the file until that pay week ends; after that, HR removes it on
   Payroll.
-- **History** (read-only): spot bonuses and payroll adjustments, approved
-  leave, performance comments that name this login, and, for Leadership
-  with Performance access, a one-line summary from the Performance tracker.
+- **History** (read-only), each list with its own empty state: spot
+  bonuses and payroll adjustments, approved leave, performance comments
+  about the person, the Performance tracker and changes to the file.
+  - Performance comments link by name: the HR form's "Who is it about" is a
+    list of logins (stored as the username) with "Someone else (type the
+    name)". Older free-text names are matched on username, email, the
+    email's first part, first name, full name or the login's calendar
+    names, ignoring case, dots and extra spaces. A name that fits more than
+    one login is attached to none and listed as **Unmatched** on each
+    possible file.
+  - Performance tracker: Leadership with Performance access see each
+    record (including people added there without a login whose name
+    matches) and **Open in Performance**. Without Performance access the
+    file only says whether records exist.
 
 ## Operations board (Procurement · Purchasing · Warehouse)
 

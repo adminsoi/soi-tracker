@@ -4741,13 +4741,33 @@ app.get(
     const today = perfOfficeToday();
     const entity = payEntityFor(payroll, login);
     const items = stored.items || [];
-    // The Performance tracker is private: only a summary, and only for
-    // Leadership who also have Performance access.
-    let performance = null;
-    const perfRec = seesPerf ? (perfShape(perfDoc).people[login.username] || null) : null;
-    if (perfRec && !perfRec.hidden) {
-      const st = perfStatus(perfRec, await perfSettings(), today);
-      performance = { stageLabel: st.stageLabel, stageDate: st.stageDate, notes: (perfRec.entries || []).length };
+    const logins = users.map(normalizeUser);
+    const isThem = (name) => employment.matchLogin(name, logins).username === login.username;
+    // Performance comments name people in free text (older ones) or by
+    // username (the form's list since Phase 5): linked by matchLogin. One
+    // that could be more than one login is attached to none and listed as
+    // unmatched on each of their files.
+    const perfComments = [], perfUnmatched = [];
+    for (const i of items) {
+      if (i.kind !== "perf_comment" || i.status === "cancelled") continue;
+      const m = employment.matchLogin((i.fields || {}).about, logins);
+      if (m.username === login.username) perfComments.push({ id: i.id, by: i.by, at: i.at, status: i.status, fields: i.fields });
+      else if ((m.ambiguous || []).includes(login.username)) perfUnmatched.push({ id: i.id, at: i.at, about: i.fields.about, type: i.fields.type, could: m.ambiguous });
+    }
+    // The Performance tracker is private: the summary is only for Leadership
+    // who also have Performance access; anyone else is told records exist.
+    // Its records are the login's own, plus people added without a login
+    // ("x-…") whose name matches this login.
+    const perfMatched = perfPeople(logins, perfShape(perfDoc)).filter((x) => x.key === login.username || (!x.login && isThem(x.name)));
+    let performance;
+    if (seesPerf) {
+      const settings = await perfSettings();
+      performance = { access: true, records: perfMatched.map((x) => {
+        const st = perfStatus(x.rec, settings, today);
+        return { key: x.key, name: x.name, stageLabel: st.stageLabel, stageDate: st.stageDate, notes: (x.rec.entries || []).length };
+      }) };
+    } else {
+      performance = { access: false, exists: perfMatched.some((x) => (x.rec.entries || []).length || (x.rec.steps || []).length) };
     }
     res.json(Object.assign(personSummary(login, f, payroll), {
       birthday: f.birthday || "", emergency: f.emergency || {}, notes: f.notes || "", otherNotes: f.otherNotes || "", files: f.files || [],
@@ -4759,8 +4779,7 @@ app.get(
       adjustments: payroll.adjustments.filter((a) => sameUser(a.person, login.username))
         .map((a) => Object.assign({}, a, { removable: !employment.spotBonusLock(a, today) }))
         .sort((a, b) => String(b.week).localeCompare(String(a.week)) || (b.at || 0) - (a.at || 0)),
-      perfComments: items.filter((i) => i.kind === "perf_comment" && i.status !== "cancelled" && sameUser((i.fields || {}).about, login.username))
-        .map((i) => ({ id: i.id, by: i.by, at: i.at, status: i.status, fields: i.fields })).sort((a, b) => b.at - a.at),
+      perfComments: perfComments.sort((a, b) => b.at - a.at), perfUnmatched: perfUnmatched.sort((a, b) => b.at - a.at),
       performance, today,
       options: {
         departments: DEPARTMENTS, logins: users.map((u) => u.username).filter((n) => !sameUser(n, login.username)).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())),

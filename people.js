@@ -103,6 +103,34 @@ function spotBonusLock(adj, today) {
   return "";
 }
 
+// ---- Linking a typed name to a login ----
+// Performance comments (and Performance records without a login) name
+// people in free text: "Elvis", "elvis.santos", "Elvis Santos", an email.
+// Lower case, dots / underscores / extra spaces as one space.
+const normName = (s) => String(s || "").toLowerCase().replace(/[._\s]+/g, " ").trim();
+function namesOf(login) {
+  const email = String(login.email || "").trim().toLowerCase();
+  const full = [login.username, email, email.split("@")[0], ...(login.calendarNames || [])].map(normName).filter(Boolean);
+  return { full, first: full.filter((n) => !n.includes("@")).map((n) => n.split(" ")[0]) };
+}
+/**
+ * Which login a typed name means: { username } when exactly one fits,
+ * { ambiguous: [usernames] } when more than one does (attach it to none),
+ * or {} when nobody fits. Tries the whole name (username, email, its local
+ * part, calendar names) first, then first names.
+ */
+function matchLogin(name, logins) {
+  const t = normName(name);
+  if (!t) return {};
+  const all = (logins || []).map((u) => ({ u, n: namesOf(u) }));
+  let hits = all.filter((x) => x.n.full.includes(t));
+  if (!hits.length) hits = all.filter((x) => x.n.first.includes(t));
+  // "Elvis Santos" when the login only knows "elvis".
+  if (!hits.length && t.includes(" ")) hits = all.filter((x) => x.n.first.includes(t.split(" ")[0]));
+  if (hits.length === 1) return { username: hits[0].u.username };
+  return hits.length ? { ambiguous: hits.map((x) => x.u.username) } : {};
+}
+
 /** A login's access in words, for the list. */
 function roleLabel(u) {
   const out = [];
@@ -114,5 +142,5 @@ function roleLabel(u) {
 
 module.exports = {
   EMPLOYMENT_TYPES, SPOT_BONUS, isLeadership, peopleShape, fileOf, cleanFile, changedFields,
-  addDays, mondayOf, nextPayWeek, payCurrency, spotBonusLock, roleLabel,
+  addDays, mondayOf, nextPayWeek, payCurrency, spotBonusLock, roleLabel, normName, matchLogin,
 };

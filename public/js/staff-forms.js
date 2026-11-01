@@ -12,6 +12,7 @@
 var SF_LEAVE = [["annual", "Annual / vacation"], ["sick", "Sick"], ["unpaid", "Unpaid"], ["parental", "Parental"], ["bereavement", "Bereavement"], ["jury", "Jury duty"], ["other", "Other"]];
 var SF_LEAVE_LABEL = {}; SF_LEAVE.forEach(function (x) { SF_LEAVE_LABEL[x[0]] = x[1]; });
 var SF_CURRENCIES = ["USD", "NZD", "SGD", "GBP", "EUR", "AUD"];
+var SF_SOMEONE_ELSE = "__other";
 var SF_FORMS = {
   admin: { title: "Admin request", dept: "Administrative", send: "Send to Admin",
     intro: "Snacks, coffee and tea, or office supplies. It goes to Admin's Projects, and you can follow it below.",
@@ -39,7 +40,10 @@ var SF_FORMS = {
   perf_comment: { title: "Performance comment", dept: "HR", send: "Send to HR",
     intro: "Recognition, a concern or a suggestion about someone's work. HR reads it; it doesn't go on anyone's record by itself.",
     fields: [
-      { k: "about", label: "Who is it about", type: "text", ph: "Name" },
+      // A login (stored as its username, so it links to their People file),
+      // or a name typed in for someone without one.
+      { k: "about", label: "Who is it about", type: "select", opts: function () { return sfCoverPeople().concat([[SF_SOMEONE_ELSE, "Someone else (type the name)"]]); } },
+      { k: "aboutName", label: "Their name", type: "text", ph: "Full name", when: function (f) { return f.about === SF_SOMEONE_ELSE; } },
       { k: "type", label: "Kind of comment", type: "select", opts: ["Recognition", "Concern", "Suggestion"] },
       { k: "details", label: "Comment", type: "textarea", ph: "What happened and when. Stick to facts." }] },
   reimburse: { title: "Reimbursement", dept: "Accounting & Finance", send: "Send to Finance",
@@ -297,6 +301,7 @@ function sfSend(kind) {
   if (kind === "leave" && !f.cover) { toast("Pick who's covering for you.", true); return; }
   var fields = {};
   SF_FORMS[kind].fields.forEach(function (d) { if (f[d.k] != null) fields[d.k] = f[d.k]; });
+  if (kind === "perf_comment") { if (f.about === SF_SOMEONE_ELSE) fields.about = f.aboutName || ""; delete fields.aboutName; }
   sf.saving = kind; render();
   api("/api/staff-forms", { method: "POST", body: JSON.stringify({ kind: kind, company: f.company, fields: fields }) }).then(function (item) {
     if (kind !== "reimburse") return done("Sent to " + shortDept(SF_FORMS[kind].dept) + ".");

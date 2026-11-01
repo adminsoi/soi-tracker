@@ -205,6 +205,21 @@ Mentions of You, and files created automatically from Pentagon.
         contact, Other notes), each with its own Edit / Save / Cancel that
         sends only that section; added Birthday and Other notes (HR's notes
         on preferences; still Leadership-only on the server).
+      - History linking fixed (1 Nov 2026, from the staging test):
+        performance comments were matched only when "Who is it about"
+        (free text) was exactly the username. Now `matchLogin` in
+        `people.js` matches username, email, local part, first / full name
+        and calendar names; a name fitting several logins is attached to
+        none and shown as "Unmatched". The form's field is now a list of
+        logins plus "Someone else (type the name)"; the server still takes
+        any text. The tracker summary was dropped silently for Leadership
+        without Performance access and never looked at records without a
+        login (`x-…`): now it says records exist, matches `x-…` records by
+        name, and offers "Open in Performance". Leave (`by`, status
+        `approved`, `fields.from` / `to`) and adjustments (`person`)
+        already matched how they're stored. Still open: a full name whose
+        surname differs from the login's still links on the first name
+        when only one login has that first name.
         Base pay, pay currency and entity are written to `payroll.json`
         `people` — one source with HR → Payroll.
       - Spot bonus = `payroll.json` `adjustments` entry

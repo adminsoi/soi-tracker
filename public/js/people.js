@@ -158,6 +158,10 @@ function renderPersonFile() {
     '<p class="small-note" style="margin-top:8px;">Contract, offer letter, certificates. PDF, image, Word, Excel, text or email, up to 10 MB each.</p></div>';
 
   // ---- History (read-only) ----
+  var table = function (heads, rows, none) {
+    return '<div class="table-wrap"><table class="narrow"><thead><tr>' + heads.map(function (h) { return "<th>" + h + "</th>"; }).join("") + "</tr></thead><tbody>" +
+      (rows || '<tr><td colspan="' + heads.length + '" class="empty">' + none + "</td></tr>") + "</tbody></table></div>";
+  };
   var adjRows = d.adjustments.map(function (a) {
     return "<tr><td>" + E(fmtDate(a.week)) + "</td><td>" + E(a.currency + " " + Number(a.amount).toFixed(2)) + "</td><td>" + E(ppSourceLabel(a.source)) + "</td><td>" + E(a.reason) + '<span class="co-note">' + E(a.by || "") + "</span></td>" +
       '<td class="row-tools">' + (a.source === "spot-bonus" && a.removable ? '<button type="button" class="text-button" data-pp-rmbonus="' + E(a.id) + '">Remove</button>' : "") + "</td></tr>";
@@ -169,19 +173,26 @@ function renderPersonFile() {
   var commentRows = d.perfComments.map(function (i) {
     return "<tr><td>" + E(fmtDate(new Date(i.at).toISOString().slice(0, 10))) + "</td><td>" + E(i.fields.type) + "</td><td>" + E(i.fields.details) + '<span class="co-note">From ' + E(i.by) + "</span></td><td>" + sfChip("perf_comment", i.status) + "</td></tr>";
   }).join("");
-  var table = function (heads, rows, none) {
-    return '<div class="table-wrap"><table class="narrow"><thead><tr>' + heads.map(function (h) { return "<th>" + h + "</th>"; }).join("") + "</tr></thead><tbody>" +
-      (rows || '<tr><td colspan="' + heads.length + '" class="empty">' + none + "</td></tr>") + "</tbody></table></div>";
-  };
+  var unmatched = d.perfUnmatched.length ? '<p class="small-note"><b>Unmatched:</b> ' + d.perfUnmatched.map(function (i) {
+    return E(i.type) + " about “" + E(i.about) + "” (" + E(fmtDate(new Date(i.at).toISOString().slice(0, 10))) + ") could be " + E(i.could.join(" or "));
+  }).join("; ") + ". Not attached to anyone's file; HR → Department-Facing → Projects has the comment.</p>" : "";
+  // The Performance tracker is private: a summary and a way in for
+  // Leadership with Performance access, a pointer for everyone else.
+  var pf = d.performance, perfRows = pf.access ? pf.records.map(function (r) {
+    return "<tr><td>" + E(r.name) + (r.key.indexOf("x-") === 0 ? '<span class="co-note">Added without a login</span>' : "") + "</td><td>" + E(r.stageLabel) + (r.stageDate ? '<span class="co-note">Since ' + E(fmtDate(r.stageDate)) + "</span>" : "") + "</td><td>" + r.notes + "</td>" +
+      '<td class="row-tools"><button type="button" class="text-button" data-pp-perf="' + E(r.key) + '">Open in Performance</button></td></tr>';
+  }).join("") : "";
+  var perfPart = pf.access ? table(["Record", "Stage", "Notes", ""], perfRows, "No Performance record for this person.")
+    : '<p class="small-note">' + (pf.exists ? "<b>Performance records exist.</b> Open HR → Performance (needs Performance access)." : "No Performance records, or you don't have Performance access to see them.") + "</p>";
   var history = '<div class="section-title" style="margin-top:22px;"><div><h2>History</h2><span class="small-note">Read-only, from what\'s already in the tracker.</span></div></div>' +
     '<div class="card-label">Spot bonuses and payroll adjustments</div>' +
     table(["Pay week", "Amount", "From", "What for", ""], adjRows, "None yet.") +
     '<p class="small-note">A spot bonus can be removed here until its pay week ends; after that, ask HR.</p>' +
     '<div class="card-label" style="margin-top:16px;">Approved leave</div>' + table(["Leave", "Dates", "Days"], leaveRows, "No approved leave.") +
-    '<div class="card-label" style="margin-top:16px;">Performance comments</div>' + table(["Sent", "Type", "Comment", "Status"], commentRows, "No performance comments name this login.") +
-    (d.performance ? '<p class="small-note">Performance tracker: ' + E(d.performance.stageLabel) + (d.performance.stageDate ? " since " + E(fmtDate(d.performance.stageDate)) : "") + " · " + d.performance.notes + " note(s). Details are on Performance.</p>" : "") +
-    (d.history.length ? '<div class="card-label" style="margin-top:16px;">Changes to this file</div><ul class="small-note">' + d.history.slice(0, 30).map(function (h) {
-      return "<li>" + E(new Date(h.at).toLocaleString()) + " · " + E(h.by) + " — " + E(h.what) + "</li>"; }).join("") + "</ul>" : "");
+    '<div class="card-label" style="margin-top:16px;">Performance comments</div>' + table(["Sent", "Type", "Comment", "Status"], commentRows, "No performance comments about this person.") + unmatched +
+    '<div class="card-label" style="margin-top:16px;">Performance tracker (HR → Performance)</div>' + perfPart +
+    '<div class="card-label" style="margin-top:16px;">Changes to this file</div>' + (d.history.length ? '<ul class="small-note">' + d.history.slice(0, 30).map(function (h) {
+      return "<li>" + E(new Date(h.at).toLocaleString()) + " · " + E(h.by) + " — " + E(h.what) + "</li>"; }).join("") + "</ul>" : '<p class="small-note">No changes saved yet.</p>');
 
   return head + employment + payCard + emergency + other + docs + history;
 }
@@ -229,7 +240,7 @@ document.addEventListener("change", function (e) {
   else if ("ppFiles" in ds) { ppUpload(t.files); t.value = ""; }
 });
 document.addEventListener("click", function (e) {
-  var t = e.target.closest && e.target.closest("[data-pp-open],[data-pp-back],[data-pp-edit],[data-pp-save],[data-pp-cancel],[data-pp-bonus],[data-pp-rmbonus],[data-pp-attach],[data-pp-dl],[data-pp-rmfile]");
+  var t = e.target.closest && e.target.closest("[data-pp-open],[data-pp-back],[data-pp-edit],[data-pp-save],[data-pp-cancel],[data-pp-bonus],[data-pp-rmbonus],[data-pp-attach],[data-pp-dl],[data-pp-rmfile],[data-pp-perf]");
   if (!t || !$("#view").contains(t)) return;
   var ds = t.dataset, d = ppl.person;
   if (ds.ppOpen) { ppl.sel = ds.ppOpen; ppl.person = null; ppl.editing = ""; ppl.draft = null; ppl.personError = ""; render(); window.scrollTo(0, 0); }
@@ -259,6 +270,12 @@ document.addEventListener("click", function (e) {
     if (!confirm("Remove this spot bonus? It comes off HR → Payroll too.")) return;
     api(ppBase() + "/spot-bonus/" + encodeURIComponent(ds.ppRmbonus), { method: "DELETE" })
       .then(function () { toast("Spot bonus removed."); }, function (err) { toast(err.message, true); }).then(ppReload);
+  }
+  // Opens that record on HR → Performance (or Tools → Performance for
+  // logins without HR), the same way the #performance link does.
+  else if (ds.ppPerf) {
+    perf.sel = ds.ppPerf; perf.person = null; perf.composing = false; perf.editing = ""; perf.stepping = false; perf.form = {}; perf.step = { date: today };
+    perf.at = 0; go("performance");
   }
   else if ("ppAttach" in ds) { var inp = $("#view").querySelector("[data-pp-files]"); if (inp) inp.click(); }
   else if (ds.ppDl && d) {
