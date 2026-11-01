@@ -34,7 +34,8 @@ function fileOf(doc, username, newId) {
 
 const FIELD_LABEL = {
   jobTitle: "job title", department: "department", manager: "manager", startDate: "start date",
-  employmentType: "employment type", emergency: "emergency contact", notes: "notes",
+  birthday: "birthday", employmentType: "employment type", emergency: "emergency contact", notes: "notes",
+  otherNotes: "other notes",
 };
 /**
  * The employment file fields from a save, cleaned. `departments` and
@@ -57,14 +58,19 @@ function cleanFile(input, departments, logins) {
     out.startDate = DATE.test(b.startDate || "") ? b.startDate : "";
     if (b.startDate && !out.startDate) return { error: "Bad start date" };
   }
+  if ("birthday" in b) {
+    out.birthday = DATE.test(b.birthday || "") ? b.birthday : "";
+    if (b.birthday && !out.birthday) return { error: "Bad birthday" };
+  }
   if ("employmentType" in b) out.employmentType = EMPLOYMENT_TYPES.includes(b.employmentType) ? b.employmentType : "";
   if (b.emergency && typeof b.emergency === "object") {
     out.emergency = { name: text(b.emergency.name, 120), relationship: text(b.emergency.relationship, 60), phone: text(b.emergency.phone, 40), email: text(b.emergency.email, 120) };
   }
   if ("notes" in b) out.notes = String(b.notes == null ? "" : b.notes).trim().slice(0, 4000);
+  if ("otherNotes" in b) out.otherNotes = String(b.otherNotes == null ? "" : b.otherNotes).trim().slice(0, 4000);
   return { fields: out };
 }
-/** Labels of the fields that changed, for the file's history. */
+/** Labels of the fields that changed, for the file's history (never the text itself). */
 function changedFields(before, fields) {
   const norm = (k, v) => (k === "emergency" ? ["name", "relationship", "phone", "email"].map((x) => (v || {})[x] || "").join("\n") : String(v || ""));
   return Object.keys(fields).filter((k) => norm(k, before[k]) !== norm(k, fields[k])).map((k) => FIELD_LABEL[k] || k);

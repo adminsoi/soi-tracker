@@ -10,8 +10,16 @@
 // read-only, from approved leave, payroll adjustments and performance
 // comments. Nothing here works out pay: a qualified person checks every
 // figure before any real payroll is sent.
-var ppl = { list: null, at: 0, loading: false, error: "", sel: "", person: null, personAt: 0, personLoading: "", personError: "", draft: null, saving: false, bonusing: false };
-var PP_FIELDS = [["jobTitle", "Job title"], ["department", "Department"], ["manager", "Manager"], ["startDate", "Start date"], ["employmentType", "Employment type"]];
+var ppl = { list: null, at: 0, loading: false, error: "", sel: "", person: null, personAt: 0, personLoading: "", personError: "", editing: "", draft: null, saving: false, bonusing: false };
+// The file's sections, each read-only until its own Edit. Save sends only
+// that section's fields. Pay (and entity) can't be edited on your own file.
+var PP_SECTIONS = {
+  employment: { label: "Employment", keys: ["jobTitle", "department", "manager", "startDate", "birthday", "employmentType", "entity", "notes"] },
+  pay: { label: "Pay", keys: ["basePay", "currency"] },
+  emergency: { label: "Emergency contact", keys: ["emergency"] },
+  other: { label: "Other notes", keys: ["otherNotes"] }
+};
+var PP_EMERGENCY = [["name", "Name"], ["relationship", "Relationship"], ["phone", "Phone"], ["email", "Email"]];
 function loadPeople() {
   if (ppl.loading) return;
   ppl.loading = true;
@@ -23,16 +31,14 @@ function loadPerson(username) {
   ppl.personLoading = username;
   api("/api/people/" + encodeURIComponent(username)).then(function (d) {
     if (ppl.sel !== username) return;
-    // Keep what's being typed; start a fresh draft for a new person.
-    if (!ppl.person || ppl.person.username !== d.username || !ppl.draft) ppl.draft = ppDraftOf(d);
     ppl.person = d; ppl.personError = "";
   }, function (err) { ppl.personError = err.message; })
     .then(function () { ppl.personLoading = ""; ppl.personAt = Date.now(); requestRender(); });
 }
 function ppDraftOf(d) {
-  var x = { emergency: Object.assign({ name: "", relationship: "", phone: "", email: "" }, d.emergency || {}), notes: d.notes || "",
+  var x = { emergency: Object.assign({ name: "", relationship: "", phone: "", email: "" }, d.emergency || {}),
     basePay: d.pay.basePay == null ? "" : String(d.pay.basePay), currency: d.pay.currency || "", entity: d.pay.entity || "" };
-  PP_FIELDS.forEach(function (f) { x[f[0]] = d[f[0]] || ""; });
+  ["jobTitle", "department", "manager", "startDate", "birthday", "employmentType", "notes", "otherNotes"].forEach(function (k) { x[k] = d[k] || ""; });
   return x;
 }
 function ppSelf(d) { return !!(d && sameUser(d.username, me.username)); }
@@ -78,48 +84,71 @@ function renderPersonFile() {
   var back = '<p><button type="button" class="text-button" data-pp-back>← All people</button></p>';
   if (ppl.personError) return back + '<div class="banner">' + E(ppl.personError) + "</div>";
   var d = ppl.person;
-  if (!d || d.username !== sel || !ppl.draft) return back + '<div class="empty">Loading…</div>';
-  var x = ppl.draft, o = d.options, self = ppSelf(d), cur = d.spot.currency;
-  var sel1 = function (key, values, labels, blank) {
+  if (!d || d.username !== sel) return back + '<div class="empty">Loading…</div>';
+  var o = d.options, self = ppSelf(d), cur = d.spot.currency, ed = ppl.editing, x = ppl.draft || {};
+  var dim = function (t) { return '<span class="dim">' + (t || "—") + "</span>"; };
+  var lines = function (v) { return E(v).replace(/\n/g, "<br>"); };
+  var input = function (key, type, extra) { return '<input id="pp-' + key + '"' + (type ? ' type="' + type + '"' : "") + ' data-pp-f="' + key + '" value="' + E(x[key]) + '"' + (extra || "") + ">"; };
+  var area = function (key, rows) { return '<textarea id="pp-' + key + '" rows="' + rows + '" data-pp-f="' + key + '">' + E(x[key]) + "</textarea>"; };
+  var pick = function (key, values, labels, blank) {
     return '<select id="pp-' + key + '" data-pp-f="' + key + '"><option value="">' + E(blank) + "</option>" + values.map(function (v, i) {
       return '<option value="' + E(v) + '"' + (x[key] === v ? " selected" : "") + ">" + E(labels ? labels[i] : v) + "</option>"; }).join("") + "</select>";
   };
-  var field = function (key, label, input) { return '<div class="nb-field"><label for="pp-' + key + '">' + E(label) + "</label>" + input + "</div>"; };
   var ents = Object.keys(o.entities);
+  var entityText = E(o.entities[d.entity] || d.entity) + (d.pay.entity ? "" : ' <span class="small-note">(from their login\'s company)</span>');
+  // One label | value row; `edit` is the input shown while the section is being edited.
+  var row = function (id, label, value, edit) {
+    return '<tr><td style="width:32%;"><b>' + (edit != null ? '<label for="pp-' + id + '">' + E(label) + "</label>" : E(label)) + "</b></td><td>" +
+      (edit != null ? '<div class="nb-field" style="margin:0;">' + edit + "</div>" : value) + "</td></tr>";
+  };
+  // A section card: read-only table, or inputs with Save / Cancel while it's the one being edited.
+  var section = function (key, note, rows, canEdit) {
+    var on = ed === key;
+    return '<div class="card" style="padding:16px 18px;margin-bottom:14px;"><div style="display:flex;align-items:center;gap:10px;"><div class="card-label" style="margin:0;">' + E(PP_SECTIONS[key].label) + '</div><span style="flex:1"></span>' +
+      (canEdit && !on ? '<button type="button" data-pp-edit="' + key + '"' + (ed ? " disabled" : "") + ">Edit</button>" : "") + "</div>" +
+      (note ? '<p class="small-note" style="margin:6px 0 0;">' + note + "</p>" : "") +
+      '<div class="table-wrap" style="margin-top:10px;"><table class="narrow"><tbody>' + rows(on) + "</tbody></table></div>" +
+      (on ? '<div class="nb-foot"><button type="button" class="primary" data-pp-save' + (ppl.saving ? " disabled" : "") + ">" + (ppl.saving ? "Saving…" : "Save") + '</button><button type="button" class="text-button" data-pp-cancel>Cancel</button></div>' : "") + "</div>";
+  };
 
   var head = back + '<div class="intro"><div><div class="eyebrow">People · ' + E(d.role) + "</div><h1>" + E(d.username) + "</h1>" +
-    "<p>" + E([d.jobTitle, d.department, d.companies.join(", ")].filter(Boolean).join(" · ")) + (d.email ? ' · <a class="links-a" href="mailto:' + E(d.email) + '">' + E(d.email) + "</a>" : "") + "</p></div>" +
+    "<p>" + E([d.jobTitle, d.department, d.companies.join(", ")].filter(Boolean).join(" · ")) + (d.email ? ' · <a class="links-a" href="mailto:' + E(d.email) + '">' + E(d.email) + "</a>" : "") + "</p>" +
+    (d.updatedBy ? '<p class="small-note">Last changed by ' + E(d.updatedBy) + " · " + E(new Date(d.updatedAt).toLocaleString()) + "</p>" : "") + "</div>" +
     (self ? '<span class="small-note">Your own file: someone else in Leadership (or HR) changes your pay or gives you a spot bonus.</span>'
       : '<button type="button" class="primary" data-pp-bonus' + (ppl.bonusing ? " disabled" : "") + ">★ Spot bonus (" + E(cur) + " " + d.spot.amount + ")</button>") + "</div>";
 
-  var employment = '<div class="card" style="padding:16px 18px;margin-bottom:14px;"><div class="card-label">Employment</div><div class="grid-2" style="gap:0 16px;margin-top:10px;">' +
-    field("jobTitle", "Job title", '<input id="pp-jobTitle" data-pp-f="jobTitle" value="' + E(x.jobTitle) + '" placeholder="e.g. Procurement Specialist">') +
-    field("department", "Department", sel1("department", o.departments, null, "Not set")) +
-    field("manager", "Manager", sel1("manager", o.logins, null, "Not set")) +
-    field("startDate", "Start date", '<input id="pp-startDate" type="date" data-pp-f="startDate" value="' + E(x.startDate) + '">') +
-    field("employmentType", "Employment type", sel1("employmentType", o.employmentTypes, null, "Not set")) +
-    field("entity", "Entity (same as HR → Payroll)", self ? '<div class="small-note">' + E(o.entities[d.entity] || d.entity) + "</div>" : sel1("entity", ents, ents.map(function (k) { return o.entities[k]; }), "From their login's company")) +
-    "</div></div>";
+  var employment = section("employment", "", function (on) {
+    var v = function (k) { return d[k] ? E(d[k]) : dim("Not set"); };
+    var date = function (k) { return d[k] ? E(fmtDate(d[k])) : dim("Not set"); };
+    return row("jobTitle", "Job title", v("jobTitle"), on ? input("jobTitle", "", ' placeholder="e.g. Procurement Specialist"') : null) +
+      row("department", "Department", v("department"), on ? pick("department", o.departments, null, "Not set") : null) +
+      row("manager", "Manager", v("manager"), on ? pick("manager", o.logins, null, "Not set") : null) +
+      row("startDate", "Start date", date("startDate"), on ? input("startDate", "date") : null) +
+      row("birthday", "Birthday", date("birthday"), on ? input("birthday", "date") : null) +
+      row("employmentType", "Employment type", v("employmentType"), on ? pick("employmentType", o.employmentTypes, null, "Not set") : null) +
+      row("entity", "Entity (same as HR → Payroll)", entityText, on && !self ? pick("entity", ents, ents.map(function (k) { return o.entities[k]; }), "From their login's company") : null) +
+      row("notes", "Notes (Leadership only)", d.notes ? lines(d.notes) : dim(), on ? area("notes", 3) : null);
+  }, true);
 
-  var payCard = '<div class="card" style="padding:16px 18px;margin-bottom:14px;"><div class="card-label">Pay</div>' +
-    '<p class="small-note" style="margin:6px 0 12px;">The same record as HR → Payroll: changing it here changes it there. <b>Not a payroll calculation — a qualified person checks every figure before any real payroll is sent.</b></p>' +
-    '<div class="grid-2" style="gap:0 16px;">' +
-    field("basePay", "Weekly base pay", self ? '<div class="small-note">' + (d.pay.basePay == null ? "Not entered" : E(sfAmount(d.pay.basePay, cur))) + "</div>"
-      : '<input id="pp-basePay" type="number" step="0.01" min="0" data-pp-f="basePay" value="' + E(x.basePay) + '" placeholder="Not entered">') +
-    field("currency", "Pay currency", self ? '<div class="small-note">' + E(cur) + "</div>" : sel1("currency", o.currencies, null, "Entity's currency" + (d.pay.entityCurrency ? " (" + d.pay.entityCurrency + ")" : ", else USD"))) +
-    '<div class="nb-field"><label>Employee ID (from HR → Payroll)</label><div class="small-note">' + (d.pay.employeeId ? E(d.pay.employeeId) : "<i>Not entered</i>") + "</div></div>" +
-    '<div class="nb-field"><label>Tax and national ID numbers</label><div class="small-note"><i>[Placeholder — not stored in the tracker. Kept in the payroll provider\'s records.]</i></div></div>' +
-    "</div></div>";
+  var payCard = section("pay", "The same record as HR → Payroll: changing it here changes it there. <b>Not a payroll calculation — a qualified person checks every figure before any real payroll is sent.</b>", function (on) {
+    return row("basePay", "Weekly base pay", d.pay.basePay == null ? dim("Not entered") : E(sfAmount(d.pay.basePay, cur)), on ? input("basePay", "number", ' step="0.01" min="0" placeholder="Not entered"') : null) +
+      row("currency", "Pay currency", d.pay.currency ? E(d.pay.currency) : E(cur) + ' <span class="small-note">(not set on them — ' + (d.pay.entityCurrency ? "their entity's" : "USD by default") + ")</span>",
+        on ? pick("currency", o.currencies, null, "Entity's currency" + (d.pay.entityCurrency ? " (" + d.pay.entityCurrency + ")" : ", else USD")) : null) +
+      row("", "Employee ID (from HR → Payroll)", d.pay.employeeId ? E(d.pay.employeeId) : dim("Not entered")) +
+      row("", "Tax and national ID numbers", '<span class="small-note"><i>[Placeholder — not stored in the tracker. Kept in the payroll provider\'s records.]</i></span>');
+  }, !self);
 
-  var em = x.emergency;
-  var emergency = '<div class="card" style="padding:16px 18px;margin-bottom:14px;"><div class="card-label">Emergency contact</div><div class="grid-2" style="gap:0 16px;margin-top:10px;">' +
-    [["name", "Name"], ["relationship", "Relationship"], ["phone", "Phone"], ["email", "Email"]].map(function (f) {
-      return '<div class="nb-field"><label for="pp-em-' + f[0] + '">' + f[1] + '</label><input id="pp-em-' + f[0] + '" data-pp-em="' + f[0] + '" value="' + E(em[f[0]] || "") + '"></div>';
-    }).join("") + "</div>" +
-    '<div class="nb-field"><label for="pp-notes">Notes (Leadership only)</label><textarea id="pp-notes" rows="3" data-pp-f="notes">' + E(x.notes) + "</textarea></div>" +
-    '<div class="nb-foot"><button type="button" class="primary" data-pp-save' + (ppl.saving ? " disabled" : "") + ">" + (ppl.saving ? "Saving…" : "Save file") + "</button>" +
-    '<button type="button" class="text-button" data-pp-reset>Undo changes</button>' +
-    (d.updatedBy ? '<span class="small-note">Last saved by ' + E(d.updatedBy) + " · " + E(new Date(d.updatedAt).toLocaleString()) + "</span>" : "") + "</div></div>";
+  var emergency = section("emergency", "", function (on) {
+    var em = d.emergency || {};
+    return PP_EMERGENCY.map(function (f) {
+      return row("em-" + f[0], f[1], em[f[0]] ? E(em[f[0]]) : dim(),
+        on ? '<input id="pp-em-' + f[0] + '"' + (f[0] === "email" ? ' type="email"' : f[0] === "phone" ? ' type="tel"' : "") + ' data-pp-em="' + f[0] + '" value="' + E(x.emergency[f[0]] || "") + '">' : null);
+    }).join("");
+  }, true);
+
+  var other = section("other", "HR's notes on the person: preferences and anything else worth knowing. Leadership only; the change history records that the notes changed, not what they say.", function (on) {
+    return row("otherNotes", "Other notes", d.otherNotes ? lines(d.otherNotes) : dim("Not entered"), on ? area("otherNotes", 5) : null);
+  }, true);
 
   var docs = '<div class="card" style="padding:16px 18px;margin-bottom:14px;"><div class="card-label">Supporting documents</div>' +
     '<div class="perf-files" style="margin-top:8px;">' + d.files.map(function (f) {
@@ -154,7 +183,7 @@ function renderPersonFile() {
     (d.history.length ? '<div class="card-label" style="margin-top:16px;">Changes to this file</div><ul class="small-note">' + d.history.slice(0, 30).map(function (h) {
       return "<li>" + E(new Date(h.at).toLocaleString()) + " · " + E(h.by) + " — " + E(h.what) + "</li>"; }).join("") + "</ul>" : "");
 
-  return head + employment + payCard + emergency + docs + history;
+  return head + employment + payCard + emergency + other + docs + history;
 }
 
 // A confirm with an optional reason (the spot bonus).
@@ -200,19 +229,19 @@ document.addEventListener("change", function (e) {
   else if ("ppFiles" in ds) { ppUpload(t.files); t.value = ""; }
 });
 document.addEventListener("click", function (e) {
-  var t = e.target.closest && e.target.closest("[data-pp-open],[data-pp-back],[data-pp-save],[data-pp-reset],[data-pp-bonus],[data-pp-rmbonus],[data-pp-attach],[data-pp-dl],[data-pp-rmfile]");
+  var t = e.target.closest && e.target.closest("[data-pp-open],[data-pp-back],[data-pp-edit],[data-pp-save],[data-pp-cancel],[data-pp-bonus],[data-pp-rmbonus],[data-pp-attach],[data-pp-dl],[data-pp-rmfile]");
   if (!t || !$("#view").contains(t)) return;
   var ds = t.dataset, d = ppl.person;
-  if (ds.ppOpen) { ppl.sel = ds.ppOpen; ppl.person = null; ppl.draft = null; ppl.personError = ""; render(); window.scrollTo(0, 0); }
-  else if ("ppBack" in ds) { ppl.sel = ""; ppl.person = null; ppl.draft = null; ppl.at = 0; render(); }
-  else if ("ppReset" in ds && d) { ppl.draft = ppDraftOf(d); render(); }
-  else if ("ppSave" in ds && d) {
-    var x = ppl.draft, body = { emergency: x.emergency, notes: x.notes };
-    PP_FIELDS.forEach(function (f) { body[f[0]] = x[f[0]]; });
-    if (!ppSelf(d)) { body.basePay = x.basePay; body.currency = x.currency; body.entity = x.entity; }
+  if (ds.ppOpen) { ppl.sel = ds.ppOpen; ppl.person = null; ppl.editing = ""; ppl.draft = null; ppl.personError = ""; render(); window.scrollTo(0, 0); }
+  else if ("ppBack" in ds) { ppl.sel = ""; ppl.person = null; ppl.editing = ""; ppl.draft = null; ppl.at = 0; render(); }
+  else if (ds.ppEdit && d) { ppl.editing = ds.ppEdit; ppl.draft = ppDraftOf(d); render(); var first = $("#view").querySelector("[data-pp-f],[data-pp-em]"); if (first) first.focus(); }
+  else if ("ppCancel" in ds) { ppl.editing = ""; ppl.draft = null; render(); }
+  else if ("ppSave" in ds && d && ppl.editing) {
+    var x = ppl.draft, body = {};
+    PP_SECTIONS[ppl.editing].keys.forEach(function (k) { if (!(ppSelf(d) && (k === "entity" || k === "basePay" || k === "currency"))) body[k] = x[k]; });
     ppl.saving = true; render();
     api(ppBase(), { method: "PUT", body: JSON.stringify(body) })
-      .then(function (r) { ppl.draft = null; toast(r.changed.length ? "Saved: " + r.changed.join(", ") + "." : "No changes to save."); }, function (err) { toast(err.message, true); })
+      .then(function (r) { ppl.editing = ""; ppl.draft = null; toast(r.changed.length ? "Saved: " + r.changed.join(", ") + "." : "No changes to save."); }, function (err) { toast(err.message, true); })
       .then(function () { ppl.saving = false; ppReload(); render(); });
   }
   else if ("ppBonus" in ds && d) {

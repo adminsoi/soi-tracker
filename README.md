@@ -430,10 +430,14 @@ access alone isn't enough).
 
 - **List:** name, email, company and pay entity, department, role and job
   title, with per-column filters. Click a name to open the file.
-- **Employment file:** job title, department, manager, start date,
-  employment type, emergency contact, notes, and supporting documents
-  (stored privately under `people_files/<file id>/`). Saved in
-  `people.json` with who changed what.
+- **Employment file:** read-only tables in sections — Employment (job
+  title, department, manager, start date, birthday, employment type,
+  entity, notes), Pay, Emergency contact and Other notes (HR's notes on the
+  person's preferences and similar). Each section has its own **Edit**
+  button; Save sends only that section, Cancel puts it back. Supporting
+  documents are stored privately under `people_files/<file id>/`. Saved in
+  `people.json` with who changed which fields (for notes, only that they
+  changed, never the text).
 - **Pay:** weekly base pay, pay currency and entity are the same record as
   **HR → Payroll** (`payroll.json`): change it on either page and both
   show it. You can't change your own pay here. Tax and national ID numbers

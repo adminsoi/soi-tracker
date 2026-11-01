@@ -196,8 +196,15 @@ Mentions of You, and files created automatically from Pentagon.
         Front end `public/js/people.js` (after `company-pages.js`, whose
         placeholder was removed).
       - S3: `people.json` (`{ people: { username: { id, jobTitle,
-        department, manager, startDate, employmentType, emergency, notes,
-        files, history } } }`), documents under `people_files/<file id>/`.
+        department, manager, startDate, birthday, employmentType,
+        emergency, notes, otherNotes, files, history } } }`), documents
+        under `people_files/<file id>/`. History records which fields
+        changed, never the notes' text.
+      - After the staging test (1 Nov 2026, at the user's request): the file
+        is read-only tables in sections (Employment, Pay, Emergency
+        contact, Other notes), each with its own Edit / Save / Cancel that
+        sends only that section; added Birthday and Other notes (HR's notes
+        on preferences; still Leadership-only on the server).
         Base pay, pay currency and entity are written to `payroll.json`
         `people` — one source with HR → Payroll.
       - Spot bonus = `payroll.json` `adjustments` entry

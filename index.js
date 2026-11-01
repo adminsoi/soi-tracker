@@ -4750,7 +4750,7 @@ app.get(
       performance = { stageLabel: st.stageLabel, stageDate: st.stageDate, notes: (perfRec.entries || []).length };
     }
     res.json(Object.assign(personSummary(login, f, payroll), {
-      emergency: f.emergency || {}, notes: f.notes || "", files: f.files || [],
+      birthday: f.birthday || "", emergency: f.emergency || {}, notes: f.notes || "", otherNotes: f.otherNotes || "", files: f.files || [],
       history: (f.history || []).slice().reverse(), updatedBy: f.updatedBy || "", updatedAt: f.updatedAt || 0,
       pay: { basePay: p.basePay == null ? null : p.basePay, currency: p.currency || "", entity: PAY_ENTITY_LABEL[p.entity] ? p.entity : "", employeeId: p.employeeId || "", entityCurrency: (payroll.entities[entity] || {}).currency || "" },
       spot: { amount: employment.SPOT_BONUS.amount, week: employment.nextPayWeek(today), currency: employment.payCurrency(payroll, login.username, entity, forms.CURRENCIES) },
@@ -4770,8 +4770,9 @@ app.get(
   })
 );
 
-// Save the employment file. basePay, currency and entity are written to
-// Payroll (the same record HR → Payroll edits).
+// Save one section of the employment file (only the fields sent change).
+// basePay, currency and entity are written to Payroll (the same record
+// HR → Payroll edits).
 app.put(
   "/api/people/:username",
   authMiddleware,
