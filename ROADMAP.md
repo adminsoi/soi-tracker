@@ -64,8 +64,9 @@ it's merged and redeployed.
   before any real payroll is sent.
 - **Mail.Send** for each person's mailbox (Microsoft 365 admin) before
   email replies can be sent as that person.
-- **Staging stack** in Portainer (separate port and S3 prefix) for testing
-  before each redeploy.
+- **Staging stack** `soi-tracker-staging` (port 8443, `staging` branch,
+  S3 prefix `soi-tracker-staging` reading live data through
+  `SEED_FROM_PREFIX`; README §4). Every phase goes there before `main`.
 - **Push access** to GitHub from the machine doing the work.
 - The repo is **public**; consider making it private.
 

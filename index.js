@@ -1,5 +1,13 @@
 require("dotenv").config();
 
+// A staging copy (SEED_FROM_PREFIX set) works on a copy of live data, so it
+// must never email anyone or read Microsoft 365: drop those settings before
+// the mail modules read them.
+if (process.env.SEED_FROM_PREFIX) {
+  for (const name of ["MS_TENANT_ID", "MS_CLIENT_ID", "MS_CLIENT_SECRET", "MS_FROM_EMAIL", "IT_REQUESTS_MAILBOX"]) delete process.env[name];
+  console.log("Staging: Microsoft 365 email and calendars are switched off.");
+}
+
 const path = require("path");
 const fs = require("fs");
 const https = require("https");

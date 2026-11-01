@@ -3,10 +3,12 @@ version: "3.8"
 services:
   soi-tracker:
     build: .
-    container_name: soi-tracker
+    # A second copy (staging) sets CONTAINER_NAME and HOST_PORT so it can run
+    # beside the live one on the same host.
+    container_name: ${CONTAINER_NAME:-soi-tracker}
     restart: unless-stopped
     ports:
-      - "443:443"
+      - "${HOST_PORT:-443}:443"
     volumes:
       - soi-tracker-certs:/app/certs
     environment:
@@ -16,6 +18,10 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       S3_BUCKET: ${S3_BUCKET}
       S3_PREFIX: ${S3_PREFIX:-soi-tracker}
+      # Staging only: read anything missing under S3_PREFIX from this prefix
+      # (normally the live one, "soi-tracker"). Writes still go to S3_PREFIX,
+      # so live data is never changed. Leave unset on the live stack.
+      SEED_FROM_PREFIX: ${SEED_FROM_PREFIX:-}
       AWS_REGION: ${AWS_REGION:-us-east-1}
       # Only needed if this host does NOT already have an IAM role attached
       # (e.g. an EC2 instance profile). If it does, leave these two unset.

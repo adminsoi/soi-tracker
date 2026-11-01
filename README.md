@@ -100,6 +100,23 @@ Leave your existing Portainer rule as-is. You do **not** need to open port
    these — they only ever live in Portainer's environment variables field
    (that's exactly what `.gitignore` excluding `.env` protects against).
 
+### Staging copy
+
+A second stack, `soi-tracker-staging`, runs the `staging` branch beside the
+live one so changes can be tried before they reach `main`. Same repo and
+variables as the live stack, plus:
+
+- `CONTAINER_NAME` = `soi-tracker-staging`, `HOST_PORT` = `8443`
+  (open it at `https://<your-private-ip>:8443/`)
+- `S3_PREFIX` = `soi-tracker-staging`, `SEED_FROM_PREFIX` = `soi-tracker`:
+  staging reads live data it hasn't saved itself yet, and saves only under
+  its own prefix, so live data is never changed.
+
+With `SEED_FROM_PREFIX` set, the server ignores the Microsoft 365 settings,
+so staging never emails anyone and Calendar / Emails stay empty there.
+When a change looks right on staging, merge `staging` into `main` and
+redeploy the live stack.
+
 ## 5. Create logins
 
 Go to `https://<your-private-ip>/admin.html`, sign in with

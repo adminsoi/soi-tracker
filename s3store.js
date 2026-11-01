@@ -21,14 +21,27 @@ if (!BUCKET) {
   process.exit(1);
 }
 
+// Staging: anything not yet saved under PREFIX is read from SEED_PREFIX
+// (the live data), and every write goes to PREFIX only. A file deleted on
+// staging shows again from the live copy.
+const SEED_PREFIX = (process.env.SEED_FROM_PREFIX || "").replace(/\/+$/, "");
+if (SEED_PREFIX && SEED_PREFIX === PREFIX) {
+  console.error("SEED_FROM_PREFIX must differ from S3_PREFIX");
+  process.exit(1);
+}
+
 // Uses the AWS SDK's default credential chain: an attached EC2/ECS IAM
 // role is picked up automatically with no extra config. If you're not
 // running on AWS infra with a role attached, set AWS_ACCESS_KEY_ID /
 // AWS_SECRET_ACCESS_KEY / AWS_REGION as env vars instead.
 const s3 = new S3Client({ region: REGION });
 
-function keyFor(name) {
-  return `${PREFIX}/${name}.json`;
+function keyFor(name, prefix = PREFIX) {
+  return `${prefix}/${name}.json`;
+}
+
+function isMissing(err) {
+  return err.name === "NoSuchKey" || err?.$metadata?.httpStatusCode === 404;
 }
 
 async function streamToString(stream) {
@@ -38,19 +51,18 @@ async function streamToString(stream) {
 }
 
 async function readJson(name, fallback) {
-  try {
-    const res = await s3.send(
-      new GetObjectCommand({ Bucket: BUCKET, Key: keyFor(name) })
-    );
-    const text = await streamToString(res.Body);
-    return JSON.parse(text);
-  } catch (err) {
-    const status = err?.$metadata?.httpStatusCode;
-    if (err.name === "NoSuchKey" || status === 404) {
-      return fallback;
+  for (const prefix of SEED_PREFIX ? [PREFIX, SEED_PREFIX] : [PREFIX]) {
+    try {
+      const res = await s3.send(
+        new GetObjectCommand({ Bucket: BUCKET, Key: keyFor(name, prefix) })
+      );
+      const text = await streamToString(res.Body);
+      return JSON.parse(text);
+    } catch (err) {
+      if (!isMissing(err)) throw err;
     }
-    throw err;
   }
+  return fallback;
 }
 
 async function writeJson(name, data) {
@@ -69,15 +81,17 @@ async function putFile(name, buffer, contentType) {
   await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: `${PREFIX}/${name}`, Body: buffer, ContentType: contentType }));
 }
 async function getFile(name) {
-  try {
-    const res = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: `${PREFIX}/${name}` }));
-    const chunks = [];
-    for await (const chunk of res.Body) chunks.push(chunk);
-    return { body: Buffer.concat(chunks), contentType: res.ContentType || "application/octet-stream" };
-  } catch (err) {
-    if (err.name === "NoSuchKey" || err?.$metadata?.httpStatusCode === 404) return null;
-    throw err;
+  for (const prefix of SEED_PREFIX ? [PREFIX, SEED_PREFIX] : [PREFIX]) {
+    try {
+      const res = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: `${prefix}/${name}` }));
+      const chunks = [];
+      for await (const chunk of res.Body) chunks.push(chunk);
+      return { body: Buffer.concat(chunks), contentType: res.ContentType || "application/octet-stream" };
+    } catch (err) {
+      if (!isMissing(err)) throw err;
+    }
   }
+  return null;
 }
 async function deleteFile(name) {
   await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: `${PREFIX}/${name}` }));
