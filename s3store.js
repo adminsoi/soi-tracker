@@ -127,8 +127,9 @@ function getSettings() {
 // customer email and the latest reply in each open conversation (who, when,
 // subject — never bodies), plus Microsoft's delta links. See mail.js.
 // AOG operations board: { cards: [...], customers: { name: { files } } }.
-function getBoard() {
-  return readJson("aog_board", { cards: [], customers: {} });
+// The US Gov board is the same shape in its own document ("usgov_board").
+function getBoard(name = "aog_board") {
+  return readJson(name, { cards: [], customers: {} });
 }
 function getMailIndex() {
   return readJson("mail_followups", {});
@@ -293,11 +294,11 @@ function withMailIndex(mutator) {
   return mailIndexQueue;
 }
 
-function withBoard(mutator) {
+function withBoard(mutator, name = "aog_board") {
   boardQueue = boardQueue.then(async () => {
-    const doc = await getBoard();
+    const doc = await getBoard(name);
     const result = await mutator(doc);
-    await writeJson("aog_board", doc);
+    await writeJson(name, doc);
     return result;
   });
   return boardQueue;

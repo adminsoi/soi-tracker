@@ -42,7 +42,9 @@ function renderDepartment() {
   // Warehouse opens on Insights (the first tab is where a department lands).
   if (dept === "Warehouse" && (me.leadership || me.fullAccess || me.departments.indexOf("Warehouse") !== -1)) subs.push({ id: "insights", label: "Insights" });
   // The AOG board: first on Procurement and Purchasing, after Insights on Warehouse.
-  if (BOARD_DEPTS.indexOf(dept) !== -1 && canSeeBoardUi()) subs.push({ id: "board", label: "Board" });
+  if (BOARD_DEPTS.indexOf(dept) !== -1 && canSeeBoardUi("ops")) subs.push({ id: "board", label: "Board" });
+  // US Gov's own board (same code, its own files), first on its tab.
+  if (dept === "US Government" && canSeeBoardUi("usgov")) subs.push({ id: "board", label: "Board" });
   // IT opens on Requests.
   if (dept === "IT" && canSeeItRequests()) subs.push({ id: "requests", label: "Requests" });
   // Business Development and US Gov have no Tasks tab; it stays while

@@ -1,9 +1,11 @@
-// Operations board (Procurement + Purchasing + Warehouse): one file per quote,
-// moving left to right through six stages (RFQ → Quoted → Sale Received →
-// Purchased → Item Received → Item Sent), with its line items as rows. This
-// file is the rules — stages, case-file checks, approvals, hard stops, flags,
-// on-time and who sees what. index.js has the routes; files are stored in S3
-// as aog_board.json (one "card" each; attachments under board_files/<card>/).
+// Operations board (Procurement + Purchasing + Warehouse) and the US Gov board:
+// one file per quote, moving left to right through six stages (RFQ → Quoted →
+// Sale Received → Purchased → Item Received → Item Sent; on US Gov,
+// Solicitation → Bid Submitted → Awarded → … → Delivered), with its line items
+// as rows. This file is the rules — stages, case-file checks, approvals, hard
+// stops, flags, on-time and who sees what. index.js has the routes; files are stored in S3
+// as aog_board.json (one "card" each; attachments under board_files/<card>/);
+// the US Gov board's as usgov_board.json (usgov_board_files/<card>/).
 // Stage ids are unchanged from the earlier AOG board so stored cards keep
 // working; only the labels and colours changed.
 //
@@ -19,8 +21,20 @@ const STAGES = [
   { id: "received", label: "Item Received", dept: "Warehouse", colour: "violet" },
   { id: "sent", label: "Item Sent", dept: "Warehouse", colour: "violet" },
 ];
+// The US Gov board (Phase 3): the same six steps, rules and stage ids,
+// named for solicitations and contract awards, all worked by US Government.
+const US_GOV_STAGES = [
+  { id: "rfq", label: "Solicitation", dept: "US Government", colour: "blue" },
+  { id: "quoted", label: "Bid Submitted", dept: "US Government", colour: "blue" },
+  { id: "sale", label: "Awarded", dept: "US Government", colour: "indigo" },
+  { id: "purchased", label: "Purchased", dept: "US Government", colour: "indigo" },
+  { id: "received", label: "Item Received", dept: "US Government", colour: "violet" },
+  { id: "sent", label: "Delivered", dept: "US Government", colour: "violet" },
+];
+const BOARD_STAGES = { ops: STAGES, usgov: US_GOV_STAGES };
 const STAGE_IDS = STAGES.map((s) => s.id);
-const stageOf = (id) => STAGES.find((s) => s.id === id) || STAGES[0];
+const stagesOf = (kind) => BOARD_STAGES[kind] || STAGES;
+const stageOf = (id, kind) => stagesOf(kind).find((s) => s.id === id) || stagesOf(kind)[0];
 
 // Case-file checklists. RFQ: where the buyer looked (the black file).
 // Sale: what has to be in the red file before the purchase goes for approval.
@@ -175,7 +189,7 @@ function cleanLine(input, prev, may) {
 }
 
 module.exports = {
-  STAGES, STAGE_IDS, stageOf, CHECKS, APPROVALS, APPROVAL_LABEL, PENTAGON_STAGE, NUMBER_FIELDS,
+  STAGES, US_GOV_STAGES, STAGE_IDS, stagesOf, stageOf, CHECKS, APPROVALS, APPROVAL_LABEL, PENTAGON_STAGE, NUMBER_FIELDS,
   checksDone, approval, approvalBlockers, moveBlockers, flagsOf, highlightedFile, quotedAt, onTime, migrateCard,
   quoteTotal, cleanLine, text, num,
 };

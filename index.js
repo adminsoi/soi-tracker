@@ -1127,30 +1127,50 @@ app.get(
 // added to the file's history; files are archived, never deleted.
 // Pentagon RFQs / Quotes / SOs / POs whose number isn't on a file yet show as
 // files too (built on the fly, not stored); the first change to one stores it.
-const BOARD_DEPTS = ["Procurement", "Purchasing", "Warehouse"];
+//
+// The US Gov board (?board=usgov on every route) runs on the same routes and
+// rules with its own stage names, its own S3 document and folders, and its
+// own settings. Only US Government (and the top) see it, and its files never
+// show on the Operations board or the other way round. Pentagon documents for
+// the government customers listed in its settings land on it instead of on
+// the Operations board.
+const BOARDS = {
+  ops: { id: "ops", name: "Operations board", depts: ["Procurement", "Purchasing", "Warehouse"], costDepts: ["Procurement", "Purchasing"], qualityDept: "Warehouse",
+    store: "aog_board", files: "board_files", customerFiles: "board_customers", settingsKey: "board" },
+  usgov: { id: "usgov", name: "US Gov board", depts: ["US Government"], costDepts: ["US Government"], qualityDept: "US Government",
+    store: "usgov_board", files: "usgov_board_files", customerFiles: "usgov_board_customers", settingsKey: "usgovBoard" },
+};
+const boardOf = (req) => BOARDS[req.query.board] || BOARDS.ops;
 const BOARD_BIG_TICKET = 25000;
-function boardSettings(settings) {
-  const b = settings.board || {};
-  return { managers: b.managers || {}, globalManager: b.globalManager || "", bigTicket: Number(b.bigTicket) > 0 ? Number(b.bigTicket) : BOARD_BIG_TICKET };
+function boardSettings(settings, cfg = BOARDS.ops) {
+  const b = settings[cfg.settingsKey] || {};
+  const out = { managers: b.managers || {}, globalManager: b.globalManager || "", bigTicket: Number(b.bigTicket) > 0 ? Number(b.bigTicket) : BOARD_BIG_TICKET };
+  if (cfg.id === "usgov") out.customers = Array.isArray(b.customers) ? b.customers : [];
+  return out;
 }
-function stageManager(stage, settings) {
-  return boardSettings(settings).managers[stage] || (settings.departmentDefaults || {})[board.stageOf(stage).dept] || "";
+// Pentagon customer accounts whose documents go to the US Gov board.
+function govCustomers(settings) {
+  return new Set(boardSettings(settings, BOARDS.usgov).customers.map((x) => String(x).trim().toLowerCase()).filter(Boolean));
+}
+function stageManager(stage, settings, cfg = BOARDS.ops) {
+  return boardSettings(settings, cfg).managers[stage] || (settings.departmentDefaults || {})[board.stageOf(stage, cfg.id).dept] || "";
 }
 const boardTop = (u) => !!(u.fullAccess || u.leadership);
-function canSeeBoard(u) { return boardTop(u) || BOARD_DEPTS.some((d) => (u.departments || []).includes(d)); }
+function canSeeBoard(u, cfg = BOARDS.ops) { return boardTop(u) || cfg.depts.some((d) => (u.departments || []).includes(d)); }
 // (Named apart from canSeeCard above, which is for the Pentagon task cards.)
-function canSeeBoardCard(u, c) {
-  if (!(u.companies || []).includes(c.company)) return false;
-  return boardTop(u) || sameUser(c.assignee, u.username) || sameUser(c.createdBy, u.username) || inDepartment(u, board.stageOf(c.stage).dept);
+function canSeeBoardCard(u, c, cfg = BOARDS.ops) {
+  if (!(u.companies || []).includes(c.company) || !canSeeBoard(u, cfg)) return false;
+  return boardTop(u) || sameUser(c.assignee, u.username) || sameUser(c.createdBy, u.username) || inDepartment(u, board.stageOf(c.stage, cfg.id).dept);
 }
-// Cost and mark-up: Procurement, Purchasing and the top. Margin: the top only.
-const mayCost = (u) => boardTop(u) || ["Procurement", "Purchasing"].some((d) => (u.departments || []).includes(d));
+// Cost and mark-up: the people who source and buy (Procurement and
+// Purchasing; US Government on its board) and the top. Margin: the top only.
+const mayCost = (u, cfg = BOARDS.ops) => boardTop(u) || cfg.costDepts.some((d) => (u.departments || []).includes(d));
 const mayMargin = (u) => boardTop(u);
-function mayApprove(u, c, settings) {
-  return boardTop(u) || sameUser(stageManager(c.stage, settings), u.username) || (isManager(u) && inDepartment(u, board.stageOf(c.stage).dept));
+function mayApprove(u, c, settings, cfg = BOARDS.ops) {
+  return boardTop(u) || sameUser(stageManager(c.stage, settings, cfg), u.username) || (isManager(u) && inDepartment(u, board.stageOf(c.stage, cfg.id).dept));
 }
-function mayQuality(u, settings) {
-  return boardTop(u) || sameUser(stageManager("received", settings), u.username) || (isManager(u) && inDepartment(u, "Warehouse"));
+function mayQuality(u, settings, cfg = BOARDS.ops) {
+  return boardTop(u) || sameUser(stageManager("received", settings, cfg), u.username) || (isManager(u) && inDepartment(u, cfg.qualityDept));
 }
 function logCard(c, by, what) {
   c.history = c.history || [];
@@ -1159,7 +1179,7 @@ function logCard(c, by, what) {
   c.updatedAt = Date.now();
 }
 // A card as the signed-in person may see it.
-function shapeCard(c, u, now) {
+function shapeCard(c, u, now, cfg = BOARDS.ops) {
   const out = board.migrateCard(JSON.parse(JSON.stringify(c)));
   out.flags = board.flagsOf(out, now);
   out.hl = board.highlightedFile(out);
@@ -1172,40 +1192,49 @@ function shapeCard(c, u, now) {
   out.moveBlockers = next ? board.moveBlockers(c, next) : [];
   for (const l of out.lines || []) {
     if (mayMargin(u)) l.margin = l.price > 0 && l.cost > 0 ? Math.round(((l.price - l.cost) / l.price) * 1000) / 10 : null;
-    if (!mayCost(u)) { delete l.cost; delete l.markup; }
+    if (!mayCost(u, cfg)) { delete l.cost; delete l.markup; }
   }
   return out;
 }
 async function boardCard(req, res) {
-  const doc = await getBoard();
+  const cfg = boardOf(req);
+  const doc = await getBoard(cfg.store);
   const c = (doc.cards || []).find((x) => x.id === req.params.id);
-  if (!c || !canSeeBoardCard(req.user, c)) { res.status(404).json({ error: "That card isn't here" }); return null; }
+  if (!c || !canSeeBoardCard(req.user, c, cfg)) { res.status(404).json({ error: "That card isn't here" }); return null; }
   return c;
 }
 // Change one card inside the board queue; fn returns an error string to stop.
+// fn gets (card, settings, doc, cfg), cfg being the board it's on.
 async function changeCard(req, res, fn) {
   const now = Date.now();
+  const cfg = boardOf(req);
   const settings = await getSettings();
   const out = await withBoard(async (doc) => {
     const c = (doc.cards || []).find((x) => x.id === req.params.id);
-    if (!c || !canSeeBoardCard(req.user, c)) return { status: 404, error: "That card isn't here" };
+    if (!c || !canSeeBoardCard(req.user, c, cfg)) return { status: 404, error: "That card isn't here" };
     board.migrateCard(c);
-    const err = await fn(c, settings, doc);
+    const err = await fn(c, settings, doc, cfg);
     if (err) return { status: 400, error: err };
     return { card: c };
-  });
+  }, cfg.store);
   if (out.error) return res.status(out.status).json({ error: out.error });
-  res.json(shapeCard(out.card, req.user, now));
+  res.json(shapeCard(out.card, req.user, now, cfg));
   return out.card;
 }
 
 // Pentagon RFQs / Quotes / SOs / POs not yet on a stored file, grouped one
 // file per document number (one line item per row's P/N). A document drops
-// off this list as soon as its number is typed on (or stored with) a file.
-async function pentagonBoardFiles(doc) {
-  const views = allViews().filter((v) => board.PENTAGON_STAGE[v.id]);
+// off this list as soon as its number is typed on (or stored with) a file on
+// either board. Documents for the government customers in the US Gov board's
+// settings go to that board; the rest to the Operations board. POs name the
+// vendor, not the customer, so they all stay on the Operations board until
+// their number is typed on a US Gov file.
+async function pentagonBoardFiles(cfg, settings) {
+  const views = allViews().filter((v) => board.PENTAGON_STAGE[v.id] && (cfg.id === "ops" || v.id !== "purchase_orders"));
+  const gov = govCustomers(settings);
   const taken = new Set();
-  for (const c of doc.cards || []) for (const k of board.NUMBER_FIELDS) if (c[k]) taken.add(`${k}:${String(c[k]).toLowerCase()}`);
+  const docs = await Promise.all(Object.values(BOARDS).map((b) => getBoard(b.store)));
+  for (const doc of docs) for (const c of doc.cards || []) for (const k of board.NUMBER_FIELDS) if (c[k]) taken.add(`${k}:${String(c[k]).toLowerCase()}`);
   const users = (await getUsers()).map(normalizeUser);
   const byCode = new Map(users.filter((u) => u.pentagonCode).map((u) => [u.pentagonCode.trim().toLowerCase(), u.username]));
   const files = new Map(), errors = [];
@@ -1217,6 +1246,7 @@ async function pentagonBoardFiles(doc) {
       const f = (name) => { const k = resolveField(view, row, name); return k ? cell(row[k]).trim() : ""; };
       const docNo = f("key");
       if (!docNo || taken.has(`${field}:${docNo.toLowerCase()}`)) continue;
+      if (view.id !== "purchase_orders" && gov.has(f("party").toLowerCase()) !== (cfg.id === "usgov")) continue;
       const id = `pg:${view.id}:${docNo}`;
       let file = files.get(id);
       if (!file) {
@@ -1241,28 +1271,29 @@ app.get(
   "/api/board",
   authMiddleware,
   asyncHandler(async (req, res) => {
-    if (!canSeeBoard(req.user)) return res.status(403).json({ error: "The board is for Procurement, Purchasing and Warehouse" });
+    const cfg = boardOf(req);
+    if (!canSeeBoard(req.user, cfg)) return res.status(403).json({ error: cfg.id === "usgov" ? "The US Gov board is for US Government" : "The board is for Procurement, Purchasing and Warehouse" });
     const company = String(req.query.company || "");
-    const [doc, settings, users] = await Promise.all([getBoard(), getSettings(), getUsers()]);
+    const [doc, settings, users] = await Promise.all([getBoard(cfg.store), getSettings(), getUsers()]);
     const now = Date.now();
     const archived = req.query.archived === "1";
-    const pentagon = archived || !req.user.companies.includes("SOI Aviation") ? { files: [], errors: [] } : await pentagonBoardFiles(doc);
+    const pentagon = archived || !req.user.companies.includes("SOI Aviation") ? { files: [], errors: [] } : await pentagonBoardFiles(cfg, settings);
     const cards = (doc.cards || []).filter((c) => !c.archived === !archived).concat(pentagon.files)
-      .filter((c) => (!company || c.company === company) && canSeeBoardCard(req.user, c));
-    const boardPeople = users.map(normalizeUser).filter((u) => BOARD_DEPTS.some((d) => u.departments.includes(d)) || u.fullAccess)
+      .filter((c) => (!company || c.company === company) && canSeeBoardCard(req.user, c, cfg));
+    const boardPeople = users.map(normalizeUser).filter((u) => cfg.depts.some((d) => u.departments.includes(d)) || u.fullAccess)
       .filter((u) => u.companies.some((co) => req.user.companies.includes(co)));
     const people = boardPeople.map((u) => u.username).sort((a, b) => a.localeCompare(b));
     // Each person's board departments, for the row colours.
-    const peopleDepts = Object.fromEntries(boardPeople.map((u) => [u.username, BOARD_DEPTS.filter((d) => u.departments.includes(d))]));
+    const peopleDepts = Object.fromEntries(boardPeople.map((u) => [u.username, cfg.depts.filter((d) => u.departments.includes(d))]));
     const customers = {};
     for (const [name, x] of Object.entries(doc.customers || {})) customers[name] = { files: (x.files || []) };
     res.json({
-      stages: board.STAGES, checks: board.CHECKS, approvals: board.APPROVALS,
-      cards: cards.map((c) => shapeCard(c, req.user, now)),
+      board: cfg.id, stages: board.stagesOf(cfg.id), checks: board.CHECKS, approvals: board.APPROVALS,
+      cards: cards.map((c) => shapeCard(c, req.user, now, cfg)),
       people, peopleDepts, customers, pentagonErrors: pentagon.errors,
-      managers: Object.fromEntries(board.STAGE_IDS.map((s) => [s, stageManager(s, settings)])),
-      settings: boardTop(req.user) ? boardSettings(settings) : null,
-      can: { cost: mayCost(req.user), margin: mayMargin(req.user), quality: mayQuality(req.user, settings), settings: boardTop(req.user), assign: isManager(req.user) || boardTop(req.user) },
+      managers: Object.fromEntries(board.STAGE_IDS.map((s) => [s, stageManager(s, settings, cfg)])),
+      settings: boardTop(req.user) ? boardSettings(settings, cfg) : null,
+      can: { cost: mayCost(req.user, cfg), margin: mayMargin(req.user), quality: mayQuality(req.user, settings, cfg), settings: boardTop(req.user), assign: isManager(req.user) || boardTop(req.user) },
     });
   })
 );
@@ -1271,24 +1302,25 @@ app.post(
   "/api/board",
   authMiddleware,
   asyncHandler(async (req, res) => {
-    if (!canSeeBoard(req.user) || !(boardTop(req.user) || inDepartment(req.user, "Procurement"))) return res.status(403).json({ error: "New files are added by Procurement" });
+    const cfg = boardOf(req), addDept = board.stageOf("rfq", cfg.id).dept;
+    if (!canSeeBoard(req.user, cfg) || !(boardTop(req.user) || inDepartment(req.user, addDept))) return res.status(403).json({ error: `New files are added by ${addDept}` });
     const b = req.body || {};
     const company = String(b.company || "");
     if (!req.user.companies.includes(company)) return res.status(400).json({ error: "Pick a company" });
     const customer = board.text(b.customer, 120);
     if (!customer) return res.status(400).json({ error: "Who's the customer?" });
     const settings = await getSettings();
-    const lines = (Array.isArray(b.lines) ? b.lines : []).slice(0, 50).map((l) => board.cleanLine(l, null, { cost: mayCost(req.user), quality: false, username: req.user.username })).filter((l) => l.pn);
+    const lines = (Array.isArray(b.lines) ? b.lines : []).slice(0, 50).map((l) => board.cleanLine(l, null, { cost: mayCost(req.user, cfg), quality: false, username: req.user.username })).filter((l) => l.pn);
     const card = {
       id: newId(), company, customer, fileNo: board.text(b.fileNo, 40), rfqNo: board.text(b.rfqNo, 40), quoteNo: board.text(b.quoteNo, 40), orderNo: "", poNo: "",
       platforms: board.text(b.platforms, 120), stage: "rfq",
       dueDate: /^\d{4}-\d{2}-\d{2}$/.test(b.dueDate || "") ? b.dueDate : "",
-      assignee: board.text(b.assignee, 60) || stageManager("rfq", settings) || req.user.username,
+      assignee: board.text(b.assignee, 60) || stageManager("rfq", settings, cfg) || req.user.username,
       lines, checks: {}, approvals: {}, notes: [], files: [], history: [], createdAt: Date.now(), createdBy: req.user.username,
     };
     logCard(card, req.user.username, `Added the file for ${customer}`);
-    await withBoard((doc) => { doc.cards = doc.cards || []; doc.cards.push(card); });
-    res.status(201).json(shapeCard(card, req.user, Date.now()));
+    await withBoard((doc) => { doc.cards = doc.cards || []; doc.cards.push(card); }, cfg.store);
+    res.status(201).json(shapeCard(card, req.user, Date.now(), cfg));
   })
 );
 
@@ -1297,7 +1329,7 @@ app.patch(
   authMiddleware,
   asyncHandler(async (req, res) => {
     const b = req.body || {};
-    await changeCard(req, res, (c, settings) => {
+    await changeCard(req, res, (c, settings, doc, cfg) => {
       const by = req.user.username, said = [];
       for (const [k, n, label] of [["customer", 120, "customer"], ["platforms", 120, "platform(s)"], ["fileNo", 40, "file number"], ["rfqNo", 40, "RFQ number"],
         ["quoteNo", 40, "quote number"], ["orderNo", 40, "sales order number"], ["poNo", 40, "PO number"]]) {
@@ -1321,8 +1353,8 @@ app.patch(
         }
       }
       if (Array.isArray(b.lines)) {
-        const may = { cost: mayCost(req.user), quality: mayQuality(req.user, settings), username: by };
-        if (b.lines.some((l, i) => l && "qualityOk" in l && !may.quality && !!l.qualityOk !== !!((c.lines || []).find((p) => p.id === l.id) || {}).qualityOk)) return "Only the warehouse manager signs off quality";
+        const may = { cost: mayCost(req.user, cfg), quality: mayQuality(req.user, settings, cfg), username: by };
+        if (b.lines.some((l, i) => l && "qualityOk" in l && !may.quality && !!l.qualityOk !== !!((c.lines || []).find((p) => p.id === l.id) || {}).qualityOk)) return cfg.id === "usgov" ? "Only a US Government manager signs off quality" : "Only the warehouse manager signs off quality";
         const before = JSON.stringify((c.lines || []).map((l) => [l.pn, l.qty, l.price]));
         const prevById = new Map((c.lines || []).map((l) => [l.id, l]));
         const lines = b.lines.slice(0, 50).map((l) => board.cleanLine(l || {}, prevById.get(l && l.id), may));
@@ -1350,12 +1382,12 @@ app.post(
   asyncHandler(async (req, res) => {
     const to = String((req.body || {}).to || "");
     if (!board.STAGE_IDS.includes(to)) return res.status(400).json({ error: "Unknown column" });
-    const card = await changeCard(req, res, (c, settings) => {
+    const card = await changeCard(req, res, (c, settings, doc, cfg) => {
       const from = board.STAGE_IDS.indexOf(c.stage), dest = board.STAGE_IDS.indexOf(to);
       if (dest === from) return "It's already there";
       if (dest > from + 1) return "Cards move one column at a time";
-      if (dest < from && !(mayApprove(req.user, c, settings) || boardTop(req.user))) return "Only a manager can move a card back";
-      if (dest === from + 1 && !(canSeeBoardCard(req.user, c) && (inDepartment(req.user, board.stageOf(c.stage).dept) || sameUser(c.assignee, req.user.username) || boardTop(req.user)))) return "You can't move this card";
+      if (dest < from && !(mayApprove(req.user, c, settings, cfg) || boardTop(req.user))) return "Only a manager can move a card back";
+      if (dest === from + 1 && !(canSeeBoardCard(req.user, c, cfg) && (inDepartment(req.user, board.stageOf(c.stage, cfg.id).dept) || sameUser(c.assignee, req.user.username) || boardTop(req.user)))) return "You can't move this card";
       const stops = board.moveBlockers(c, to);
       if (stops.length) return "Not yet: " + stops.join("; ");
       // Going back clears the approvals from the stages it left.
@@ -1363,10 +1395,11 @@ app.post(
       const prev = c.assignee;
       if (to === "quoted" && !c.quotedAt) c.quotedAt = Date.now();
       c.stage = to;
-      c.assignee = stageManager(to, settings) || c.assignee;
-      logCard(c, req.user.username, `Moved to ${board.stageOf(to).label}` + (c.assignee !== prev ? `, assigned to ${c.assignee}` : ""));
+      c.assignee = stageManager(to, settings, cfg) || c.assignee;
+      logCard(c, req.user.username, `Moved to ${board.stageOf(to, cfg.id).label}` + (c.assignee !== prev ? `, assigned to ${c.assignee}` : ""));
     });
-    if (card && card.assignee) notifyBoardAssignee(card, `${board.stageOf(card.stage).label}: ${cardLabel(card)}`).catch(() => {});
+    const cfg = boardOf(req);
+    if (card && card.assignee) notifyBoardAssignee(card, `${board.stageOf(card.stage, cfg.id).label}: ${cardLabel(card)}`, cfg).catch(() => {});
   })
 );
 
@@ -1375,13 +1408,13 @@ function cardLabel(c) {
   const n = (no ? `File ${no}` : "New file") + (board.STAGE_IDS.indexOf(c.stage) >= 2 && c.orderNo ? ` (SO ${c.orderNo})` : "");
   return `${n} — ${c.customer || c.vendor || "no customer yet"}`;
 }
-async function notifyBoardAssignee(c, subject) {
+async function notifyBoardAssignee(c, subject, cfg = BOARDS.ops) {
   const u = (await getUsers()).find((x) => sameUser(x.username, c.assignee));
   if (!u || !u.email) return;
   await sendMail({
     to: u.email,
-    subject: `Operations board — ${subject}`,
-    html: `<p>A file on the Operations board is now with you (${escapeHtml(board.stageOf(c.stage).label)}):</p><p><strong>${escapeHtml(cardLabel(c))}</strong></p>` +
+    subject: `${cfg.name} — ${subject}`,
+    html: `<p>A file on the ${escapeHtml(cfg.name)} is now with you (${escapeHtml(board.stageOf(c.stage, cfg.id).label)}):</p><p><strong>${escapeHtml(cardLabel(c))}</strong></p>` +
       (c.dueDate ? `<p>Due: ${escapeHtml(c.dueDate)}</p>` : "") + `<p>Open the tracker's board to work it.</p>`,
   });
 }
@@ -1394,10 +1427,11 @@ app.post(
     const decision = b.decision === "approve" ? "approved" : b.decision === "reject" ? "rejected" : "";
     if (!decision) return res.status(400).json({ error: "Approve or reject" });
     let followUp = null;
+    const cfg = boardOf(req);
     const card = await changeCard(req, res, (c, settings) => {
       const kind = board.APPROVALS[c.stage];
       if (!kind || kind !== b.kind) return "Nothing to approve in this column";
-      if (!mayApprove(req.user, c, settings)) return "Only this stage's manager can approve";
+      if (!mayApprove(req.user, c, settings, cfg)) return "Only this stage's manager can approve";
       const blockers = board.approvalBlockers(c, kind);
       if (decision === "approved" && blockers.length) return "Not ready: " + blockers.join("; ");
       const note = board.text(b.note, 500);
@@ -1405,7 +1439,7 @@ app.post(
       c.approvals[kind] = { state: decision, by: req.user.username, at: Date.now(), note };
       logCard(c, req.user.username, `${board.APPROVAL_LABEL[kind]} ${decision === "approved" ? "✓ approved" : "✗ rejected"}${note ? ": " + note : ""}`);
       if (kind === "quote" && decision === "rejected") {
-        const s = boardSettings(settings), total = board.quoteTotal(c);
+        const s = boardSettings(settings, cfg), total = board.quoteTotal(c);
         followUp = { card: JSON.parse(JSON.stringify(c)), big: total >= s.bigTicket && s.globalManager, globalManager: s.globalManager, total };
         if (followUp.big) logCard(c, req.user.username, `Big-ticket rejection ($${total.toLocaleString("en-US")}) flagged to ${s.globalManager}`);
       }
@@ -1414,8 +1448,8 @@ app.post(
     // to the global manager.
     if (card && followUp) {
       const c = followUp.card, due = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
-      const mk = (owner, title, priority) => ({ id: newId(), title, company: c.company, department: "Procurement", status: "todo", priority, owner, dueDate: due,
-        notes: `From the AOG board (${cardLabel(c)}). ${c.approvals.quote.note ? "Why: " + c.approvals.quote.note : ""}`.trim(), createdAt: Date.now(), createdBy: req.user.username, kind: "task" });
+      const mk = (owner, title, priority) => ({ id: newId(), title, company: c.company, department: board.stageOf("rfq", cfg.id).dept, status: "todo", priority, owner, dueDate: due,
+        notes: `From the ${cfg.id === "usgov" ? cfg.name : "AOG board"} (${cardLabel(c)}). ${c.approvals.quote.note ? "Why: " + c.approvals.quote.note : ""}`.trim(), createdAt: Date.now(), createdBy: req.user.username, kind: "task" });
       const made = [mk(c.assignee || c.createdBy, `Ask ${c.customer} for feedback on rejected quote ${c.quoteNo || ""}`.replace(/\s+/g, " ").trim(), "medium")];
       if (followUp.big) made.push(mk(followUp.globalManager, `Big-ticket quote rejected: ${cardLabel(c)} ($${Math.round(followUp.total).toLocaleString("en-US")})`, "high"));
       await withTasks((tasks) => { tasks.unshift(...made); });
@@ -1437,13 +1471,13 @@ app.post(
     const manager = !!b.manager && (isManager(req.user) || boardTop(req.user));
     const due = manager && /^\d{4}-\d{2}-\d{2}$/.test(b.due || "") ? b.due : "";
     let task = null;
-    const card = await changeCard(req, res, (c) => {
+    const card = await changeCard(req, res, (c, settings, doc, cfg) => {
       const forWho = manager ? board.text(b.for, 60) || c.assignee || "" : "";
       const note = { id: newId(), text: t, by: req.user.username, at: Date.now(), manager };
       if (manager && forWho) {
         task = { id: newId(), title: `Next step on ${cardLabel(c)}: ${t.split("\n")[0]}`.slice(0, 200), company: c.company,
-          department: board.stageOf(c.stage).dept, status: "todo", priority: due ? "high" : "medium", owner: forWho, dueDate: due,
-          notes: `From the Operations board (${cardLabel(c)}), by ${req.user.username}:\n${t}`, createdAt: Date.now(), createdBy: req.user.username, kind: "task" };
+          department: board.stageOf(c.stage, cfg.id).dept, status: "todo", priority: due ? "high" : "medium", owner: forWho, dueDate: due,
+          notes: `From the ${cfg.name} (${cardLabel(c)}), by ${req.user.username}:\n${t}`, createdAt: Date.now(), createdBy: req.user.username, kind: "task" };
         Object.assign(note, { for: forWho, due, taskId: task.id });
       }
       c.notes = c.notes || [];
@@ -1479,16 +1513,17 @@ app.post(
   authMiddleware,
   asyncHandler(async (req, res) => {
     const id = String((req.body || {}).id || "");
-    if (!canSeeBoard(req.user) || !id.startsWith("pg:")) return res.status(400).json({ error: "That isn't a Pentagon file" });
-    const { files } = await pentagonBoardFiles(await getBoard());
+    const cfg = boardOf(req);
+    if (!canSeeBoard(req.user, cfg) || !id.startsWith("pg:")) return res.status(400).json({ error: "That isn't a Pentagon file" });
+    const { files } = await pentagonBoardFiles(cfg, await getSettings());
     const src = files.find((f) => f.id === id);
-    if (!src || !canSeeBoardCard(req.user, src)) {
+    if (!src || !canSeeBoardCard(req.user, src, cfg)) {
       // Already stored (someone else got there first, or its number was typed on a file)?
       const [, view, no] = id.match(/^pg:([^:]+):(.*)$/) || [];
       const field = (board.PENTAGON_STAGE[view] || [])[1];
-      const doc = await getBoard();
-      const have = field && (doc.cards || []).find((c) => String(c[field] || "").toLowerCase() === String(no).toLowerCase() && canSeeBoardCard(req.user, c));
-      if (have) return res.json(shapeCard(have, req.user, Date.now()));
+      const doc = await getBoard(cfg.store);
+      const have = field && (doc.cards || []).find((c) => String(c[field] || "").toLowerCase() === String(no).toLowerCase() && canSeeBoardCard(req.user, c, cfg));
+      if (have) return res.json(shapeCard(have, req.user, Date.now(), cfg));
       return res.status(404).json({ error: "That Pentagon document isn't on the board any more" });
     }
     const card = Object.assign(JSON.parse(JSON.stringify(src)), { id: newId(), pentagonKey: id, createdBy: src.createdBy || req.user.username });
@@ -1502,8 +1537,8 @@ app.post(
       const [, field] = board.PENTAGON_STAGE[src.pentagonView];
       stored = doc.cards.find((c) => c.pentagonKey === id || (c[field] && String(c[field]).toLowerCase() === String(src[field]).toLowerCase())) || card;
       if (stored === card) doc.cards.push(card);
-    });
-    res.status(stored === card ? 201 : 200).json(shapeCard(stored, req.user, Date.now()));
+    }, cfg.store);
+    res.status(stored === card ? 201 : 200).json(shapeCard(stored, req.user, Date.now(), cfg));
   })
 );
 
@@ -1542,7 +1577,8 @@ app.post(
 );
 
 // Case-file attachments (PDFs, pictures, invoices, screenshots, emails), up to
-// 15 MB each, stored under board_files/<card>/ in S3. Always downloaded,
+// 15 MB each, stored under board_files/<card>/ in S3 (usgov_board_files/ for
+// the US Gov board). Always downloaded,
 // never shown in the page.
 function boardFileMeta(req) {
   const name = String(req.query.name || "file").replace(/[\\/\r\n"]+/g, "_").slice(0, 160);
@@ -1568,7 +1604,7 @@ app.post(
     // part of the black file (RFQ / Quoted) or the red file (Sale on).
     const kind = BOARD_FILE_KINDS.includes(req.query.kind) ? req.query.kind : type.startsWith("image/") ? "picture" : type === "application/pdf" ? "pdf" : /outlook|rfc822/.test(type) ? "email" : "other";
     const file = { id: newId(), name, type, size: req.body.length, at: Date.now(), by: req.user.username, kind, stage: c0.stage };
-    await putFile(`board_files/${c0.id}/${file.id}`, req.body, type);
+    await putFile(`${boardOf(req).files}/${c0.id}/${file.id}`, req.body, type);
     await changeCard(req, res, (c) => { c.files = c.files || []; c.files.push(file); logCard(c, req.user.username, `Attached ${name}`); });
   })
 );
@@ -1579,7 +1615,7 @@ app.get(
     const c = await boardCard(req, res);
     if (!c) return;
     const meta = (c.files || []).find((f) => f.id === req.params.fid);
-    const file = meta && (await getFile(`board_files/${c.id}/${meta.id}`));
+    const file = meta && (await getFile(`${boardOf(req).files}/${c.id}/${meta.id}`));
     if (!file) return res.status(404).json({ error: "That file isn't here" });
     sendBoardFile(res, meta, file);
   })
@@ -1591,15 +1627,16 @@ app.post(
   authMiddleware,
   express.raw({ type: () => true, limit: "15mb" }),
   asyncHandler(async (req, res) => {
-    if (!canSeeBoard(req.user)) return res.status(403).json({ error: "Not available for your account" });
+    const cfg = boardOf(req);
+    if (!canSeeBoard(req.user, cfg)) return res.status(403).json({ error: "Not available for your account" });
     const customer = board.text(req.query.customer, 120);
     const { name, type } = boardFileMeta(req);
     if (!customer) return res.status(400).json({ error: "Which customer?" });
     if (!type) return res.status(400).json({ error: "Attach a PDF, image, Word, Excel, PowerPoint, text or email file" });
     if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "No file came through" });
     const file = { id: newId(), name, type, size: req.body.length, at: Date.now(), by: req.user.username };
-    await putFile(`board_customers/${file.id}`, req.body, type);
-    await withBoard((doc) => { doc.customers = doc.customers || {}; const x = (doc.customers[customer] = doc.customers[customer] || { files: [] }); x.files.push(file); });
+    await putFile(`${cfg.customerFiles}/${file.id}`, req.body, type);
+    await withBoard((doc) => { doc.customers = doc.customers || {}; const x = (doc.customers[customer] = doc.customers[customer] || { files: [] }); x.files.push(file); }, cfg.store);
     res.status(201).json(file);
   })
 );
@@ -1607,17 +1644,19 @@ app.get(
   "/api/board-customers/files/:fid",
   authMiddleware,
   asyncHandler(async (req, res) => {
-    if (!canSeeBoard(req.user)) return res.status(403).json({ error: "Not available for your account" });
-    const doc = await getBoard();
+    const cfg = boardOf(req);
+    if (!canSeeBoard(req.user, cfg)) return res.status(403).json({ error: "Not available for your account" });
+    const doc = await getBoard(cfg.store);
     let meta = null;
     for (const x of Object.values(doc.customers || {})) meta = meta || (x.files || []).find((f) => f.id === req.params.fid);
-    const file = meta && (await getFile(`board_customers/${meta.id}`));
+    const file = meta && (await getFile(`${cfg.customerFiles}/${meta.id}`));
     if (!file) return res.status(404).json({ error: "That file isn't here" });
     sendBoardFile(res, meta, file);
   })
 );
 
-// Stage managers, the global manager and the big-ticket amount.
+// Stage managers, the global manager and the big-ticket amount (and, on the
+// US Gov board, the government customer accounts).
 app.put(
   "/api/board-settings",
   authMiddleware,
@@ -1626,8 +1665,10 @@ app.put(
     const b = req.body || {};
     const managers = {};
     for (const s of board.STAGE_IDS) if (b.managers && b.managers[s]) managers[s] = board.text(b.managers[s], 60);
+    const cfg = boardOf(req);
     const next = { managers, globalManager: board.text(b.globalManager, 60), bigTicket: Number(b.bigTicket) > 0 ? Math.round(Number(b.bigTicket)) : BOARD_BIG_TICKET };
-    await withSettings((s) => { s.board = next; });
+    if (cfg.id === "usgov") next.customers = [...new Set((Array.isArray(b.customers) ? b.customers : []).map((x) => board.text(x, 120)).filter(Boolean))].slice(0, 500);
+    await withSettings((s) => { s[cfg.settingsKey] = next; });
     res.json(next);
   })
 );

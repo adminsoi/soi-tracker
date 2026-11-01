@@ -14,21 +14,41 @@
 // this draws the columns, the side panel (case file), the customer file and
 // the settings. Pentagon documents not yet on a file show as files too; the
 // first change to one stores it (brdReal).
+//
+// The US Gov tab has its own board drawn by the same code (Solicitation →
+// Bid Submitted → Awarded → Purchased → Item Received → Delivered). Each
+// board keeps its own state in BRDS; `brd` is the one on screen, and every
+// request for the US Gov board carries ?board=usgov (brdUrl).
 var BOARD_DEPTS = ["Procurement", "Purchasing", "Warehouse"];
-var brd = { data: null, at: 0, loading: false, error: "", retryIn: 15000, q: "", flag: "", person: "", colf: {}, colOpen: "", open: "", line: "", customer: "", settings: false, adding: false, draft: null, busy: false };
+function brdState(kind) {
+  return { kind: kind, data: null, at: 0, loading: false, error: "", retryIn: 15000, q: "", flag: "", person: "", colf: {}, colOpen: "", open: "", line: "", customer: "", settings: false, adding: false, draft: null, busy: false };
+}
+var BRDS = { ops: brdState("ops"), usgov: brdState("usgov") };
+var brd = BRDS.ops;
+// Switch boards; a side panel left open on the other board is closed.
+function brdUse(kind) {
+  var next = BRDS[kind] || BRDS.ops;
+  if (next === brd) return;
+  var box = $("#brdModal"); if (box) box.remove();
+  brd.open = ""; brd.line = ""; brd.customer = ""; brd.settings = false; brd.lineDraft = null; brd.adding = false;
+  brd = next;
+}
+function brdUrl(path) { return brd.kind === "usgov" ? path + (path.indexOf("?") === -1 ? "?" : "&") + "board=usgov" : path; }
+function brdGov() { return brd.kind === "usgov"; }
 var BRD_FLAG = { overdue: ["Overdue", "bf-over"], due: ["Due", "bf-due"], approval: ["For approval", "bf-appr"], highlighted: ["Highlighted items", "bf-hi"], rejected: ["Quote rejected", "bf-rej"] };
 var BRD_DOTS = [["due", "Due", "bd-due"], ["approval", "For approval", "bd-appr"], ["highlighted", "Highlighted", "bd-hi"], ["flagged", "Flagged", "bd-flag"]];
 var BRD_DEPT_CLASS = { Procurement: "dp-proc", Purchasing: "dp-purch", Warehouse: "dp-wh" };
-function canSeeBoardUi() { return me.fullAccess || me.leadership || BOARD_DEPTS.some(function (d) { return me.departments.indexOf(d) !== -1; }); }
-function canAddRfq() { return me.fullAccess || me.leadership || me.departments.indexOf("Procurement") !== -1; }
+function canSeeBoardUi(kind) { return me.fullAccess || me.leadership || (kind === "usgov" ? ["US Government"] : BOARD_DEPTS).some(function (d) { return me.departments.indexOf(d) !== -1; }); }
+function canAddRfq() { return me.fullAccess || me.leadership || me.departments.indexOf(brdGov() ? "US Government" : "Procurement") !== -1; }
 // After an error, wait before asking again (15 s, doubling to 5 min) instead
 // of asking on every render; Refresh / Try again asks straight away.
 function loadBoard() {
-  if (brd.loading) return;
-  brd.loading = true;
-  api("/api/board" + (activeCompany && activeCompany !== ALL ? "?company=" + encodeURIComponent(activeCompany) : ""))
-    .then(function (d) { brd.data = d; brd.error = ""; brd.retryIn = 15000; }, function (err) { if (brd.error) brd.retryIn = Math.min(brd.retryIn * 2, 300000); brd.error = err.message; })
-    .then(function () { brd.loading = false; brd.at = Date.now(); brd.co = activeCompany; requestRender(); if (brd.open) drawCaseFile(); });
+  var b = brd;
+  if (b.loading) return;
+  b.loading = true;
+  api(brdUrl("/api/board" + (activeCompany && activeCompany !== ALL ? "?company=" + encodeURIComponent(activeCompany) : "")))
+    .then(function (d) { b.data = d; b.error = ""; b.retryIn = 15000; }, function (err) { if (b.error) b.retryIn = Math.min(b.retryIn * 2, 300000); b.error = err.message; })
+    .then(function () { b.loading = false; b.at = Date.now(); b.co = activeCompany; requestRender(); if (b.open && b === brd) drawCaseFile(); });
 }
 function brdDue() {
   if (brd.loading) return false;
@@ -51,7 +71,9 @@ function brdLabel(c) {
 // The Sales Order no. joins the heading from Sale Received on.
 function brdSo(c) { return brdStageAt(c) >= 2 && c.orderNo && brdLabel(c) !== "SO " + c.orderNo ? c.orderNo : ""; }
 // Row colour: the responsible person's department (this column's, if theirs).
+// The US Gov board is one department, so no stripe.
 function brdDeptOf(c) {
+  if (brdGov()) return "";
   var pd = brd.data.peopleDepts || {}, key = Object.keys(pd).filter(function (k) { return sameUser(k, c.assignee); })[0];
   var ds = key ? pd[key] : [], here = brdStage(c.stage).dept;
   return ds.indexOf(here) !== -1 ? here : ds[0] || "";
@@ -115,6 +137,7 @@ function brdColFilter(s) {
 }
 
 function renderBoard(dept) {
+  brdUse(dept === "US Government" ? "usgov" : "ops");
   var qa = $("#quickAdd"); if (qa) qa.style.display = "none";
   if (brdDue()) loadBoard();
   var retry = '<button type="button" class="text-button" data-brd-refresh>Try again</button>';
@@ -125,7 +148,7 @@ function renderBoard(dept) {
   var legend = BRD_DOTS.map(function (f) {
     return '<button type="button" class="bd-leg' + (brd.flag === f[0] ? " active" : "") + '" data-brd-flag="' + (brd.flag === f[0] ? "" : f[0]) + '" title="' + (brd.flag === f[0] ? "Show everything" : "Show only " + f[1]) + '"><span class="bd ' + f[2] + '"></span>' + E(f[1]) + ' <span class="ib-n">' + count(f[0]) + "</span></button>";
   }).join("");
-  var depts = '<span class="brd-depts" aria-label="Row colour: responsible person\'s department">' + BOARD_DEPTS.map(function (x) { return '<span class="brd-dkey ' + BRD_DEPT_CLASS[x] + '">' + E(shortDept(x)) + "</span>"; }).join("") + "</span>";
+  var depts = brdGov() ? "" : '<span class="brd-depts" aria-label="Row colour: responsible person\'s department">' + BOARD_DEPTS.map(function (x) { return '<span class="brd-dkey ' + BRD_DEPT_CLASS[x] + '">' + E(shortDept(x)) + "</span>"; }).join("") + "</span>";
   var people = '<select id="brdPerson" aria-label="Responsible person"><option value="">Everyone</option>' + d.people.map(function (p) {
     return '<option value="' + E(p) + '"' + (sameUser(p, brd.person) ? " selected" : "") + ">" + E(p) + "</option>";
   }).join("") + "</select>";
@@ -141,12 +164,14 @@ function renderBoard(dept) {
     var list = shown.filter(function (c) { return c.stage === s.id && brdColMatch(c, f); })
       .filter(function (c) { return !f.lines || brdLinesShown(c, f).length; })
       .sort(function (a, b) { return String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999")) || b.updatedAt - a.updatedAt; });
-    return '<section class="brd-col st-' + E(s.colour || "blue") + (s.dept === dept ? " mine" : "") + '" aria-label="' + E(s.label) + '"><header><div class="brd-colt"><b>' + E(s.label) + "</b>" + brdColFilter(s) + "</div>" +
+    return '<section class="brd-col st-' + E(s.colour || "blue") + (s.dept === dept && !brdGov() ? " mine" : "") + '" aria-label="' + E(s.label) + '"><header><div class="brd-colt"><b>' + E(s.label) + "</b>" + brdColFilter(s) + "</div>" +
       '<span class="brd-mgr" title="Files moved here are assigned to ' + E(d.managers[s.id] || "nobody yet") + '">' + list.length + " file" + (list.length === 1 ? "" : "s") + " · " + E(d.managers[s.id] || s.dept) + "</span></header>" +
       (list.length ? list.map(function (c) { return brdFileHtml(c, f); }).join("") : '<div class="brd-empty">Nothing here</div>') + "</section>";
   }).join("");
+  var lb = function (id) { return brdStage(id).label; };
   return head + '<div class="brd-cols">' + cols + "</div>" +
-    '<p class="small-note brd-cap">Click a heading or a line item for the file\'s documents, notes and history. Moving a file on assigns it to that stage\'s manager. Hard stops: sourcing ✓ before Quoted, quote ✓ and Sales Order no. before Sale Received, purchase ✓ and export licence field on every line before Purchased, location and date in before Item Received, quality sign-off before Item Sent. Numbers, certificates and licences come from Pentagon or source documents — the tracker never makes them up.</p>' +
+    '<p class="small-note brd-cap">Click a heading or a line item for the file\'s documents, notes and history. Moving a file on assigns it to that stage\'s manager. Hard stops: sourcing ✓ before ' + E(lb("quoted")) + ", quote ✓ and Sales Order no. before " + E(lb("sale")) + ", purchase ✓ and export licence field on every line before " + E(lb("purchased")) + ", location and date in before " + E(lb("received")) + ", quality sign-off before " + E(lb("sent")) + ". Numbers, certificates and licences come from Pentagon or source documents — the tracker never makes them up." +
+    (brdGov() ? " Pentagon RFQs, quotes and sales orders for the government customers listed under Stage managers show here instead of on the Operations board; POs name the vendor, so type a PO no. on the file here and it leaves the Operations board." : "") + "</p>" +
     (brd.adding ? brdNewForm() : "");
 }
 function brdFileHtml(c, f) {
@@ -185,7 +210,7 @@ function brdNewForm() {
     field("pn", "First line item: P/N") + field("desc", "Description") +
     '<div class="nb-field"><label for="bn-qty">Qty</label><input id="bn-qty" type="number" min="1" data-bn="qty" value="' + E(f.qty) + '"></div></div>' +
     '<label class="small-note" style="display:flex;gap:7px;align-items:center;"><input type="checkbox" class="check" data-bn="highlighted"' + (f.highlighted ? " checked" : "") + "> Highlighted: this part can't be found online (Google, ILS, PartsBase, Locatory)</label>" +
-    '<div class="nb-foot" style="margin-top:14px;"><span class="small-note">It starts in RFQ, assigned to ' + E(brd.data.managers.rfq || "you") + '. Pentagon RFQs show up on their own.</span><span class="grow"></span><button type="button" class="text-button" data-brd-close>Cancel</button><button type="button" class="primary" data-brd-create' + (brd.busy ? " disabled" : "") + ">Add file</button></div></div></div>";
+    '<div class="nb-foot" style="margin-top:14px;"><span class="small-note">It starts in ' + E(brdStage("rfq").label) + ", assigned to " + E(brd.data.managers.rfq || "you") + ". " + (brdGov() ? "Pentagon RFQs for the listed government customers" : "Pentagon RFQs") + ' show up on their own.</span><span class="grow"></span><button type="button" class="text-button" data-brd-close>Cancel</button><button type="button" class="primary" data-brd-create' + (brd.busy ? " disabled" : "") + ">Add file</button></div></div></div>";
 }
 
 // The side panel (the file's case file), opened from a heading or a line item.
@@ -213,7 +238,7 @@ function drawCaseFile() {
     var k = col[0], v = l[k];
     if (col[2] === "ro") return "<td>" + (v == null ? "—" : E(v) + "%") + "</td>";
     if (col[2] === "flag") return '<td class="center">' + (l.id ? '<button type="button" class="of-flag" data-brd-flagline="' + E(c.id) + '" data-lid="' + E(l.id) + '" aria-pressed="' + !!v + '" title="' + (v ? "Flagged" + (l.flaggedBy ? " by " + E(l.flaggedBy) : "") : "Flag for discussion") + '">⚑</button>' : "") + "</td>";
-    if (col[2] === "check") return '<td class="center"><input type="checkbox" class="check" data-bl="' + i + '" data-k="' + k + '"' + (v ? " checked" : "") + (k === "qualityOk" && !can.quality ? " disabled title=\"Warehouse manager signs off quality\"" : "") + (k === "highlighted" ? ' title="Can\'t be found online (Google, ILS, PartsBase, Locatory)"' : "") + "></td>";
+    if (col[2] === "check") return '<td class="center"><input type="checkbox" class="check" data-bl="' + i + '" data-k="' + k + '"' + (v ? " checked" : "") + (k === "qualityOk" && !can.quality ? ' disabled title="' + (brdGov() ? "A US Government manager" : "Warehouse manager") + ' signs off quality"' : "") + (k === "highlighted" ? ' title="Can\'t be found online (Google, ILS, PartsBase, Locatory)"' : "") + "></td>";
     return '<td><input type="' + (col[2] === "date" ? "date" : col[2] === "number" ? "number" : "text") + '" data-bl="' + i + '" data-k="' + k + '" value="' + E(v == null ? "" : v) + '"' + (col[2] === "number" ? ' min="0" step="any"' : "") + (k === "exportLicence" ? ' placeholder="As on the source document"' : "") + "></td>";
   };
   var kind = d.approvals[c.stage], appr = kind ? (c.approvals || {})[kind] || {} : null;
@@ -233,8 +258,8 @@ function drawCaseFile() {
     '<div class="brd-flags">' + c.flags.map(function (f) { var x = BRD_FLAG[f]; return x ? '<span class="bf ' + x[1] + '">' + x[0] + "</span>" : ""; }).join("") +
       '<span class="bf ' + (c.onTime === "yes" ? "bf-ok" : c.onTime === "no" ? "bf-over" : "bf-none") + '">' + E(ot) + "</span></div>" +
     '<div class="brd-grid">' +
-      fld("fileNo", "File no.") + fld("rfqNo", "RFQ no.", "From Pentagon") + fld("quoteNo", "Quote no.", "From Pentagon") +
-      fld("orderNo", "Sales Order no.", "From Pentagon, at Sale Received") + fld("poNo", "PO no.", "From Pentagon") + fld("customer", "Customer") +
+      fld("fileNo", "File no.") + fld("rfqNo", brdGov() ? "Solicitation / RFQ no." : "RFQ no.", "From Pentagon") + fld("quoteNo", brdGov() ? "Bid / quote no." : "Quote no.", "From Pentagon") +
+      fld("orderNo", "Sales Order no.", "From Pentagon, at " + brdStage("sale").label) + fld("poNo", "PO no.", "From Pentagon") + fld("customer", "Customer") +
       fld("platforms", "Platform(s)") +
       '<div class="nb-field"><label for="bf-dueDate">Due</label><input id="bf-dueDate" type="date" data-brd-f="dueDate" value="' + E(c.dueDate || "") + '"></div>' +
       '<div class="nb-field"><label for="bf-assignee">Responsible</label>' + (can.assign ? '<select id="bf-assignee" data-brd-f="assignee"><option value="">Nobody</option>' + d.people.map(function (p) { return '<option value="' + E(p) + '"' + (sameUser(p, c.assignee) ? " selected" : "") + ">" + E(p) + "</option>"; }).join("") + "</select>" : '<div class="static">' + E(c.assignee || "—") + "</div>") + "</div>" +
@@ -248,7 +273,7 @@ function drawCaseFile() {
     brdCaseBox(c) +
     (si <= 1 ? checks("rfq", "Black file — sourcing checks") : "") +
     (si >= 2 && si <= 3 ? checks("sale", "Red file — before the purchase goes for approval") : "") +
-    (kind ? '<div class="brd-approval"><div class="card-label">' + E({ sourcing: "Sourcing approval", quote: "Quote approval", purchase: "Purchase approval" }[kind]) + "</div>" +
+    (kind ? '<div class="brd-approval"><div class="card-label">' + E({ sourcing: "Sourcing approval", quote: brdGov() ? "Bid approval" : "Quote approval", purchase: "Purchase approval" }[kind]) + "</div>" +
       (appr.state ? '<p class="small-note">' + (appr.state === "approved" ? "✓ Approved" : "✗ Rejected") + " by " + E(appr.by) + " · " + E(new Date(appr.at).toLocaleString()) + (appr.note ? " — " + E(appr.note) : "") + "</p>" : "") +
       (c.approvalBlockers[kind].length ? '<p class="small-note">Not ready for approval: ' + E(c.approvalBlockers[kind].join("; ")) + ".</p>"
         : '<div class="brd-appr-row"><input id="brdApprNote" placeholder="Note (optional — say why if rejecting)"><button type="button" class="st-btn st-done" data-brd-approve="' + kind + '">✓ Approve</button><button type="button" class="st-btn st-del" data-brd-reject="' + kind + '">✗ Reject</button></div>') + "</div>" : "") +
@@ -342,6 +367,8 @@ function drawBoardSettings() {
     '<div class="grid-2" style="gap:0 14px;">' + d.stages.map(function (st) { return '<div class="nb-field"><label>' + E(st.label) + " (" + E(st.dept) + ")</label>" + pick("bs-" + st.id, s.managers[st.id], "Department default") + "</div>"; }).join("") +
     '<div class="nb-field"><label>Global manager (big-ticket rejections)</label>' + pick("bs-global", s.globalManager, "Nobody") + "</div>" +
     '<div class="nb-field"><label>Big-ticket quote, USD and up</label><input id="bs-big" type="number" min="1" value="' + E(s.bigTicket) + '"></div></div>' +
+    (brdGov() ? '<div class="nb-field"><label for="bs-customers">Government customers (one per line, spelt as the account name in Pentagon)</label><textarea id="bs-customers" rows="5">' + E((s.customers || []).join("\n")) + "</textarea></div>" +
+      '<p class="small-note">Pentagon RFQs, quotes and sales orders for these accounts show on this board instead of the Operations board. Files already on the Operations board stay there.</p>' : "") +
     '<div class="nb-foot" style="margin-top:12px;"><span class="grow"></span><button type="button" class="text-button" data-brd-close>Cancel</button><button type="button" class="primary" data-brd-savesettings>Save</button></div></div></div>');
 }
 
@@ -349,7 +376,7 @@ function drawBoardSettings() {
 // then carry on with the stored file's id.
 function brdReal(id) {
   if (String(id).indexOf("pg:") !== 0) return Promise.resolve(id);
-  return api("/api/board/adopt", { method: "POST", body: JSON.stringify({ id: id }) }).then(function (card) {
+  return api(brdUrl("/api/board/adopt"), { method: "POST", body: JSON.stringify({ id: id }) }).then(function (card) {
     brd.data.cards = brd.data.cards.filter(function (c) { return c.id !== id; });
     if (brd.open === id) brd.open = card.id;
     brdPut(card);
@@ -358,7 +385,7 @@ function brdReal(id) {
 }
 function brdApi(id, path, body, method) {
   return brdReal(id).then(function (rid) {
-    return api("/api/board/" + encodeURIComponent(rid) + path, { method: method || "POST", body: JSON.stringify(body || {}) })
+    return api(brdUrl("/api/board/" + encodeURIComponent(rid) + path), { method: method || "POST", body: JSON.stringify(body || {}) })
       .then(function (card) { if (card && card.id) brdPut(card); return card; }, function (err) { toast(err.message, true); throw err; });
   });
 }
@@ -418,11 +445,11 @@ document.addEventListener("change", function (e) {
   if (t.id === "brdFile") {
     var files = Array.prototype.slice.call(t.files || []), kd = brd.upKind || "";
     if (files.length && brd.open) brdReal(brd.open).then(function (rid) {
-      brdUpload(files, function (f) { return "/api/board/" + encodeURIComponent(rid) + "/files?name=" + encodeURIComponent(f.name) + (kd ? "&kind=" + encodeURIComponent(kd) : ""); }, function () { brd.at = 0; loadBoard(); });
+      brdUpload(files, function (f) { return brdUrl("/api/board/" + encodeURIComponent(rid) + "/files?name=" + encodeURIComponent(f.name) + (kd ? "&kind=" + encodeURIComponent(kd) : "")); }, function () { brd.at = 0; loadBoard(); });
     }, function () {});
     return;
   }
-  if (t.id === "brdCFile") { var name = brd.customer; brdUpload(t.files, function (f) { return "/api/board-customers/files?customer=" + encodeURIComponent(name) + "&name=" + encodeURIComponent(f.name); }, function () { brd.at = 0; loadBoard(); setTimeout(function () { if (brd.customer) drawCustomerFile(); }, 600); }); return; }
+  if (t.id === "brdCFile") { var name = brd.customer; brdUpload(t.files, function (f) { return brdUrl("/api/board-customers/files?customer=" + encodeURIComponent(name) + "&name=" + encodeURIComponent(f.name)); }, function () { brd.at = 0; loadBoard(); setTimeout(function () { if (brd.customer) drawCustomerFile(); }, 600); }); return; }
   if (t.dataset && t.dataset.brdCheck && brd.open) { var o = {}; o[t.dataset.brdCheck] = t.checked; brdApi(brd.open, "", { checks: o }, "PATCH"); return; }
   if (t.dataset && t.dataset.bl != null && t.type === "checkbox") return; // saved with the lines
   if (t.dataset && t.dataset.brdF && brd.open) {
@@ -458,7 +485,7 @@ document.addEventListener("click", function (e) {
     var f = brd.draft;
     if (!String(f.customer).trim()) { toast("Who's the customer?", true); return; }
     brd.busy = true; render();
-    api("/api/board", { method: "POST", body: JSON.stringify({ company: f.company, customer: f.customer, platforms: f.platforms, fileNo: f.fileNo, rfqNo: f.rfqNo, quoteNo: f.quoteNo, dueDate: f.dueDate,
+    api(brdUrl("/api/board"), { method: "POST", body: JSON.stringify({ company: f.company, customer: f.customer, platforms: f.platforms, fileNo: f.fileNo, rfqNo: f.rfqNo, quoteNo: f.quoteNo, dueDate: f.dueDate,
       lines: f.pn ? [{ pn: f.pn, desc: f.desc, qty: f.qty, highlighted: f.highlighted }] : [] }) })
       .then(function (card) { brd.busy = false; brd.adding = false; brdPut(card); brd.open = card.id; brd.lineDraft = null; drawCaseFile(); render(); }, function (err) { brd.busy = false; render(); toast(err.message, true); });
     return;
@@ -468,7 +495,9 @@ document.addEventListener("click", function (e) {
   if ("brdSettings" in ds) { brd.settings = true; drawBoardSettings(); return; }
   if ("brdSavesettings" in ds) {
     var m = {}; brd.data.stages.forEach(function (st) { var v = $("#bs-" + st.id).value; if (v) m[st.id] = v; });
-    api("/api/board-settings", { method: "PUT", body: JSON.stringify({ managers: m, globalManager: $("#bs-global").value, bigTicket: $("#bs-big").value }) })
+    var bs = { managers: m, globalManager: $("#bs-global").value, bigTicket: $("#bs-big").value };
+    if ($("#bs-customers")) bs.customers = $("#bs-customers").value.split("\n").map(function (x) { return x.trim(); }).filter(Boolean);
+    api(brdUrl("/api/board-settings"), { method: "PUT", body: JSON.stringify(bs) })
       .then(function () { toast("Stage managers saved."); closeBrdModal(); brd.at = 0; loadBoard(); }, function (err) { toast(err.message, true); });
     return;
   }
@@ -509,8 +538,8 @@ document.addEventListener("click", function (e) {
     return;
   }
   if ("brdCupload" in ds) { $("#brdCFile").click(); return; }
-  if ("brdDl" in ds) { var c1 = brdCard(id), meta = c1 && (c1.files || []).filter(function (x) { return x.id === ds.brdDl; })[0]; brdDownload("/api/board/" + encodeURIComponent(id) + "/files/" + encodeURIComponent(ds.brdDl), meta && meta.name); return; }
-  if ("brdCdl" in ds) { var fl = (((brd.data.customers || {})[brd.customer] || {}).files || []).filter(function (x) { return x.id === ds.brdCdl; })[0]; brdDownload("/api/board-customers/files/" + encodeURIComponent(ds.brdCdl), fl && fl.name); return; }
+  if ("brdDl" in ds) { var c1 = brdCard(id), meta = c1 && (c1.files || []).filter(function (x) { return x.id === ds.brdDl; })[0]; brdDownload(brdUrl("/api/board/" + encodeURIComponent(id) + "/files/" + encodeURIComponent(ds.brdDl)), meta && meta.name); return; }
+  if ("brdCdl" in ds) { var fl = (((brd.data.customers || {})[brd.customer] || {}).files || []).filter(function (x) { return x.id === ds.brdCdl; })[0]; brdDownload(brdUrl("/api/board-customers/files/" + encodeURIComponent(ds.brdCdl)), fl && fl.name); return; }
   if ("brdArchive" in ds) {
     var arch = ds.brdArchive === "1";
     if (arch && !confirm("Archive this file? It leaves the board but its documents, notes and history are kept.")) return;

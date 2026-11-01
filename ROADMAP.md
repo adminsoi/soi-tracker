@@ -110,7 +110,31 @@ Mentions of You, and files created automatically from Pentagon.
       roles. Column headers show the stage colour; each file's stripe shows
       its responsible person's department. Attachments stay in
       `board_files/<file id>/`.
-- [ ] **3. US Gov Kanban** (reuses Phase 2).
+- [ ] **3. US Gov Kanban** (reuses Phase 2). Built on `staging`, not yet
+      tested there. The user's answers: columns Solicitation → Bid
+      Submitted → Awarded → Purchased → Item Received → Delivered; only US
+      Government (plus full-access and leadership) see or work it; Pentagon
+      feeds it by a government-customer list; same cost / mark-up / margin
+      roles, approvals and hard stops as Operations.
+      - Same code as the Operations board with a board parameter: the
+        routes take `?board=usgov`; `board.js` has `US_GOV_STAGES` (same
+        stage ids, so every rule carries over); `aog-board.js` keeps one
+        state per board (`BRDS`, `brd` is the one on screen).
+      - Kept apart in S3: `usgov_board.json`, `usgov_board_files/<file>/`,
+        `usgov_board_customers/`; settings under `settings.usgovBoard`
+        (stage managers, global manager, big-ticket, `customers`).
+      - Pentagon RFQs, quotes and sales orders whose account name matches
+        the list (Stage managers on the US Gov board, leadership only) go
+        to the US Gov board instead of Operations. POs carry the vendor,
+        not the customer, so they stay on Operations until their number is
+        typed on a US Gov file. Files already stored on Operations stay
+        there.
+      - Next steps on US Gov files become US Government tasks, so they show
+        on Mentions of You (and bring back US Gov's Tasks tab while open).
+      - Still open: the Procurement / Purchasing Pentagon list tabs (RFQs,
+        Quotes, SOs, POs) still list government documents; and a Pentagon
+        contact who isn't in US Government can be the responsible person
+        on a US Gov file without being able to open the board.
 - [ ] **4. Administration** — IT, Admin, HR (incl. leave, payroll,
       performance), Finance.
 - [ ] **5. People** — employment file and spot bonus.
