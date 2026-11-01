@@ -137,10 +137,11 @@ Mentions of You, and files created automatically from Pentagon.
         Quotes, SOs, POs) still list government documents; and a Pentagon
         contact who isn't in US Government can be the responsible person
         on a US Gov file without being able to open the board.
-- [ ] **4. Administration** — IT, Admin, HR (incl. leave, payroll,
-      performance), Finance. Built on `staging` 31 Oct 2026; not yet
-      tested on the staging stack. The user's answers: leave is approved
-      by a manager in the person's department, then HR; reimbursements go
+- [x] **4. Administration** — IT, Admin, HR (incl. leave, payroll,
+      performance), Finance. Tested on staging and redeployed 31 Oct 2026;
+      Payroll still waits for HR's leave rules. The user's answers: leave
+      needs a cover person, then a manager in the person's department, then
+      an HR manager, one at a time on Mentions of You (no HR shortcut); reimbursements go
       Submitted → Finance checked → Approved to pay → Paid (plus
       Rejected), Finance only; the old Finance tables split into
       Approvals / Transfers / Balances (expected receipts later moved to
