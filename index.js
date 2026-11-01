@@ -60,6 +60,8 @@ const {
   withStaffForms,
   getPayroll,
   withPayroll,
+  getPeople,
+  withPeople,
 } = require("./s3store");
 const { sendMail, mailConfigured, MAIL_FROM } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError, nameFromTitle } = require("./calendar");
@@ -68,6 +70,7 @@ const { itRequestsConfigured, fetchItRequests, IT_REQUESTS_MAILBOX, parseFormWor
 const { inboxThreads, syncFollowIndex, MailError } = require("./mail");
 const board = require("./board");
 const forms = require("./staffforms");
+const employment = require("./people");
 const { pentagonQuery } = require("./pentagon");
 const {
   PENTAGON_VIEWS,
@@ -4678,6 +4681,263 @@ app.delete(
   asyncHandler(async (req, res) => {
     await withPayroll((doc) => { payrollShape(doc); doc.adjustments = doc.adjustments.filter((a) => a.id !== req.params.id); });
     res.json({ ok: true });
+  })
+);
+
+// ---------- People (ROADMAP.md Phase 5) ----------
+// Leadership only, checked on every route: every login with its employment
+// file (people.json, documents under people_files/<file id>/) and a
+// one-click $100 spot bonus on the next pay week. Weekly base pay, pay
+// currency and entity are Payroll's (payroll.json), so both pages show the
+// same figures. History is read from what's already stored: approved
+// leave, payroll adjustments and performance comments. Rules in people.js.
+const peopleOnly = (req, res, next) => (employment.isLeadership(req.user) ? next() : res.status(403).json({ error: "People is for Leadership only" }));
+
+function payEntityFor(payroll, u) {
+  const ent = ((payroll.people || {})[u.username] || {}).entity;
+  return PAY_ENTITY_LABEL[ent] ? ent : COMPANY_ENTITY[u.companies[0]] || "SOI";
+}
+// One row of the list (and the top of a file).
+function personSummary(u, file, payroll) {
+  const f = file || {};
+  return {
+    username: u.username, email: String(u.email || "").trim().toLowerCase(), companies: u.companies, entity: payEntityFor(payroll, u),
+    department: f.department || u.departments[0] || "", departments: u.fullAccess ? ["Full access"] : u.departments, role: employment.roleLabel(u),
+    jobTitle: f.jobTitle || "", manager: f.manager || "", employmentType: f.employmentType || "", startDate: f.startDate || "",
+  };
+}
+async function personLogin(username) {
+  return (await getUsers()).map(normalizeUser).find((u) => sameUser(u.username, username)) || null;
+}
+const peopleLog = (file, by, what) => { file.history.push({ at: Date.now(), by, what }); file.history = file.history.slice(-200); };
+
+app.get(
+  "/api/people",
+  authMiddleware,
+  peopleOnly,
+  asyncHandler(async (req, res) => {
+    const [users, doc, payroll] = await Promise.all([getUsers(), getPeople(), getPayroll()]);
+    employment.peopleShape(doc);
+    payrollShape(payroll);
+    const list = users.map(normalizeUser).map((u) => personSummary(u, doc.people[u.username], payroll))
+      .sort((a, b) => a.username.toLowerCase().localeCompare(b.username.toLowerCase()));
+    res.json({ people: list, entityLabels: PAY_ENTITY_LABEL });
+  })
+);
+
+// One person's employment file, pay (from Payroll) and history.
+app.get(
+  "/api/people/:username",
+  authMiddleware,
+  peopleOnly,
+  asyncHandler(async (req, res) => {
+    const login = await personLogin(req.params.username);
+    if (!login) return res.status(404).json({ error: "No login by that name" });
+    const [users, doc, payroll, stored, perfDoc, seesPerf] = await Promise.all([getUsers(), getPeople(), getPayroll(), getStaffForms(), getPerformance(), hasPerformance(req.user)]);
+    employment.peopleShape(doc);
+    payrollShape(payroll);
+    const f = doc.people[login.username] || {};
+    const p = payroll.people[login.username] || {};
+    const today = perfOfficeToday();
+    const entity = payEntityFor(payroll, login);
+    const items = stored.items || [];
+    // The Performance tracker is private: only a summary, and only for
+    // Leadership who also have Performance access.
+    let performance = null;
+    const perfRec = seesPerf ? (perfShape(perfDoc).people[login.username] || null) : null;
+    if (perfRec && !perfRec.hidden) {
+      const st = perfStatus(perfRec, await perfSettings(), today);
+      performance = { stageLabel: st.stageLabel, stageDate: st.stageDate, notes: (perfRec.entries || []).length };
+    }
+    res.json(Object.assign(personSummary(login, f, payroll), {
+      emergency: f.emergency || {}, notes: f.notes || "", files: f.files || [],
+      history: (f.history || []).slice().reverse(), updatedBy: f.updatedBy || "", updatedAt: f.updatedAt || 0,
+      pay: { basePay: p.basePay == null ? null : p.basePay, currency: p.currency || "", entity: PAY_ENTITY_LABEL[p.entity] ? p.entity : "", employeeId: p.employeeId || "", entityCurrency: (payroll.entities[entity] || {}).currency || "" },
+      spot: { amount: employment.SPOT_BONUS.amount, week: employment.nextPayWeek(today), currency: employment.payCurrency(payroll, login.username, entity, forms.CURRENCIES) },
+      leave: items.filter((i) => i.kind === "leave" && i.status === "approved" && sameUser(i.by, login.username))
+        .map((i) => ({ id: i.id, fields: i.fields, status: i.status })).sort((a, b) => String(b.fields.from).localeCompare(String(a.fields.from))),
+      adjustments: payroll.adjustments.filter((a) => sameUser(a.person, login.username))
+        .map((a) => Object.assign({}, a, { removable: !employment.spotBonusLock(a, today) }))
+        .sort((a, b) => String(b.week).localeCompare(String(a.week)) || (b.at || 0) - (a.at || 0)),
+      perfComments: items.filter((i) => i.kind === "perf_comment" && i.status !== "cancelled" && sameUser((i.fields || {}).about, login.username))
+        .map((i) => ({ id: i.id, by: i.by, at: i.at, status: i.status, fields: i.fields })).sort((a, b) => b.at - a.at),
+      performance, today,
+      options: {
+        departments: DEPARTMENTS, logins: users.map((u) => u.username).filter((n) => !sameUser(n, login.username)).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())),
+        employmentTypes: employment.EMPLOYMENT_TYPES, currencies: forms.CURRENCIES, entities: PAY_ENTITY_LABEL,
+      },
+    }));
+  })
+);
+
+// Save the employment file. basePay, currency and entity are written to
+// Payroll (the same record HR → Payroll edits).
+app.put(
+  "/api/people/:username",
+  authMiddleware,
+  peopleOnly,
+  asyncHandler(async (req, res) => {
+    const users = (await getUsers()).map(normalizeUser);
+    const login = users.find((u) => sameUser(u.username, req.params.username));
+    if (!login) return res.status(404).json({ error: "No login by that name" });
+    const b = req.body || {};
+    const clean = employment.cleanFile(b, DEPARTMENTS, users.map((u) => u.username).filter((n) => !sameUser(n, login.username)));
+    if (clean.error) return res.status(400).json({ error: clean.error });
+    const pay = {};
+    if ("basePay" in b) {
+      const n = Math.round(Number(b.basePay) * 100) / 100;
+      if (b.basePay === "" || b.basePay == null) pay.basePay = null;
+      else if (Number.isFinite(n) && n >= 0 && n < 1e6) pay.basePay = n;
+      else return res.status(400).json({ error: "Enter the weekly base pay as a number" });
+    }
+    if ("currency" in b) pay.currency = forms.CURRENCIES.includes(b.currency) ? b.currency : "";
+    if ("entity" in b) pay.entity = PAY_ENTITY_LABEL[b.entity] ? b.entity : "";
+    if (Object.keys(pay).length && sameUser(login.username, req.user.username)) return res.status(403).json({ error: "Someone else in Leadership (or HR) changes your own pay" });
+    const changed = [];
+    if (Object.keys(pay).length) {
+      await withPayroll((doc) => {
+        payrollShape(doc);
+        const p = (doc.people[login.username] = doc.people[login.username] || {});
+        for (const k of Object.keys(pay)) {
+          if ((p[k] == null ? "" : String(p[k])) !== (pay[k] == null ? "" : String(pay[k]))) changed.push({ basePay: "base pay", currency: "pay currency", entity: "entity" }[k]);
+          p[k] = pay[k];
+        }
+        if (changed.length) { p.updatedBy = req.user.username; p.updatedAt = Date.now(); }
+      });
+    }
+    await withPeople((doc) => {
+      const f = employment.fileOf(employment.peopleShape(doc), login.username, newId);
+      changed.unshift(...employment.changedFields(f, clean.fields));
+      Object.assign(f, clean.fields);
+      if (changed.length) {
+        peopleLog(f, req.user.username, "Updated " + changed.join(", "));
+        f.updatedBy = req.user.username;
+        f.updatedAt = Date.now();
+      }
+    });
+    res.json({ ok: true, changed });
+  })
+);
+
+// Supporting documents (contract, offer letter, certificates), up to 10 MB.
+app.post(
+  "/api/people/:username/files",
+  authMiddleware,
+  peopleOnly,
+  express.raw({ type: () => true, limit: "10mb" }),
+  asyncHandler(async (req, res) => {
+    const login = await personLogin(req.params.username);
+    if (!login) return res.status(404).json({ error: "No login by that name" });
+    const name = String(req.query.name || "file").replace(/[\\/\r\n"]+/g, "_").slice(0, 160);
+    const ext = (name.match(/\.([a-z0-9]{2,5})$/i) || [])[1];
+    const type = ext && PERF_FILE_TYPES[ext.toLowerCase()];
+    if (!type) return res.status(400).json({ error: "Attach a PDF, image, Word, Excel, text or email file" });
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "No file came through" });
+    const meta = { id: newId(), name, type, size: req.body.length, at: Date.now(), by: req.user.username };
+    // The folder id is made (and saved) before the upload so the file is never orphaned.
+    const folder = await withPeople((doc) => employment.fileOf(employment.peopleShape(doc), login.username, newId).id);
+    await putFile(`people_files/${folder}/${meta.id}`, req.body, type);
+    await withPeople((doc) => {
+      const f = employment.fileOf(employment.peopleShape(doc), login.username, newId);
+      f.files.push(meta);
+      peopleLog(f, req.user.username, "Added " + name);
+    });
+    res.status(201).json(meta);
+  })
+);
+app.get(
+  "/api/people/:username/files/:fid",
+  authMiddleware,
+  peopleOnly,
+  asyncHandler(async (req, res) => {
+    const login = await personLogin(req.params.username);
+    const f = login && employment.peopleShape(await getPeople()).people[login.username];
+    const meta = f && (f.files || []).find((x) => x.id === req.params.fid);
+    const file = meta && (await getFile(`people_files/${f.id}/${meta.id}`));
+    if (!file) return res.status(404).json({ error: "That file isn't here" });
+    res.set({ "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${meta.name.replace(/[^\w .()-]+/g, "_")}"`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" });
+    res.send(file.body);
+  })
+);
+app.delete(
+  "/api/people/:username/files/:fid",
+  authMiddleware,
+  peopleOnly,
+  asyncHandler(async (req, res) => {
+    const login = await personLogin(req.params.username);
+    if (!login) return res.status(404).json({ error: "No login by that name" });
+    const gone = await withPeople((doc) => {
+      const f = employment.fileOf(employment.peopleShape(doc), login.username, newId);
+      const i = f.files.findIndex((x) => x.id === req.params.fid);
+      if (i === -1) return null;
+      const meta = f.files.splice(i, 1)[0];
+      peopleLog(f, req.user.username, "Removed " + meta.name);
+      return { folder: f.id, id: meta.id };
+    });
+    if (!gone) return res.status(404).json({ error: "That file isn't here" });
+    await deleteFile(`people_files/${gone.folder}/${gone.id}`).catch(() => {});
+    res.status(204).end();
+  })
+);
+
+// Spot bonus: $100 (in the person's pay currency, else USD) as an
+// adjustment on the next pay week, shown on HR → Payroll. The browser sends
+// the currency it showed in the confirm; if that has changed since, nothing
+// is added. A second click within 10 seconds doesn't add another.
+app.post(
+  "/api/people/:username/spot-bonus",
+  authMiddleware,
+  peopleOnly,
+  asyncHandler(async (req, res) => {
+    const login = await personLogin(req.params.username);
+    if (!login) return res.status(404).json({ error: "No login by that name" });
+    if (sameUser(login.username, req.user.username)) return res.status(403).json({ error: "You can't give yourself a spot bonus" });
+    const b = req.body || {};
+    const reason = forms.text(b.reason, 200) || "Spot bonus";
+    const week = employment.nextPayWeek(perfOfficeToday());
+    let out = null, problem = "", created = false;
+    await withPayroll((doc) => {
+      payrollShape(doc);
+      const currency = employment.payCurrency(doc, login.username, payEntityFor(doc, login), forms.CURRENCIES);
+      if (b.currency && b.currency !== currency) { problem = `Their pay currency is now ${currency} — reload and try again`; return; }
+      out = doc.adjustments.find((a) => a.source === employment.SPOT_BONUS.source && sameUser(a.person, login.username) && sameUser(a.by, req.user.username) && Date.now() - (a.at || 0) < 10000);
+      if (out) return;
+      out = {
+        id: newId(), person: login.username, week, amount: employment.SPOT_BONUS.amount, currency,
+        reason, source: employment.SPOT_BONUS.source, by: req.user.username, at: Date.now(),
+      };
+      doc.adjustments.push(out);
+      created = true;
+    });
+    if (problem) return res.status(409).json({ error: problem });
+    if (created) {
+      await withPeople((doc) => { peopleLog(employment.fileOf(employment.peopleShape(doc), login.username, newId), req.user.username, `Spot bonus ${out.currency} ${out.amount} for the week of ${out.week}: ${reason}`); });
+    }
+    res.status(created ? 201 : 200).json(out);
+  })
+);
+// Take a spot bonus back while its pay week hasn't ended (see people.js).
+app.delete(
+  "/api/people/:username/spot-bonus/:id",
+  authMiddleware,
+  peopleOnly,
+  asyncHandler(async (req, res) => {
+    const login = await personLogin(req.params.username);
+    if (!login) return res.status(404).json({ error: "No login by that name" });
+    const today = perfOfficeToday();
+    let gone = null, problem = "";
+    await withPayroll((doc) => {
+      payrollShape(doc);
+      const adj = doc.adjustments.find((a) => a.id === req.params.id && sameUser(a.person, login.username));
+      if (!adj) { problem = "That spot bonus isn't here"; return; }
+      problem = employment.spotBonusLock(adj, today);
+      if (problem) return;
+      doc.adjustments = doc.adjustments.filter((a) => a !== adj);
+      gone = adj;
+    });
+    if (problem) return res.status(400).json({ error: problem });
+    await withPeople((doc) => { peopleLog(employment.fileOf(employment.peopleShape(doc), login.username, newId), req.user.username, `Removed the spot bonus for the week of ${gone.week}`); });
+    res.status(204).end();
   })
 );
 

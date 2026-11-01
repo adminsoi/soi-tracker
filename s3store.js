@@ -164,6 +164,12 @@ function getStaffForms() {
 function getPayroll() {
   return readJson("payroll", {});
 }
+// People (Leadership only): { people: { username: { id, jobTitle, …,
+// files: [...] } } } — documents via putFile under people_files/<id>/.
+// Base pay stays in payroll.
+function getPeople() {
+  return readJson("people", {});
+}
 
 // In-process queues so concurrent requests to this same container don't
 // clobber each other's read-modify-write cycle.
@@ -182,6 +188,7 @@ let mailIndexQueue = Promise.resolve();
 let boardQueue = Promise.resolve();
 let staffFormsQueue = Promise.resolve();
 let payrollQueue = Promise.resolve();
+let peopleQueue = Promise.resolve();
 
 function withUsers(mutator) {
   usersQueue = usersQueue.then(async () => {
@@ -338,11 +345,23 @@ function withPayroll(mutator) {
   return payrollQueue;
 }
 
+function withPeople(mutator) {
+  peopleQueue = peopleQueue.then(async () => {
+    const doc = await getPeople();
+    const result = await mutator(doc);
+    await writeJson("people", doc);
+    return result;
+  });
+  return peopleQueue;
+}
+
 module.exports = {
   getStaffForms,
   withStaffForms,
   getPayroll,
   withPayroll,
+  getPeople,
+  withPeople,
   getBoard,
   withBoard,
   getMailIndex,
