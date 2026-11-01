@@ -8,8 +8,8 @@
 // Approvals is everything above "Approved to pay": bills waiting for a
 // manager's approval and staff reimbursements still being checked.
 // Transfers is "Approved to pay" and below: approved bills and
-// reimbursements, until they're paid. Balances keeps bank balances and
-// expected receipts. Every table has per-column filters.
+// reimbursements, until they're paid, then expected receipts. Balances
+// keeps bank balances. Every table has per-column filters.
 var FIN_SUBS = ["approvals", "transfers", "balances"];
 // Shared by every Finance tab: loads the tables, or says why it can't.
 function financeReady() {
@@ -143,12 +143,19 @@ function renderFinanceTransfers() {
     { key: "src", label: "Source", get: finSrc }
   ];
   var x = finFiltered("fin:approved", fields, f.approvedToPay);
+  var r = finFiltered("fin:receipts", [
+    { key: "party", label: "Customer / vendor", get: function (x) { return x.party; } },
+    { key: "exp", label: "Expected", get: function (x) { return dueBucket(x.expected); } },
+    { key: "rec", label: "Received", get: function (x) { return x.received ? "Received" : "Not received"; } },
+    { key: "src", label: "Source", get: finSrc }
+  ], f.expectedReceipts);
+  var unreceived = f.expectedReceipts.filter(function (x) { return !x.received; });
   return '<div class="summary-cards four">' +
     metric("Bills approved to pay", money(sum(f.approvedToPay.filter(function (r) { return !r.paid; }), "amount")), f.approvedToPay.filter(function (r) { return !r.paid; }).length + " not paid yet") +
     metric("Bills paid", f.approvedToPay.filter(function (r) { return r.paid; }).length, "Ticked paid") +
     metric("Reimbursements to pay", finReimbCount(["approved"]), "Approved to pay") +
     metric("Reimbursements paid", finReimbCount(["paid"]), "Marked paid") + "</div>" +
-    finBanner() +
+    pgNote(f) + finBanner() +
     finSect("Approved to pay", "Untick Approved to send a bill back to Approvals. Tick Paid once the transfer has gone.", "", "") + x.ui +
     finTable(["Vendor", "Amount", "Due", "Approved on", "Notes", "Approved", "Paid", ""], x.list.map(function (r) {
       return '<tr class="' + (r.paid ? "done" : "") + '"><td>' + finCell("approvedToPay", r, "vendor", "text", "Vendor") + "</td><td>" + finCell("approvedToPay", r, "amount", "number", "0.00") + "</td><td>" + finCell("approvedToPay", r, "due", "date") +
@@ -156,7 +163,13 @@ function renderFinanceTransfers() {
         '</td><td class="center"><input class="check" type="checkbox" checked data-unapprove="' + E(r.id) + '"' + (mgr ? "" : " disabled") + ' aria-label="Remove approval"></td><td class="center">' + finTick("approvedToPay", r, "paid", "Paid") + "</td><td>" + finDel("approvedToPay", r) + "</td></tr>";
     }), 8, f.approvedToPay.length ? "Nothing matches these filters." : "No approved payments yet.") +
     finReimbSection("Reimbursements", "Approved to pay, then Paid once the money has gone to the person. A Finance manager can send one back to Finance checked.",
-      ["approved", "paid"], ["checked", "approved", "paid"], "fin:reimb-transfers", true);
+      ["approved", "paid"], ["checked", "approved", "paid"], "fin:reimb-transfers", true) +
+    // Expected receipts sit below Reimbursements (moved from Balances).
+    finSect("Expected receipts", "Money coming in: who from, how much and when. " + money(sum(unreceived, "amount")) + " still to receive from " + unreceived.length + ".", "expectedReceipts", "Add receipt") + r.ui +
+    finTable(["Customer / vendor", "Amount", "Expected", "Received", "Notes", ""], r.list.map(function (x) {
+      return '<tr class="' + (x.received ? "done " : "") + (x.expected && !x.received && x.expected < today ? "overdue" : "") + '"><td>' + finCell("expectedReceipts", x, "party", "text", "Customer or vendor") + "</td><td>" + finCell("expectedReceipts", x, "amount", "number", "0.00") +
+        "</td><td>" + finCell("expectedReceipts", x, "expected", "date") + '</td><td class="center">' + finTick("expectedReceipts", x, "received", "Received") + '</td><td class="notes-cell">' + finCell("expectedReceipts", x, "notes", "textarea") + "</td><td>" + finDel("expectedReceipts", x) + "</td></tr>";
+    }), 6, f.expectedReceipts.length ? "Nothing matches these filters." : "No expected receipts yet.");
 }
 
 // ---- Balances ----
@@ -164,33 +177,19 @@ function renderFinanceBalances() {
   var wait = financeReady();
   if (wait) return wait;
   var f = finance.data;
-  setQuickAdd("Add receipt", "fin:expectedReceipts");
-  var unreceived = f.expectedReceipts.filter(function (r) { return !r.received; });
+  setQuickAdd("Add account", "fin:accounts");
   var a = finFiltered("fin:accounts", [
     { key: "name", label: "Account", get: function (r) { return r.name; } },
     { key: "src", label: "Source", get: finSrc }
   ], f.accounts);
-  var r = finFiltered("fin:receipts", [
-    { key: "party", label: "Customer / vendor", get: function (x) { return x.party; } },
-    { key: "exp", label: "Expected", get: function (x) { return dueBucket(x.expected); } },
-    { key: "rec", label: "Received", get: function (x) { return x.received ? "Received" : "Not received"; } },
-    { key: "src", label: "Source", get: finSrc }
-  ], f.expectedReceipts);
   return '<div class="summary-cards">' +
-    metric("Bank balances", money(sum(f.accounts, "balance")), "Across " + f.accounts.length + " account" + (f.accounts.length === 1 ? "" : "s")) +
-    metric("Expected in", money(sum(unreceived, "amount")), unreceived.length + " still to receive") +
-    metric("Overdue receipts", unreceived.filter(function (x) { return x.expected && x.expected < today; }).length, "Past their expected date", unreceived.some(function (x) { return x.expected && x.expected < today; })) + "</div>" +
+    metric("Bank balances", money(sum(f.accounts, "balance")), "Across " + f.accounts.length + " account" + (f.accounts.length === 1 ? "" : "s")) + "</div>" +
     pgNote(f) + finBanner() +
     finSect("Bank accounts", f.pentagon ? "Balances from Pentagon, plus any entered by hand." : "Current balances, entered by hand.", "accounts", "Add account") + a.ui +
     finTable(["Account", "Balance", "As of", "Notes", ""], a.list.map(function (x) {
       return "<tr><td>" + finCell("accounts", x, "name", "text", "Account name") + "</td><td>" + finCell("accounts", x, "balance", "number", "0.00") + "</td><td>" + finCell("accounts", x, "asOf", "date") +
         '</td><td class="notes-cell">' + finCell("accounts", x, "notes", "textarea") + "</td><td>" + finDel("accounts", x) + "</td></tr>";
-    }), 5, f.accounts.length ? "Nothing matches these filters." : "No accounts yet.") +
-    finSect("Expected receipts", "Money coming in: who from, how much and when.", "expectedReceipts", "Add receipt") + r.ui +
-    finTable(["Customer / vendor", "Amount", "Expected", "Received", "Notes", ""], r.list.map(function (x) {
-      return '<tr class="' + (x.received ? "done " : "") + (x.expected && !x.received && x.expected < today ? "overdue" : "") + '"><td>' + finCell("expectedReceipts", x, "party", "text", "Customer or vendor") + "</td><td>" + finCell("expectedReceipts", x, "amount", "number", "0.00") +
-        "</td><td>" + finCell("expectedReceipts", x, "expected", "date") + '</td><td class="center">' + finTick("expectedReceipts", x, "received", "Received") + '</td><td class="notes-cell">' + finCell("expectedReceipts", x, "notes", "textarea") + "</td><td>" + finDel("expectedReceipts", x) + "</td></tr>";
-    }), 6, f.expectedReceipts.length ? "Nothing matches these filters." : "No expected receipts yet.");
+    }), 5, f.accounts.length ? "Nothing matches these filters." : "No accounts yet.");
 }
 
 function financeOp(body, okMsg) {

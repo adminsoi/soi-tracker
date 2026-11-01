@@ -143,7 +143,8 @@ Mentions of You, and files created automatically from Pentagon.
       by a manager in the person's department, then HR; reimbursements go
       Submitted → Finance checked → Approved to pay → Paid (plus
       Rejected), Finance only; the old Finance tables split into
-      Approvals / Transfers / Balances; Payroll stores weekly base pay;
+      Approvals / Transfers / Balances (expected receipts later moved to
+      Transfers, below Reimbursements, at the user's request); Payroll stores weekly base pay;
       leave types Annual, Sick, Unpaid, Parental, Bereavement, Jury duty,
       Other; admin request categories "Snacks, coffee & tea" and "Office
       & supplies"; a receipt is required for reimbursements.
