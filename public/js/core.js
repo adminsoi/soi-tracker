@@ -29,7 +29,13 @@ var OPS_DEPTS = ["Procurement", "Purchasing", "Warehouse"];
 var ADMIN_DEPTS = ["IT", "Administrative", "HR", "Accounting & Finance"];
 var lastDeptIn = {}; // group -> last department opened there
 function deptGroup(d) { return ADMIN_DEPTS.indexOf(d) !== -1 ? "admin" : "main"; }
-function deptsIn(group) { return visibleDepartments().filter(function (d) { return deptGroup(d) === group; }); }
+// Everyone gets Administration: its Staff-Facing forms are for all staff.
+// Department-Facing is only for the department's own people (inMyDept).
+function deptsIn(group) {
+  if (group === "admin") return ADMIN_DEPTS.filter(function (d) { return !DEPARTMENTS.length || DEPARTMENTS.indexOf(d) !== -1; });
+  return visibleDepartments().filter(function (d) { return deptGroup(d) === group; });
+}
+function inMyDept(d) { return !!(me.fullAccess || me.departments.indexOf(d) !== -1); }
 function groupHome(group) {
   var list = deptsIn(group), last = lastDeptIn[group];
   return last && list.indexOf(last) !== -1 ? last : list[0] || "";
@@ -384,7 +390,7 @@ document.addEventListener("focusout", function () {
 // ---------- Routing ----------
 // Performance lives on HR → Department-Facing; people with Performance
 // but no HR tab keep it in the sidebar.
-function perfInHr() { return !!me.performance && deptsIn("admin").indexOf("HR") !== -1; }
+function perfInHr() { return !!me.performance && inMyDept("HR"); }
 function navItems() {
   var items = [];
   if (deptsIn("main").length) items.push({ id: "departments", ic: "▣", label: "Operations" });
@@ -409,7 +415,7 @@ function navItems() {
 function readHash() {
   var h = decodeURIComponent((location.hash || "").replace(/^#/, ""));
   var parts = h.split("/");
-  if (parts[0] === "dept" && parts[1] && visibleDepartments().indexOf(parts[1]) !== -1) { page = "departments"; activeDept = parts[1]; }
+  if (parts[0] === "dept" && parts[1] && (visibleDepartments().indexOf(parts[1]) !== -1 || deptsIn("admin").indexOf(parts[1]) !== -1)) { page = "departments"; activeDept = parts[1]; }
   else if (parts[0] === "administration" && groupHome("admin")) { page = "departments"; activeDept = groupHome("admin"); }
   else if (parts[0] === "operations" && groupHome("main")) { page = "departments"; activeDept = groupHome("main"); }
   // Old links to Performance open it on HR.

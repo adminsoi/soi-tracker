@@ -56,6 +56,10 @@ const {
   withMailIndex,
   getQbr,
   withQbr,
+  getStaffForms,
+  withStaffForms,
+  getPayroll,
+  withPayroll,
 } = require("./s3store");
 const { sendMail, mailConfigured, MAIL_FROM } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError, nameFromTitle } = require("./calendar");
@@ -63,6 +67,7 @@ const { hrEvents, cleanFeedUrl, FeedError } = require("./hrcal");
 const { itRequestsConfigured, fetchItRequests, IT_REQUESTS_MAILBOX, parseFormWorkbook, recordFromEmail, FormFileError, officeStamp } = require("./itrequests");
 const { inboxThreads, syncFollowIndex, MailError } = require("./mail");
 const board = require("./board");
+const forms = require("./staffforms");
 const { pentagonQuery } = require("./pentagon");
 const {
   PENTAGON_VIEWS,
@@ -4212,6 +4217,280 @@ app.post(
     while (itRequestsRunning) await new Promise((r) => setTimeout(r, 300));
     await syncItRequests();
     res.json(itSyncStatus());
+  })
+);
+
+// ---------- Administration: staff forms (ROADMAP.md Phase 4) ----------
+// Each Administration department's Staff-Facing tab has forms for everyone:
+// IT ticket, admin request, HR issue / leave request / performance comment,
+// reimbursement. The rules are in staffforms.js. Staff see only their own;
+// the department sees its own kinds; HR's kinds are HR, Leadership and full
+// access only. IT tickets become IT requests (IT → Requests), as before.
+function loginsByName(users) {
+  return new Map(users.map((u) => [String(u.username).toLowerCase(), normalizeUser(u)]));
+}
+const formLog = (item, by, what, pub) => { (item.history = item.history || []).push({ at: Date.now(), by, what, public: !!pub }); };
+
+// Your own forms (every department), your own IT tickets, and leave waiting
+// for your approval.
+app.get(
+  "/api/staff-forms/mine",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const [doc, itList, tasks, users] = await Promise.all([getStaffForms(), getItRequests(), getTasks(), getUsers()]);
+    const items = doc.items || [];
+    const logins = loginsByName(users);
+    const taskById = new Map(tasks.map((t) => [t.id, t]));
+    const approvals = [];
+    for (const i of items) {
+      if (i.kind !== "leave") continue;
+      const step = forms.leaveStep(req.user, i, logins.get(String(i.by).toLowerCase()));
+      if (step) approvals.push(Object.assign(forms.forRequester(i), { step }));
+    }
+    res.json({
+      items: items.filter((i) => sameUser(i.by, req.user.username)).map(forms.forRequester),
+      tickets: itList.filter((r) => r.source === "staff" && sameUser(r.addedBy, req.user.username)).map((r) => ({
+        id: r.id, ref: ticketRef(r.id), submittedAt: r.submittedAt, issue: r.issue, urgency: r.urgency, company: r.company,
+        status: requestStatus(r, r.taskId ? taskById.get(r.taskId) : null),
+      })),
+      approvals,
+    });
+  })
+);
+
+// The IT ticket form: an IT request like one added on IT → Requests, from
+// the signed-in person (their login's email, so IT's replies reach them).
+app.post(
+  "/api/staff-forms/it-ticket",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const issue = String(b.issue || "").trim().slice(0, 1000);
+    if (!issue) return res.status(400).json({ error: "Describe the issue" });
+    const login = (await getUsers()).find((u) => sameUser(u.username, req.user.username)) || {};
+    const urgency = ["Low", "Normal", "High", "Immediate"].includes(b.urgency) ? b.urgency : "Normal";
+    const company = ["SOI", "CAS", "RedSun", "NanoTech"].includes(b.company) ? b.company : COMPANY_ENTITY[req.user.companies[0]] || "SOI";
+    const rec = {
+      id: "manual-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), formId: null, source: "staff",
+      submittedAt: officeStamp(new Date().toISOString()),
+      name: req.user.username, email: String(login.email || "").trim().toLowerCase().slice(0, 120),
+      phone: forms.text(b.phone, 40), company, remote: "", issue, startedOn: "",
+      urgency, contact: forms.text(b.contact, 60), notes: "",
+      priority: "", status: "new", taskId: "", addedAt: Date.now(), addedBy: req.user.username,
+    };
+    await withItRequests((list) => { list.push(rec); });
+    res.status(201).json({ id: rec.id, ref: ticketRef(rec.id), submittedAt: rec.submittedAt, issue, urgency, company, status: "new" });
+  })
+);
+
+// Send a form. Reimbursements start as "draft" until a receipt is attached
+// (POST …/files, then …/submit).
+const FORM_START = { admin: "new", hr_issue: "new", perf_comment: "new", leave: "manager", reimburse: "draft" };
+app.post(
+  "/api/staff-forms",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const kind = String(b.kind || "");
+    const clean = forms.cleanFields(kind, b.fields);
+    if (clean.error) return res.status(400).json({ error: clean.error });
+    const company = req.user.companies.includes(b.company) ? b.company : req.user.companies[0];
+    const item = {
+      id: newId(), kind, company, by: req.user.username, at: Date.now(), status: FORM_START[kind],
+      fields: clean.fields, assignee: "", notes: "", files: [], history: [],
+    };
+    formLog(item, req.user.username, kind === "reimburse" ? "Started" : "Sent", true);
+    await withStaffForms((doc) => { doc.items.push(item); });
+    res.status(201).json(forms.forRequester(item));
+  })
+);
+
+async function findForm(id) {
+  return ((await getStaffForms()).items || []).find((i) => i.id === id) || null;
+}
+// The department side may see this one (Finance only for its companies).
+function seesForm(u, item) {
+  if (!forms.canSeeKind(u, item.kind)) return false;
+  return item.kind !== "reimburse" || u.companies.includes(item.company);
+}
+
+// Withdraw your own form while nobody has acted on it yet.
+app.post(
+  "/api/staff-forms/:id/cancel",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    let out = null, problem = "";
+    await withStaffForms((doc) => {
+      const item = doc.items.find((i) => i.id === req.params.id);
+      if (!item || !sameUser(item.by, req.user.username)) { problem = "That isn't one of yours"; return; }
+      if (!forms.canWithdraw(item)) { problem = "It's already being handled — ask the department instead"; return; }
+      item.status = "cancelled";
+      formLog(item, req.user.username, "Withdrawn", true);
+      out = forms.forRequester(item);
+    });
+    if (problem) return res.status(400).json({ error: problem });
+    res.json(out);
+  })
+);
+
+// Receipts and other files: the person who sent it (while it's a draft or
+// just submitted) or the department.
+app.post(
+  "/api/staff-forms/:id/files",
+  authMiddleware,
+  express.raw({ type: () => true, limit: "10mb" }),
+  asyncHandler(async (req, res) => {
+    const item = await findForm(req.params.id);
+    if (!item) return res.status(404).json({ error: "That form isn't here" });
+    const own = sameUser(item.by, req.user.username) && ["draft", "submitted", "new"].includes(item.status);
+    if (!own && !(seesForm(req.user, item) && forms.canWorkKind(req.user, item.kind))) return res.status(403).json({ error: "You can't add files to this" });
+    const name = String(req.query.name || "file").replace(/[\\/\r\n"]+/g, "_").slice(0, 160);
+    const ext = (name.match(/\.([a-z0-9]{2,5})$/i) || [])[1];
+    const type = ext && PERF_FILE_TYPES[ext.toLowerCase()];
+    if (!type) return res.status(400).json({ error: "Attach a PDF, image, Word, Excel, text or email file" });
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "No file came through" });
+    const file = { id: newId(), name, type, size: req.body.length, at: Date.now(), by: req.user.username };
+    await putFile(`staff_form_files/${item.id}/${file.id}`, req.body, type);
+    await withStaffForms((doc) => { const i = doc.items.find((x) => x.id === item.id); if (i) { i.files = i.files || []; i.files.push(file); } });
+    res.status(201).json(file);
+  })
+);
+app.get(
+  "/api/staff-forms/:id/files/:fid",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const item = await findForm(req.params.id);
+    if (!item || !(sameUser(item.by, req.user.username) || seesForm(req.user, item))) return res.status(404).json({ error: "That file isn't here" });
+    const meta = (item.files || []).find((f) => f.id === req.params.fid);
+    const file = meta && (await getFile(`staff_form_files/${item.id}/${meta.id}`));
+    if (!file) return res.status(404).json({ error: "That file isn't here" });
+    res.set({ "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${meta.name.replace(/[^\w .()-]+/g, "_")}"`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" });
+    res.send(file.body);
+  })
+);
+// A reimbursement goes to Finance once it has a receipt.
+app.post(
+  "/api/staff-forms/:id/submit",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    let out = null, problem = "";
+    await withStaffForms((doc) => {
+      const item = doc.items.find((i) => i.id === req.params.id);
+      if (!item || !sameUser(item.by, req.user.username)) { problem = "That isn't one of yours"; return; }
+      if (item.kind !== "reimburse" || item.status !== "draft") { problem = "That's already been sent"; return; }
+      if (!(item.files || []).length) { problem = "Attach a receipt first"; return; }
+      item.status = "submitted";
+      formLog(item, req.user.username, "Sent to Finance", true);
+      out = forms.forRequester(item);
+    });
+    if (problem) return res.status(400).json({ error: problem });
+    res.json(out);
+  })
+);
+
+// The department's side: every form of its kinds (Finance: one company,
+// drafts left out), plus who can be made responsible.
+app.get(
+  "/api/staff-forms/dept",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const dept = String(req.query.dept || "");
+    const kinds = forms.kindsOf(dept).filter((k) => forms.canSeeKind(req.user, k));
+    if (!kinds.length) return res.status(403).json({ error: "That department's forms aren't available to you" });
+    const company = String(req.query.company || "");
+    if (company && !req.user.companies.includes(company)) return res.status(403).json({ error: "You don't have access to that company" });
+    const [doc, users] = await Promise.all([getStaffForms(), getUsers()]);
+    const items = (doc.items || []).filter((i) => kinds.includes(i.kind) && seesForm(req.user, i) &&
+      !(i.kind === "reimburse" && (i.status === "draft" || (company && i.company !== company))));
+    const people = users.map(normalizeUser).filter((u) => u.fullAccess || u.departments.includes(dept)).map((u) => u.username)
+      .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+    res.json({ items, kinds, canWork: kinds.some((k) => forms.canWorkKind(req.user, k)), manager: isManager(req.user), people });
+  })
+);
+
+// Department side: status, person responsible, internal notes. A reason
+// given when declining or rejecting is shown to the person who sent it.
+app.post(
+  "/api/staff-forms/:id/update",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const users = await getUsers();
+    let out = null, problem = "", status = 400;
+    await withStaffForms((doc) => {
+      const item = doc.items.find((i) => i.id === req.params.id);
+      if (!item || !seesForm(req.user, item)) { problem = "That form isn't here"; status = 404; return; }
+      if (!forms.canWorkKind(req.user, item.kind)) { problem = "Only the department can change this"; status = 403; return; }
+      const dept = forms.KINDS[item.kind].dept;
+      if ("status" in b && b.status !== item.status) {
+        problem = forms.moveBlocker(req.user, item, b.status);
+        if (problem) { status = 403; return; }
+        const reason = forms.text(b.reason, 500);
+        formLog(item, req.user.username, forms.statusLabel(item.kind, b.status) + (reason ? ": " + reason : ""), true);
+        item.status = b.status;
+        if (reason) item.reason = reason;
+        if (item.kind === "reimburse" && (b.status === "approved" || b.status === "paid")) {
+          item[b.status + "By"] = req.user.username;
+          item[b.status + "At"] = Date.now();
+        }
+      }
+      if ("assignee" in b) {
+        const who = forms.text(b.assignee, 80);
+        const ok = !who || users.map(normalizeUser).some((u) => sameUser(u.username, who) && (u.fullAccess || u.departments.includes(dept)));
+        if (!ok) { problem = "Pick someone in the department"; return; }
+        if (!sameUser(who, item.assignee)) formLog(item, req.user.username, who ? "Given to " + who : "Unassigned");
+        item.assignee = who;
+      }
+      if ("notes" in b) item.notes = String(b.notes == null ? "" : b.notes).trim().slice(0, 2000);
+      item.updatedAt = Date.now();
+      out = item;
+    });
+    if (problem) return res.status(status).json({ error: problem });
+    res.json(out);
+  })
+);
+
+// Leave approvals: a manager in the person's department first, then HR. An
+// HR manager's approval at either step approves it outright. HR can cancel
+// approved leave (it then drops out of Payroll).
+app.post(
+  "/api/staff-forms/:id/leave",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const decision = String(b.decision || "");
+    const note = forms.text(b.note, 500);
+    const logins = loginsByName(await getUsers());
+    let out = null, problem = "";
+    await withStaffForms((doc) => {
+      const item = doc.items.find((i) => i.id === req.params.id && i.kind === "leave");
+      if (!item) { problem = "That leave request isn't here"; return; }
+      if (decision === "cancel") {
+        if (!forms.hrManager(req.user) || item.status !== "approved") { problem = "Only HR can cancel approved leave"; return; }
+        if (!note) { problem = "Say why it's cancelled"; return; }
+        item.status = "cancelled";
+        formLog(item, req.user.username, "Cancelled by HR: " + note, true);
+        out = item;
+        return;
+      }
+      const step = forms.leaveStep(req.user, item, logins.get(String(item.by).toLowerCase()));
+      if (!step) { problem = "This leave request isn't waiting for you"; return; }
+      const mark = { by: req.user.username, at: Date.now(), note };
+      if (decision === "approve") {
+        if (step === "manager") { item.managerOk = mark; item.status = "hr"; }
+        else { if (item.status === "manager") item.managerOk = mark; item.hrOk = mark; item.status = "approved"; }
+        formLog(item, req.user.username, (step === "manager" ? "Approved by manager" : "Approved by HR") + (note ? ": " + note : ""), true);
+      } else if (decision === "decline") {
+        if (!note) { problem = "Say why it's declined"; return; }
+        item.declined = Object.assign({ step }, mark);
+        item.status = "declined";
+        item.reason = note;
+        formLog(item, req.user.username, "Declined: " + note, true);
+      } else { problem = "Approve or decline"; return; }
+      out = forms.forRequester(item);
+    });
+    if (problem) return res.status(400).json({ error: problem });
+    res.json(out);
   })
 );
 

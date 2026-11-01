@@ -50,7 +50,9 @@ function renderDepartment() {
   // Business Development and US Gov have no Tasks tab; it stays while
   // older tasks are still there. Their SOPs, and Administration's, are on
   // the SOP page.
-  var trimmed = dept === "Business Development" || dept === "US Government";
+  // Administration has no Tasks / Projects split either (ROADMAP.md): just
+  // Projects, with Tasks back only while older tasks are still there.
+  var trimmed = dept === "Business Development" || dept === "US Government" || group === "admin";
   if (!trimmed || deptTasks(dept).some(function (t) { return itemKind(t) === "task"; })) subs.push({ id: "tasks", label: "Tasks" });
   subs.push({ id: "projects", label: "Projects" });
   if (dept === "IT" && me.itNotebook) subs.push({ id: "resolved", label: "Resolved" });
@@ -60,9 +62,10 @@ function renderDepartment() {
   var sub = subView[dept];
   if (!sub || !subs.some(function (s) { return s.id === sub; })) sub = subView[dept] = subs[0].id;
 
-  // Administration departments: Staff-Facing (forms for everyone, still
-  // to come) and Department-Facing (the department's own work).
-  var face = group === "admin" ? adminFace[dept] || "dept" : "";
+  // Administration departments: Staff-Facing (forms for everyone) and
+  // Department-Facing (the department's own work, for its own people).
+  var mine = group !== "admin" || inMyDept(dept);
+  var face = group === "admin" ? (mine ? adminFace[dept] || "dept" : "staff") : "";
 
   var totalOpen = depts.reduce(function (s, d) { return s + openCount(d); }, 0);
   setBreadcrumb([groupLabel, shortCo(activeCompany), shortDept(dept), face === "staff" ? "Staff-Facing" : face ? "Department-Facing" : ""]);
@@ -80,14 +83,14 @@ function renderDepartment() {
   var head =
     '<div class="intro"><div><div class="eyebrow">' + E(groupLabel) + " / " + E(shortCo(activeCompany)) + "</div>" +
     "<h1>" + E(dept) + " · " + E(shortCo(activeCompany)) + "</h1>" +
-    "<p>" + E(DEPT_TAGLINE[dept] || "Projects, sub-tasks and who's responsible for each.") + "</p>" +
-    '<p class="small-note">' + (isManager()
+    "<p>" + E(!mine ? "Forms for everyone." : DEPT_TAGLINE[dept] || "Projects, sub-tasks and who's responsible for each.") + "</p>" +
+    '<p class="small-note">' + (!mine ? "What you send goes to " + E(shortDept(dept)) + ", and you can follow it below." : isManager()
       ? "You're a manager: you can assign anything and tick things off."
       : "You can add your own rows. Only a manager ticks things off; anything a manager gave you is read-only.") +
     " · Saved to the SOI server</p>" + linkHtml + "</div>" +
     companySwitcher(totalOpen) + "</div>" +
     '<div class="tabs" role="tablist">' + deptTabs(depts, opsHere, dept) + "</div>" +
-    (face ? '<div class="subbar"><div class="seg" aria-label="Who it\'s for">' + [["staff", "Staff-Facing"], ["dept", "Department-Facing"]].map(function (f) {
+    (face && mine ? '<div class="subbar"><div class="seg" aria-label="Who it\'s for">' + [["staff", "Staff-Facing"], ["dept", "Department-Facing"]].map(function (f) {
       return '<button type="button" data-face="' + f[0] + '" class="' + (f[0] === face ? "active" : "") + '">' + f[1] + "</button>";
     }).join("") + "</div></div>" : "") +
     (face === "staff" ? "" : subs.length > 1 || opsHere.length > 1 ? '<div class="subbar"><div class="seg">' + subs.map(function (s) {
@@ -110,7 +113,7 @@ function renderDepartment() {
   else if (sub === "board") body = renderBoard(dept);
   else if (sub === "performance") body = renderPerformance(true);
   else if (sub === "tasks") body = isOps(dept) ? renderOpsTable(dept) : renderTaskTable(dept);
-  else if (sub === "projects") body = renderProjectTable(dept);
+  else if (sub === "projects") body = renderFormProjects(dept) + renderProjectTable(dept);
   else {
     var view = views.filter(function (v) { return v.id === sub; })[0];
     body = view ? renderPentagonListShell(view) : "";
@@ -118,17 +121,7 @@ function renderDepartment() {
   return head + body;
 }
 
-// What each Administration department's Staff-Facing tab will hold
-// (Phase 4 of ROADMAP.md).
-var STAFF_FACING = {
-  "IT": "the IT ticket form. Until then, staff use the IT request Microsoft Form, and requests land on Department-Facing → Requests",
-  "Administrative": "the admin request form",
-  "HR": "the HR issue, leave request and performance comment forms",
-  "Accounting & Finance": "the reimbursement request form"
-};
-function renderStaffFacing(dept) {
-  return '<div class="empty">Nothing here yet. This is where staff will find ' + E(STAFF_FACING[dept] || "this department's forms") + ".</div>";
-}
+// Staff-Facing (renderStaffFacing) is in staff-forms.js.
 document.addEventListener("click", function (e) {
   var t = e.target.closest && e.target.closest("[data-face]");
   if (!t || !$("#view").contains(t)) return;

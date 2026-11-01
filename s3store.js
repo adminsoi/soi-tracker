@@ -153,6 +153,17 @@ function getItNotebook() {
 function getItRequests() {
   return readJson("it_requests", []);
 }
+// Administration's staff forms: { items: [...] } — admin requests, HR issues,
+// leave requests, performance comments and reimbursements (receipts via
+// putFile under staff_form_files/<id>/). IT tickets stay in it_requests.
+function getStaffForms() {
+  return readJson("staff_forms", { items: [] });
+}
+// HR payroll: { entities: { SOI: {...} }, people: { username: {...} },
+// adjustments: [...] }. Kept apart from staff_forms because it holds pay.
+function getPayroll() {
+  return readJson("payroll", {});
+}
 
 // In-process queues so concurrent requests to this same container don't
 // clobber each other's read-modify-write cycle.
@@ -169,6 +180,8 @@ let performanceQueue = Promise.resolve();
 let qbrQueue = Promise.resolve();
 let mailIndexQueue = Promise.resolve();
 let boardQueue = Promise.resolve();
+let staffFormsQueue = Promise.resolve();
+let payrollQueue = Promise.resolve();
 
 function withUsers(mutator) {
   usersQueue = usersQueue.then(async () => {
@@ -304,7 +317,32 @@ function withBoard(mutator, name = "aog_board") {
   return boardQueue;
 }
 
+function withStaffForms(mutator) {
+  staffFormsQueue = staffFormsQueue.then(async () => {
+    const doc = await getStaffForms();
+    if (!Array.isArray(doc.items)) doc.items = [];
+    const result = await mutator(doc);
+    await writeJson("staff_forms", doc);
+    return result;
+  });
+  return staffFormsQueue;
+}
+
+function withPayroll(mutator) {
+  payrollQueue = payrollQueue.then(async () => {
+    const doc = await getPayroll();
+    const result = await mutator(doc);
+    await writeJson("payroll", doc);
+    return result;
+  });
+  return payrollQueue;
+}
+
 module.exports = {
+  getStaffForms,
+  withStaffForms,
+  getPayroll,
+  withPayroll,
   getBoard,
   withBoard,
   getMailIndex,

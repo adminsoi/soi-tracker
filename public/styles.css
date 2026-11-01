@@ -134,6 +134,7 @@
   .st, .st-select { display: inline-block; padding: 3px 9px; border-radius: 9px; font-size: 11px; font-weight: 600; border: 1px solid transparent; }
   .st-select { cursor: pointer; padding: 4px 8px; font-family: inherit; }
   .st-new { background: #e6ebf3; color: #3f5f8f; } .st-progress { background: #f7e6cc; color: #8a5a14; } .st-done { background: #e3eedf; color: #4c6b3c; }
+  .st-off { background: var(--soft); color: var(--muted); }
   .st-dup { background: #ecebe8; color: #6d655c; }
   .dup-hint, .dup-note { display: block; margin-top: 6px; font-size: 11px; padding: 4px 8px; border-radius: 6px; }
   .dup-hint { background: #fff4df; color: #8a5a14; } .dup-note { background: #f0eeea; color: #6d655c; }
@@ -751,3 +752,13 @@
   html[data-theme="dark"] .of-flag[aria-pressed="true"], html[data-theme="dark"] .of-flag:hover { color: #fb923c; }
   html[data-theme="dark"] .bcf-pop { box-shadow: 0 10px 30px rgba(0,0,0,.5); }
   html[data-theme="dark"] .rs-modal.brd-side-wrap { background: rgba(0, 0, 0, .35); }
+  /* Administration: staff forms (staff-forms.js) */
+  .sf-card { margin-top: 16px; padding: 20px 22px; max-width: 860px; }
+  .sf-check { display: flex !important; gap: 8px; align-items: center; text-transform: none !important; letter-spacing: 0 !important; font-size: 13px !important; color: var(--ink) !important; margin-top: 24px; }
+  .sf-what { max-width: 420px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .sf-more summary { cursor: pointer; font-size: 11px; color: var(--muted); }
+  .sf-body { white-space: pre-wrap; font-size: 12px; line-height: 1.55; margin: 6px 0; overflow-wrap: anywhere; }
+  .sf-attach { cursor: pointer; }
+  .pay-rules textarea { min-height: 54px; }
+  .pay-warn { border-left: 3px solid #c2410c; }
+  html[data-theme="dark"] .st-off { background: #20242a; color: #9aa1ad; }
