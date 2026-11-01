@@ -183,7 +183,7 @@ Mentions of You, and files created automatically from Pentagon.
       - Still open: nothing is emailed yet (new submissions, approvals,
         decisions); leave approvals don't show on Mentions of You; a
         performance comment isn't copied into Performance automatically.
-- [ ] **5. People** — employment file and spot bonus.
+- [x] **5. People** — employment file and spot bonus.
       Built 1 Nov 2026 on local `staging`; not yet tested on staging.
       - Leadership only (the `leadership` tick, not full access), checked on
         every route by `peopleOnly` in `index.js`; the sidebar item was
