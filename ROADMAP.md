@@ -184,6 +184,35 @@ Mentions of You, and files created automatically from Pentagon.
         decisions); leave approvals don't show on Mentions of You; a
         performance comment isn't copied into Performance automatically.
 - [ ] **5. People** — employment file and spot bonus.
+      Built 1 Nov 2026 on local `staging`; not yet tested on staging.
+      - Leadership only (the `leadership` tick, not full access), checked on
+        every route by `peopleOnly` in `index.js`; the sidebar item was
+        already hidden from everyone else.
+      - Rules in `people.js` (fields, next pay week, currency, when a spot
+        bonus can be removed). Routes in `index.js`: `GET /api/people`,
+        `GET|PUT /api/people/:username`,
+        `POST /api/people/:username/files`, `GET|DELETE …/files/:fid`,
+        `POST /api/people/:username/spot-bonus`, `DELETE …/spot-bonus/:id`.
+        Front end `public/js/people.js` (after `company-pages.js`, whose
+        placeholder was removed).
+      - S3: `people.json` (`{ people: { username: { id, jobTitle,
+        department, manager, startDate, employmentType, emergency, notes,
+        files, history } } }`), documents under `people_files/<file id>/`.
+        Base pay, pay currency and entity are written to `payroll.json`
+        `people` — one source with HR → Payroll.
+      - Spot bonus = `payroll.json` `adjustments` entry
+        `{ id, person, week (Monday of next pay week), amount: 100,
+        currency, reason, source: "spot-bonus", by, at }`. Currency: the
+        person's pay currency, else their entity's currency set on Payroll,
+        else USD. Not to yourself; a second click within 10 seconds adds
+        nothing; the server refuses if the currency changed since the
+        confirm.
+      - Still open: Payroll has no "mark week done" yet, so Leadership can
+        remove a spot bonus until its pay week ends (HR can still remove
+        any adjustment on Payroll). Should Payroll get a "done" marker?
+        Should the spot bonus fall back to the entity's usual currency
+        (e.g. NZD for CAS) instead of USD when nothing is set? Performance
+        comments link only when their "about" is exactly the login name.
 - [ ] **6. Documents** — drag-and-drop S3 file manager, read-only with
       "request edit" raising an IT ticket.
 - [ ] **7. Strategy Meeting agenda and SOP update form.**

@@ -10,7 +10,8 @@ in an S3 bucket — no separate database container needed.
 ```
 index.js        Express API and the server entry point
 *.js            Server helpers (auth, S3 storage, Microsoft Graph mail and
-                calendar, IT requests, Pentagon queries, the Operations board rules)
+                calendar, IT requests, Pentagon queries, the Operations board,
+                staff forms and People rules)
 index.html      The tracker page: its layout only
 public/         The tracker's stylesheet and scripts, one file per area
                 (core, departments, aog-board, inbox, …), loaded in the
@@ -31,7 +32,10 @@ start-up) loads last.
 Create (or pick) an S3 bucket and, if you want, a prefix/folder inside it
 (defaults to `soi-tracker/`). The app will write two objects there:
 `soi-tracker/users.json` and `soi-tracker/tasks.json`. They're created
-automatically on first write — nothing to pre-populate.
+automatically on first write — nothing to pre-populate. Other pages add
+their own objects the same way; People (Leadership only) keeps
+`people.json` and its documents under `people_files/<file id>/`, and reads
+base pay and spot bonuses from `payroll.json`.
 
 **Permissions:** whatever runs this container needs `s3:GetObject` and
 `s3:PutObject` on `arn:aws:s3:::YOUR_BUCKET/soi-tracker/*` (adjust the
@@ -409,13 +413,43 @@ dark ones like SOI green stay visible.
   item reopens the department you last used there.
 - **SOP** shows each of your departments' quick answers and SOP documents,
   with a tab per department (the same SOPs as the Operations SOPs tabs).
-- **Strategy Meeting**, **People** and **Documents** are placeholders for
-  later phases and load no data yet. People is shown to leadership logins
-  only; once it loads data, the server must check leadership too.
+- **Strategy Meeting** and **Documents** are placeholders for later phases
+  and load no data yet. **People** is for leadership logins only (see
+  below).
 - **Department Chat** (was Master Chat) describes the planned company-wide
   Claude chat. It isn't switched on until it can run in SOI's compliant AWS
   environment and compliance approves its access; meanwhile it opens
   claude.ai.
+
+## People (Leadership only)
+
+Every login, with its employment file and a one-click spot bonus. Only
+logins with *Leadership* ticked see it: the sidebar item is hidden from
+everyone else and every `/api/people*` route answers 403 to them (full
+access alone isn't enough).
+
+- **List:** name, email, company and pay entity, department, role and job
+  title, with per-column filters. Click a name to open the file.
+- **Employment file:** job title, department, manager, start date,
+  employment type, emergency contact, notes, and supporting documents
+  (stored privately under `people_files/<file id>/`). Saved in
+  `people.json` with who changed what.
+- **Pay:** weekly base pay, pay currency and entity are the same record as
+  **HR → Payroll** (`payroll.json`): change it on either page and both
+  show it. You can't change your own pay here. Tax and national ID numbers
+  aren't stored in the tracker (a labelled placeholder says so). Nothing
+  here is a payroll calculation; a qualified person checks every figure
+  before any real payroll is sent.
+- **Spot bonus:** ★ Spot bonus on someone else's file adds 100 in their pay
+  currency (or USD when none is set) to the **next** pay week (the Monday
+  after this week's), with an optional reason. The confirm states the
+  currency and week. It appears on HR → Payroll for that week (marked
+  "Spot bonus from …") and in the file's history. Leadership can remove it
+  from the file until that pay week ends; after that, HR removes it on
+  Payroll.
+- **History** (read-only): spot bonuses and payroll adjustments, approved
+  leave, performance comments that name this login, and, for Leadership
+  with Performance access, a one-line summary from the Performance tracker.
 
 ## Operations board (Procurement · Purchasing · Warehouse)
 
