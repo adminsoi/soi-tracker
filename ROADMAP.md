@@ -66,7 +66,9 @@ it's merged and redeployed.
   email replies can be sent as that person.
 - **Staging stack** `soi-tracker-staging` (port 8443, `staging` branch,
   S3 prefix `soi-tracker/staging` reading live data through
-  `SEED_FROM_PREFIX`; README §4). Every phase goes there before `main`.
+  `SEED_FROM_PREFIX`; README §4). Every phase goes to the `staging`
+  branch and is tested there before `main`. To use `soi-tracker-staging/`
+  instead, the host's AWS role `EC2S3AccessRole` needs write access to it.
 - **Push access** to GitHub from the machine doing the work.
 - The repo is **public**; consider making it private.
 
@@ -103,12 +105,11 @@ Mentions of You, and files created automatically from Pentagon.
       Staff-Facing / Department-Facing tabs; BD / US Gov tabs trimmed.
 - [x] **2. Operations Kanban** — reshape the existing AOG board
       (`public/js/aog-board.js`, `board.js`) to the decisions above.
-      Built 31 Oct 2026 and tested against a local mock (not yet pushed or
-      redeployed). Kept all approvals and hard stops, and cost / mark-up /
-      margin with the same roles. Column headers show the stage colour; each
-      file's stripe shows its responsible person's department. Attachments
-      stay in `board_files/<file id>/`. Staging stack still to decide
-      before redeploying.
+      Tested on staging with real data and redeployed 31 Oct 2026. Kept all
+      approvals and hard stops, and cost / mark-up / margin with the same
+      roles. Column headers show the stage colour; each file's stripe shows
+      its responsible person's department. Attachments stay in
+      `board_files/<file id>/`.
 - [ ] **3. US Gov Kanban** (reuses Phase 2).
 - [ ] **4. Administration** — IT, Admin, HR (incl. leave, payroll,
       performance), Finance.
