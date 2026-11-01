@@ -171,9 +171,10 @@ function moveBlocker(u, item, to) {
   return "";
 }
 
-/** Whether the person who sent it may still withdraw it. */
+/** Whether the person who sent it may still withdraw it: until someone acts
+ * on it (leave: until it's approved; reimbursements: until Approved to pay). */
 function canWithdraw(item) {
-  return ({ admin: ["new"], hr_issue: ["new"], perf_comment: ["new"], leave: ["manager", "hr"], reimburse: ["draft", "submitted"] }[item.kind] || []).includes(item.status);
+  return ({ admin: ["new"], hr_issue: ["new"], perf_comment: ["new"], leave: ["manager", "hr"], reimburse: ["draft", "submitted", "checked"] }[item.kind] || []).includes(item.status);
 }
 
 /** A copy for the person who sent it: no internal notes. */

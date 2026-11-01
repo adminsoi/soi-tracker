@@ -4251,7 +4251,7 @@ app.get(
       items: items.filter((i) => sameUser(i.by, req.user.username)).map(forms.forRequester),
       tickets: itList.filter((r) => r.source === "staff" && sameUser(r.addedBy, req.user.username)).map((r) => ({
         id: r.id, ref: ticketRef(r.id), submittedAt: r.submittedAt, issue: r.issue, urgency: r.urgency, company: r.company,
-        status: requestStatus(r, r.taskId ? taskById.get(r.taskId) : null),
+        status: requestStatus(r, r.taskId ? taskById.get(r.taskId) : null), withdrawn: !!r.withdrawn, archived: !!r.archived,
       })),
       approvals,
     });
@@ -4280,6 +4280,31 @@ app.post(
     };
     await withItRequests((list) => { list.push(rec); });
     res.status(201).json({ id: rec.id, ref: ticketRef(rec.id), submittedAt: rec.submittedAt, issue, urgency, company, status: "new" });
+  })
+);
+
+// Withdraw your own IT ticket while it's still New (nobody has picked it
+// up). It's archived on IT → Requests, marked as withdrawn.
+app.post(
+  "/api/staff-forms/it-ticket/:id/cancel",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const tasks = await getTasks();
+    let out = null, problem = "";
+    await withItRequests((list) => {
+      const r = list.find((x) => x.id === req.params.id);
+      if (!r || r.source !== "staff" || !sameUser(r.addedBy, req.user.username)) { problem = "That isn't one of yours"; return; }
+      const task = r.taskId ? tasks.find((t) => t.id === r.taskId) : null;
+      if (r.archived || requestStatus(r, task) !== "new") { problem = "It's already being handled — ask IT instead"; return; }
+      r.archived = true;
+      r.archivedAt = Date.now();
+      r.archivedBy = req.user.username;
+      r.withdrawn = true;
+      pushActivity(r, { type: "status", text: "Withdrawn by the requester", by: req.user.username });
+      out = { id: r.id, ref: ticketRef(r.id), withdrawn: true };
+    });
+    if (problem) return res.status(400).json({ error: problem });
+    res.json(out);
   })
 );
 

@@ -65,7 +65,7 @@ function sfChip(kind, st) {
   return '<span class="st ' + cls + '">' + E(sfStatusLabel(kind, st)) + "</span>";
 }
 function sfCanWithdraw(i) {
-  return ({ admin: ["new"], hr_issue: ["new"], perf_comment: ["new"], leave: ["manager", "hr"], reimburse: ["draft", "submitted"] }[i.kind] || []).indexOf(i.status) !== -1;
+  return ({ admin: ["new"], hr_issue: ["new"], perf_comment: ["new"], leave: ["manager", "hr"], reimburse: ["draft", "submitted", "checked"] }[i.kind] || []).indexOf(i.status) !== -1;
 }
 function sfAmount(n, cur) {
   n = Number(n);
@@ -175,10 +175,13 @@ function sfMyTickets() {
   if (!sf.data) return '<div class="empty">Loading what you\'ve sent…</div>';
   var list = sf.data.tickets.slice().sort(function (a, b) { return String(b.submittedAt).localeCompare(String(a.submittedAt)); });
   return '<div class="section-title"><div><h2>Your IT tickets</h2><span class="small-note">Tickets you sent from this form.</span></div></div>' +
-    '<div class="table-wrap"><table class="narrow"><thead><tr><th>Ticket</th><th>Sent</th><th>Issue</th><th>Urgency</th><th>Status</th></tr></thead><tbody>' +
+    '<div class="table-wrap"><table class="narrow"><thead><tr><th>Ticket</th><th>Sent</th><th>Issue</th><th>Urgency</th><th>Status</th><th></th></tr></thead><tbody>' +
     (list.length ? list.map(function (t) {
-      return "<tr><td>" + E(t.ref) + "</td><td>" + E(fmtDate(t.submittedAt)) + '</td><td class="sf-what">' + E(t.issue) + "</td><td>" + E(t.urgency || "—") + '</td><td><span class="st st-' + E(t.status) + '">' + E(SF_IT_STATUS[t.status] || t.status) + "</span></td></tr>";
-    }).join("") : '<tr><td colspan="5" class="empty">Nothing sent yet.</td></tr>') + "</tbody></table></div>";
+      // Same as the other forms: Withdraw while it's still New.
+      var st = t.withdrawn ? '<span class="st st-off">Withdrawn</span>' : '<span class="st st-' + E(t.status) + '">' + E(SF_IT_STATUS[t.status] || t.status) + "</span>";
+      return '<tr class="' + (t.withdrawn ? "done" : "") + '"><td>' + E(t.ref) + "</td><td>" + E(fmtDate(t.submittedAt)) + '</td><td class="sf-what">' + E(t.issue) + "</td><td>" + E(t.urgency || "—") + "</td><td>" + st + "</td>" +
+        '<td class="row-tools">' + (!t.archived && t.status === "new" ? '<button type="button" class="text-button" data-sf-cancel-it="' + E(t.id) + '">Withdraw</button>' : "") + "</td></tr>";
+    }).join("") : '<tr><td colspan="6" class="empty">Nothing sent yet.</td></tr>') + "</tbody></table></div>";
 }
 function sfMine(kinds) {
   if (sf.error) return '<div class="banner">' + E(sf.error) + "</div>";
@@ -297,7 +300,7 @@ document.addEventListener("change", function (e) {
   }
 });
 document.addEventListener("click", function (e) {
-  var t = e.target.closest && e.target.closest("[data-sf-hr],[data-sf-send],[data-sf-unfile],[data-sf-cancel],[data-sf-submit],[data-sf-leave],[data-sf-dl]");
+  var t = e.target.closest && e.target.closest("[data-sf-hr],[data-sf-send],[data-sf-unfile],[data-sf-cancel],[data-sf-cancel-it],[data-sf-submit],[data-sf-leave],[data-sf-dl]");
   if (!t) return;
   var ds = t.dataset;
   if (ds.sfHr) { sf.hrForm = ds.sfHr; render(); return; }
@@ -306,6 +309,12 @@ document.addEventListener("click", function (e) {
   if (ds.sfCancel) {
     if (!confirm("Withdraw this? The department will see it was withdrawn.")) return;
     api("/api/staff-forms/" + encodeURIComponent(ds.sfCancel) + "/cancel", { method: "POST" }).then(function () { toast("Withdrawn."); }, function (err) { toast(err.message, true); })
+      .then(function () { sf.at = 0; loadStaffForms(); });
+    return;
+  }
+  if (ds.sfCancelIt) {
+    if (!confirm("Withdraw this? The department will see it was withdrawn.")) return;
+    api("/api/staff-forms/it-ticket/" + encodeURIComponent(ds.sfCancelIt) + "/cancel", { method: "POST" }).then(function () { toast("Withdrawn."); }, function (err) { toast(err.message, true); })
       .then(function () { sf.at = 0; loadStaffForms(); });
     return;
   }

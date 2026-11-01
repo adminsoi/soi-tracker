@@ -289,7 +289,7 @@ function renderItRequests() {
           ((r.activity || []).length ? '<span class="co-note">' + (r.activity || []).filter(function (a) { return a.type === "reply" || a.type === "note"; }).length + " notes / replies" + (r.ackAt ? " · auto-acknowledged" : "") + "</span>" : "") +
           (r.notes ? '<span class="itr-note"><b>Note:</b> ' + E(r.notes) + "</span>" : "") +
           (r.source === "manual" ? '<span class="co-note">Added by hand' + (r.addedBy ? " · " + E(r.addedBy) : "") + "</span>" : "") +
-          (r.source === "staff" ? '<span class="co-note">From the staff ticket form</span>' : "") +
+          (r.source === "staff" ? '<span class="co-note">From the staff ticket form' + (r.withdrawn ? " · withdrawn by the requester" : "") + "</span>" : "") +
           (r.status === "done" && (r.resolution || r.notifiedAt) ? '<span class="itr-note" style="border-left-color:#9fbf8f;"><b>Resolved' + (r.resolution ? ":</b> " + E(r.resolution) : "</b>") + (r.notifiedAt ? '<br><span class="small-note">Emailed ' + E(r.email) + " " + E(new Date(r.notifiedAt).toLocaleDateString()) + (r.ref ? " · " + E(r.ref) : "") + "</span>" : "") + "</span>" : "") +
           itrReplies(r, can) +
           dupCell(r) + "</td>" +
