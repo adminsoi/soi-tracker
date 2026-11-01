@@ -111,22 +111,24 @@ const normName = (s) => String(s || "").toLowerCase().replace(/[._\s]+/g, " ").t
 function namesOf(login) {
   const email = String(login.email || "").trim().toLowerCase();
   const full = [login.username, email, email.split("@")[0], ...(login.calendarNames || [])].map(normName).filter(Boolean);
-  return { full, first: full.filter((n) => !n.includes("@")).map((n) => n.split(" ")[0]) };
+  const names = full.filter((n) => !n.includes("@"));
+  return { full, first: names.map((n) => n.split(" ")[0]), words: [].concat(...names.map((n) => n.split(" "))) };
 }
 /**
  * Which login a typed name means: { username } when exactly one fits,
  * { ambiguous: [usernames] } when more than one does (attach it to none),
  * or {} when nobody fits. Tries the whole name (username, email, its local
- * part, calendar names) first, then first names.
+ * part, calendar names) first. Then a one-word name is a first name; a
+ * longer one fits a login only when every word is one of that login's
+ * names, so "Elvis Presley" never lands on elvis.santos. Anything
+ * uncertain stays unmatched.
  */
 function matchLogin(name, logins) {
   const t = normName(name);
   if (!t) return {};
   const all = (logins || []).map((u) => ({ u, n: namesOf(u) }));
   let hits = all.filter((x) => x.n.full.includes(t));
-  if (!hits.length) hits = all.filter((x) => x.n.first.includes(t));
-  // "Elvis Santos" when the login only knows "elvis".
-  if (!hits.length && t.includes(" ")) hits = all.filter((x) => x.n.first.includes(t.split(" ")[0]));
+  if (!hits.length) hits = t.includes(" ") ? all.filter((x) => t.split(" ").every((w) => x.n.words.includes(w))) : all.filter((x) => x.n.first.includes(t));
   if (hits.length === 1) return { username: hits[0].u.username };
   return hits.length ? { ambiguous: hits.map((x) => x.u.username) } : {};
 }

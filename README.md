@@ -457,8 +457,10 @@ access alone isn't enough).
   - Performance comments link by name: the HR form's "Who is it about" is a
     list of logins (stored as the username) with "Someone else (type the
     name)". Older free-text names are matched on username, email, the
-    email's first part, first name, full name or the login's calendar
-    names, ignoring case, dots and extra spaces. A name that fits more than
+    email's first part or the login's calendar names, ignoring case, dots
+    and extra spaces. A full name links only when every word belongs to
+    that login ("Elvis Presley" doesn't link to elvis.santos); a first
+    name alone links only when one login has it. A name that fits more than
     one login is attached to none and listed as **Unmatched** on each
     possible file.
   - Performance tracker: Leadership with Performance access see each

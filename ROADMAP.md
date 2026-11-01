@@ -217,9 +217,13 @@ Mentions of You, and files created automatically from Pentagon.
         login (`x-…`): now it says records exist, matches `x-…` records by
         name, and offers "Open in Performance". Leave (`by`, status
         `approved`, `fields.from` / `to`) and adjustments (`person`)
-        already matched how they're stored. Still open: a full name whose
-        surname differs from the login's still links on the first name
-        when only one login has that first name.
+        already matched how they're stored. Tightened the same day (user
+        approved): a name of more than one word links only when every word
+        is one of that login's names (username, email's first part,
+        calendar names), so "Elvis Presley" no longer lands on
+        `elvis.santos`; a one-word name links only when exactly one login
+        has it as a first name. Anything uncertain stays unmatched (a name
+        that fits nobody shows on no file; HR still has it on Projects).
         Base pay, pay currency and entity are written to `payroll.json`
         `people` — one source with HR → Payroll.
       - Spot bonus = `payroll.json` `adjustments` entry
