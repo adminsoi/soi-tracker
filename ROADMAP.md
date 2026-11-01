@@ -255,8 +255,8 @@ Mentions of You, and files created automatically from Pentagon.
         Payroll table and in the email; no overtime rules.
       - Still open: should the spot bonus fall back to the entity's usual
         currency (e.g. NZD for CAS) instead of USD when nothing is set?
-        Should Leadership (not only HR managers) be able to approve
-        payroll for the accountants?
+      - Decided: only HR managers (and full access) approve payroll for
+        the accountants; Leadership stays read-only on Payroll.
 - [ ] **6. Documents** — drag-and-drop S3 file manager, read-only with
       "request edit" raising an IT ticket.
 - [ ] **7. Strategy Meeting agenda and SOP update form.**
