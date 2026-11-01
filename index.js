@@ -4494,6 +4494,131 @@ app.post(
   })
 );
 
+// ---------- HR → Payroll (ROADMAP.md Phase 4) ----------
+// Approved leave per person per pay week, each person's weekly base pay
+// (entered by HR) and one-off adjustments, grouped by entity. HR hasn't
+// given the rules for how each kind of leave changes pay, so nothing here
+// works out pay: each entity has a "rules" box HR fills in as a reference,
+// and every figure must be checked by a qualified person before any real
+// payroll is sent. HR, Leadership and full access see it; HR managers (and
+// full access) change it. Phase 5's spot bonus adds an adjustment.
+const PAY_ENTITY_LABEL = { SOI: "SOI Aviation · US (California)", CAS: "CAS · New Zealand", RedSun: "Red Sun Aviation · Singapore", NanoTech: "Nanotech Aviation · UK" };
+const PAY_FREQUENCIES = ["weekly", "fortnightly", "monthly"];
+function payrollShape(doc) {
+  doc.entities = doc.entities && typeof doc.entities === "object" ? doc.entities : {};
+  doc.people = doc.people && typeof doc.people === "object" ? doc.people : {};
+  doc.adjustments = Array.isArray(doc.adjustments) ? doc.adjustments : [];
+  return doc;
+}
+const hrManagerOnly = (req, res, next) => (forms.hrManager(req.user) ? next() : res.status(403).json({ error: "Only HR managers can change payroll" }));
+
+app.get(
+  "/api/payroll",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!forms.canSeeHr(req.user)) return res.status(403).json({ error: "Payroll is for HR, Leadership and full access" });
+    const [doc, stored, users] = await Promise.all([getPayroll(), getStaffForms(), getUsers()]);
+    payrollShape(doc);
+    const logins = users.map(normalizeUser).map((u) => ({ username: u.username, entity: COMPANY_ENTITY[u.companies[0]] || "SOI", departments: u.departments }));
+    const leave = (stored.items || []).filter((i) => i.kind === "leave" && i.status !== "cancelled");
+    res.json({
+      entities: doc.entities, people: doc.people, adjustments: doc.adjustments, logins, leave,
+      entityLabels: PAY_ENTITY_LABEL, leaveTypes: forms.LEAVE_TYPES, currencies: forms.CURRENCIES, canEdit: forms.hrManager(req.user),
+    });
+  })
+);
+
+// One entity's pay period, currency and leave rules (text HR writes; the
+// tracker doesn't apply them).
+app.put(
+  "/api/payroll/entity/:entity",
+  authMiddleware,
+  hrManagerOnly,
+  asyncHandler(async (req, res) => {
+    const ent = req.params.entity;
+    if (!PAY_ENTITY_LABEL[ent]) return res.status(404).json({ error: "Unknown entity" });
+    const b = req.body || {};
+    let out = null;
+    await withPayroll((doc) => {
+      payrollShape(doc);
+      const e = (doc.entities[ent] = doc.entities[ent] || {});
+      if ("frequency" in b) e.frequency = PAY_FREQUENCIES.includes(b.frequency) ? b.frequency : "weekly";
+      if ("currency" in b) e.currency = forms.CURRENCIES.includes(b.currency) ? b.currency : "";
+      if (b.rules && typeof b.rules === "object") {
+        e.rules = {};
+        for (const t of forms.LEAVE_TYPES) e.rules[t.id] = String(b.rules[t.id] || "").trim().slice(0, 1000);
+        e.rulesBy = req.user.username;
+        e.rulesAt = Date.now();
+      }
+      out = e;
+    });
+    res.json(out);
+  })
+);
+
+// One person's entity and weekly base pay.
+app.put(
+  "/api/payroll/person/:username",
+  authMiddleware,
+  hrManagerOnly,
+  asyncHandler(async (req, res) => {
+    const login = (await getUsers()).find((u) => sameUser(u.username, req.params.username));
+    if (!login) return res.status(404).json({ error: "No login by that name" });
+    const b = req.body || {};
+    let out = null, problem = "";
+    await withPayroll((doc) => {
+      payrollShape(doc);
+      const p = (doc.people[login.username] = doc.people[login.username] || {});
+      if ("entity" in b) p.entity = PAY_ENTITY_LABEL[b.entity] ? b.entity : "";
+      if ("basePay" in b) {
+        const n = Math.round(Number(b.basePay) * 100) / 100;
+        if (b.basePay === "" || b.basePay == null) p.basePay = null;
+        else if (Number.isFinite(n) && n >= 0 && n < 1e6) p.basePay = n;
+        else { problem = "Enter the weekly base pay as a number"; return; }
+      }
+      if ("employeeId" in b) p.employeeId = forms.text(b.employeeId, 40);
+      p.updatedBy = req.user.username;
+      p.updatedAt = Date.now();
+      out = p;
+    });
+    if (problem) return res.status(400).json({ error: problem });
+    res.json(out);
+  })
+);
+
+// One-off additions or deductions in a pay week (Phase 5's spot bonus is one).
+app.post(
+  "/api/payroll/adjustments",
+  authMiddleware,
+  hrManagerOnly,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const users = await getUsers();
+    const login = users.find((u) => sameUser(u.username, b.person));
+    if (!login) return res.status(400).json({ error: "Pick a person" });
+    const amount = Math.round(Number(b.amount) * 100) / 100;
+    if (!Number.isFinite(amount) || !amount || Math.abs(amount) >= 1e6) return res.status(400).json({ error: "Enter an amount" });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(b.week || "")) return res.status(400).json({ error: "Pick the pay week" });
+    const reason = forms.text(b.reason, 200);
+    if (!reason) return res.status(400).json({ error: "Say what it's for" });
+    const adj = {
+      id: newId(), person: login.username, week: b.week, amount, currency: forms.CURRENCIES.includes(b.currency) ? b.currency : "",
+      reason, source: "manual", by: req.user.username, at: Date.now(),
+    };
+    await withPayroll((doc) => { payrollShape(doc).adjustments.push(adj); });
+    res.status(201).json(adj);
+  })
+);
+app.delete(
+  "/api/payroll/adjustments/:id",
+  authMiddleware,
+  hrManagerOnly,
+  asyncHandler(async (req, res) => {
+    await withPayroll((doc) => { payrollShape(doc); doc.adjustments = doc.adjustments.filter((a) => a.id !== req.params.id); });
+    res.json({ ok: true });
+  })
+);
+
 if (itRequestsConfigured) {
   setTimeout(syncItRequests, 15 * 1000);
   setInterval(syncItRequests, IT_REQUESTS_EVERY_MS);

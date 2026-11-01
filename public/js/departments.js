@@ -55,6 +55,8 @@ function renderDepartment() {
   var trimmed = dept === "Business Development" || dept === "US Government" || group === "admin";
   if (!trimmed || deptTasks(dept).some(function (t) { return itemKind(t) === "task"; })) subs.push({ id: "tasks", label: "Tasks" });
   subs.push({ id: "projects", label: "Projects" });
+  // HR's Payroll: HR, Leadership and full access (the server checks too).
+  if (dept === "HR" && (inMyDept("HR") || me.leadership)) subs.push({ id: "payroll", label: "Payroll" });
   if (dept === "IT" && me.itNotebook) subs.push({ id: "resolved", label: "Resolved" });
   if (dept === "HR" && me.performance) subs.push({ id: "performance", label: "Performance" + (perfFlagged ? " (" + perfFlagged + ")" : "") });
   if (!trimmed && group !== "admin") subs.push({ id: "sops", label: "SOPs" });
@@ -64,7 +66,8 @@ function renderDepartment() {
 
   // Administration departments: Staff-Facing (forms for everyone) and
   // Department-Facing (the department's own work, for its own people).
-  var mine = group !== "admin" || inMyDept(dept);
+  // Leadership also sees HR's side (HR data is HR, Leadership and full access).
+  var mine = group !== "admin" || inMyDept(dept) || (dept === "HR" && me.leadership);
   var face = group === "admin" ? (mine ? adminFace[dept] || "dept" : "staff") : "";
 
   var totalOpen = depts.reduce(function (s, d) { return s + openCount(d); }, 0);
@@ -112,6 +115,7 @@ function renderDepartment() {
   else if (sub === "insights") body = renderWarehouseInsights();
   else if (sub === "board") body = renderBoard(dept);
   else if (sub === "performance") body = renderPerformance(true);
+  else if (sub === "payroll") body = renderPayroll();
   else if (sub === "tasks") body = isOps(dept) ? renderOpsTable(dept) : renderTaskTable(dept);
   else if (sub === "projects") body = renderFormProjects(dept) + renderProjectTable(dept);
   else {
