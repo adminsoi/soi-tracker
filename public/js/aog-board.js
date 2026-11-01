@@ -409,6 +409,8 @@ document.addEventListener("input", function (e) {
 document.addEventListener("change", function (e) {
   var t = e.target;
   if (t.id === "brdPerson") { brd.person = t.value; render(); return; }
+  // Picking a person or a deadline means a next step, so tick the box for it.
+  if ((t.id === "brdNoteFor" || t.id === "brdNoteDue") && $("#brdNoteMgr")) { $("#brdNoteMgr").checked = true; return; }
   if (t.dataset && t.dataset.bcf && t.tagName === "SELECT") {
     (brd.colf[t.dataset.bcf] = brd.colf[t.dataset.bcf] || {})[t.dataset.k] = t.value; brd.colOpen = t.dataset.bcf;
     render(); brdRefocus(t.id); return;
