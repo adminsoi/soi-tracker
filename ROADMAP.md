@@ -110,8 +110,9 @@ Mentions of You, and files created automatically from Pentagon.
       roles. Column headers show the stage colour; each file's stripe shows
       its responsible person's department. Attachments stay in
       `board_files/<file id>/`.
-- [ ] **3. US Gov Kanban** (reuses Phase 2). Built on `staging`, not yet
-      tested there. The user's answers: columns Solicitation → Bid
+- [x] **3. US Gov Kanban** (reuses Phase 2). Tested on staging and
+      redeployed 31 Oct 2026; Leadership still has to add the government
+      customer list on the live board. The user's answers: columns Solicitation → Bid
       Submitted → Awarded → Purchased → Item Received → Delivered; only US
       Government (plus full-access and leadership) see or work it; Pentagon
       feeds it by a government-customer list; same cost / mark-up / margin
