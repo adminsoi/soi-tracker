@@ -365,10 +365,12 @@ function sfUpdate(dept, id, body) {
   }, function (err) { setSync("on", "Live"); toast(err.message, true); sfDeptReload(dept); requestRender(); });
 }
 // Status picker, person responsible and internal notes for one submission.
+// (data-sf-dept, not data-dept: a click on [data-dept] opens that
+// department's tab in app.js, which redrew the page and shut the dropdown.)
 function sfStatusPick(dept, i, can, only) {
   var opts = (only || SF_STATUSES[i.kind]).filter(function (s) { return s !== "cancelled" && s !== "draft" || s === i.status; });
   if (!can || i.status === "cancelled") return sfChip(i.kind, i.status);
-  return '<select class="fb-in" data-sfd-st="' + E(i.id) + '" data-dept="' + E(dept) + '" aria-label="Status">' + opts.map(function (s) {
+  return '<select class="fb-in" data-sfd-st="' + E(i.id) + '" data-sf-dept="' + E(dept) + '" aria-label="Status">' + opts.map(function (s) {
     return '<option value="' + s + '"' + (s === i.status ? " selected" : "") + ">" + E(sfStatusLabel(i.kind, s)) + "</option>";
   }).join("") + "</select>";
 }
@@ -376,12 +378,12 @@ function sfAssignPick(dept, i, can, people) {
   if (!can) return staticCell(i.assignee);
   var list = people.slice();
   if (i.assignee && list.indexOf(i.assignee) === -1) list.unshift(i.assignee);
-  return '<select class="fb-in" data-sfd-as="' + E(i.id) + '" data-dept="' + E(dept) + '" aria-label="Responsible"><option value="">Unassigned</option>' + list.map(function (u) {
+  return '<select class="fb-in" data-sfd-as="' + E(i.id) + '" data-sf-dept="' + E(dept) + '" aria-label="Responsible"><option value="">Unassigned</option>' + list.map(function (u) {
     return '<option value="' + E(u) + '"' + (sameUser(u, i.assignee) ? " selected" : "") + ">" + E(u) + "</option>";
   }).join("") + "</select>";
 }
 function sfNotes(dept, i, can) {
-  return '<textarea class="fb-in fb-notes" rows="1" data-sfd-notes="' + E(i.id) + '" data-dept="' + E(dept) + '"' + (can ? "" : " disabled") + ' placeholder="' + (can ? "Notes (department only)…" : "") + '">' + E(i.notes || "") + "</textarea>";
+  return '<textarea class="fb-in fb-notes" rows="1" data-sfd-notes="' + E(i.id) + '" data-sf-dept="' + E(dept) + '"' + (can ? "" : " disabled") + ' placeholder="' + (can ? "Notes (department only)…" : "") + '">' + E(i.notes || "") + "</textarea>";
 }
 function sfDetails(i) {
   var f = i.fields || {}, body = f.details || f.notes || "";
@@ -443,13 +445,13 @@ function renderFormProjects(dept) {
 document.addEventListener("change", function (e) {
   var t = e.target, ds = t.dataset || {};
   if (ds.sfdSt) {
-    var dept = ds.dept, to = t.value;
+    var dept = ds.sfDept, to = t.value;
     if (to === "declined" || to === "rejected") {
       sfAsk(to === "declined" ? "Decline this request" : "Reject this reimbursement", "Why? The person who sent it will see this.", function (reason) { sfUpdate(dept, ds.sfdSt, { status: to, reason: reason }); });
       setTimeout(render, 0);
       return;
     }
     sfUpdate(dept, ds.sfdSt, { status: to });
-  } else if (ds.sfdAs) sfUpdate(ds.dept, ds.sfdAs, { assignee: t.value });
-  else if (ds.sfdNotes) sfUpdate(ds.dept, ds.sfdNotes, { notes: t.value });
+  } else if (ds.sfdAs) sfUpdate(ds.sfDept, ds.sfdAs, { assignee: t.value });
+  else if (ds.sfdNotes) sfUpdate(ds.sfDept, ds.sfdNotes, { notes: t.value });
 });
