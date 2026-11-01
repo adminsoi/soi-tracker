@@ -19,7 +19,7 @@ var DEPT_TAGLINE = {
   "Procurement": "Parts, platforms and customers, plus RFQs and quotes from Pentagon.",
   "Purchasing": "Parts, platforms and customers, plus sales and purchase orders from Pentagon.",
   "Warehouse": "Parts, platforms and customers moving through the warehouse.",
-  "Accounting & Finance": "Bank balances, payments to approve, expected receipts and tasks."
+  "Accounting & Finance": "Bills and reimbursements to approve, transfers to make, bank balances and expected receipts."
 };
 // Procurement / Purchasing / Warehouse use part rows; everything else is projects with sub-tasks.
 var OPS_DEPTS = ["Procurement", "Purchasing", "Warehouse"];
@@ -86,7 +86,7 @@ var DEPARTMENTS = [];
 var activeCompany = null;
 var page = "departments";        // departments (Operations / Administration) | overview | mentions | inbox | strategy | sop | people | documents | chat | calendar | global | performance
 var activeDept = null;
-var subView = {};                // dept -> "tasks" | "projects" | "finance" | … | Pentagon view id
+var subView = {};                // dept -> "tasks" | "projects" | "approvals" | … | Pentagon view id
 var adminFace = {};              // Administration dept -> "staff" | "dept" (Staff-Facing / Department-Facing)
 var tasks = [];                  // tasks made in the tracker
 var cards = [];                  // Pentagon rows as task-shaped cards
@@ -320,7 +320,7 @@ function pageUsesLiveData() {
   if (page === "overview") return true;
   if (page !== "departments") return false;
   var sub = subView[activeDept];
-  return !sub || sub === "tasks" || sub === "projects" || sub === "finance";
+  return !sub || sub === "tasks" || sub === "projects" || FIN_SUBS.indexOf(sub) !== -1;
 }
 document.addEventListener("visibilitychange", function () { if (!document.hidden && me) refresh(); });
 

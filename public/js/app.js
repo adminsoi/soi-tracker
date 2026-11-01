@@ -121,7 +121,7 @@ document.addEventListener("click", function (e) {
   } else if (d.sub) {
     subView[activeDept] = d.sub;
     render();
-    if (d.sub === "finance") refresh();
+    if (FIN_SUBS.indexOf(d.sub) !== -1) refresh();
   } else if (d.source) {
     showSource = d.source; render();
   } else if (d.add) {

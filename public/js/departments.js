@@ -37,7 +37,9 @@ function renderDepartment() {
   var dept = activeDept;
   var views = pentagonViewsFor(dept);
   var subs = [];
-  if (dept === "Accounting & Finance" && canSeeFinance()) subs.push({ id: "finance", label: "Finance" });
+  // Finance: Approvals (above "Approved to pay"), Transfers ("Approved to
+  // pay" and below), Balances.
+  if (dept === "Accounting & Finance" && canSeeFinance()) subs.push({ id: "approvals", label: "Approvals" }, { id: "transfers", label: "Transfers" }, { id: "balances", label: "Balances" });
   if (dept === "Business Development" && (activeCompany === "SOI Aviation" || (activeCompany === ALL && hasSOI()))) subs.push({ id: "analytics", label: "Analytics" });
   // Warehouse opens on Insights (the first tab is where a department lands).
   if (dept === "Warehouse" && (me.leadership || me.fullAccess || me.departments.indexOf("Warehouse") !== -1)) subs.push({ id: "insights", label: "Insights" });
@@ -107,7 +109,9 @@ function renderDepartment() {
 
   var body;
   if (face === "staff") body = renderStaffFacing(dept);
-  else if (sub === "finance") body = renderFinance();
+  else if (sub === "approvals") body = renderFinanceApprovals();
+  else if (sub === "transfers") body = renderFinanceTransfers();
+  else if (sub === "balances") body = renderFinanceBalances();
   else if (sub === "analytics") body = renderBdAnalytics();
   else if (sub === "requests") body = renderItRequests();
   else if (sub === "resolved") body = renderNotebook();
