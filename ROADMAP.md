@@ -61,7 +61,8 @@ it's merged and redeployed.
   AWS account via Bedrock, or limiting what the chat can read).
 - **Payroll rules from HR:** how each kind of leave reduces weekly pay, per
   entity (US, NZ, Singapore, UK). A qualified person checks the numbers
-  before any real payroll is sent.
+  before any real payroll is sent. Phase 4 left a "Leave rules" box per
+  entity on HR → Payroll for HR to fill in; nothing applies them yet.
 - **Mail.Send** for each person's mailbox (Microsoft 365 admin) before
   email replies can be sent as that person.
 - **Staging stack** `soi-tracker-staging` (port 8443, `staging` branch,
@@ -137,7 +138,41 @@ Mentions of You, and files created automatically from Pentagon.
         contact who isn't in US Government can be the responsible person
         on a US Gov file without being able to open the board.
 - [ ] **4. Administration** — IT, Admin, HR (incl. leave, payroll,
-      performance), Finance.
+      performance), Finance. Built on `staging` 31 Oct 2026; not yet
+      tested on the staging stack. The user's answers: leave is approved
+      by a manager in the person's department, then HR; reimbursements go
+      Submitted → Finance checked → Approved to pay → Paid (plus
+      Rejected), Finance only; the old Finance tables split into
+      Approvals / Transfers / Balances; Payroll stores weekly base pay;
+      leave types Annual, Sick, Unpaid, Parental, Bereavement, Jury duty,
+      Other; admin request categories "Snacks, coffee & tea" and "Office
+      & supplies"; a receipt is required for reimbursements.
+      - Every login sees Administration. Staff-Facing (the forms and
+        "What you've sent") is for everyone; Department-Facing is for the
+        department's own people, plus Leadership on HR (read-only).
+      - Rules in `staffforms.js`; routes `/api/staff-forms*` and
+        `/api/payroll*` in `index.js`; S3 `staff_forms.json` (receipts
+        under `staff_form_files/<id>/`) and `payroll.json`. Front end:
+        `staff-forms.js`, `payroll.js`, `finance.js`.
+      - IT: the ticket form makes an IT request (`source: "staff"`) on
+        Requests, with the login's email. Department-Facing: Requests,
+        Projects, Resolved.
+      - Admin and HR Projects start with ongoing projects ("Admin
+        requests", "HR issues", "Performance comments") that list every
+        submission as a task with a person responsible, status and
+        department-only notes.
+      - HR's forms, leave and payroll: HR, Leadership and full access
+        only, checked on the server. Leave waiting for someone's approval
+        shows on HR → Staff-Facing for them.
+      - **Payroll never works out pay.** Per entity and pay week it shows
+        base pay, approved leave days and adjustments; each entity has an
+        empty "Leave rules" box for HR, and the base-pay total is marked
+        as needing a qualified person's check. For Phase 5: a spot bonus
+        is an entry in `payroll.json` `adjustments`
+        (`{ person, week (Monday), amount, currency, reason, source }`).
+      - Still open: nothing is emailed yet (new submissions, approvals,
+        decisions); leave approvals don't show on Mentions of You; a
+        performance comment isn't copied into Performance automatically.
 - [ ] **5. People** — employment file and spot bonus.
 - [ ] **6. Documents** — drag-and-drop S3 file manager, read-only with
       "request edit" raising an IT ticket.
