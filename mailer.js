@@ -21,13 +21,15 @@ if (!configured) {
   );
 }
 
+// to: one address or a list (e.g. an entity's accountants).
 // replyTo: where replies go — one address or a list (e.g. the person who
 // resolved a ticket and the IT mailbox the tracker reads).
 // attachments: [{ name, contentType, content (Buffer) }] — keep the total
 // under about 3 MB (Graph's limit for sending in one request).
 // Returns true when sent, false when email isn't set up.
 async function sendMail({ to, subject, html, replyTo, saveCopy, attachments }) {
-  if (!configured || !to) return false;
+  const toList = [...new Set([].concat(to || []).map((a) => String(a || "").trim()).filter(Boolean))];
+  if (!configured || !toList.length) return false;
 
   const token = await getAccessToken();
   const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(FROM_EMAIL)}/sendMail`;
@@ -35,7 +37,7 @@ async function sendMail({ to, subject, html, replyTo, saveCopy, attachments }) {
     message: {
       subject,
       body: { contentType: "HTML", content: html },
-      toRecipients: [{ emailAddress: { address: to } }],
+      toRecipients: toList.map((address) => ({ emailAddress: { address } })),
     },
     saveToSentItems: !!saveCopy,
   };
@@ -56,7 +58,7 @@ async function sendMail({ to, subject, html, replyTo, saveCopy, attachments }) {
   if (!res.ok) {
     const text = await res.text();
     const err = new Error(`Graph sendMail failed (${res.status}): ${text}`);
-    err.reason = explainSendError(res.status, text, to);
+    err.reason = explainSendError(res.status, text, toList.join(", "));
     throw err;
   }
   return true;

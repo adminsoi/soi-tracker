@@ -15,7 +15,7 @@ var ppl = { list: null, at: 0, loading: false, error: "", sel: "", person: null,
 // that section's fields. Pay (and entity) can't be edited on your own file.
 var PP_SECTIONS = {
   employment: { label: "Employment", keys: ["jobTitle", "department", "manager", "startDate", "birthday", "employmentType", "entity", "notes"] },
-  pay: { label: "Pay", keys: ["basePay", "currency"] },
+  pay: { label: "Pay", keys: ["basePay", "currency", "exempt"] },
   emergency: { label: "Emergency contact", keys: ["emergency"] },
   other: { label: "Other notes", keys: ["otherNotes"] }
 };
@@ -37,7 +37,7 @@ function loadPerson(username) {
 }
 function ppDraftOf(d) {
   var x = { emergency: Object.assign({ name: "", relationship: "", phone: "", email: "" }, d.emergency || {}),
-    basePay: d.pay.basePay == null ? "" : String(d.pay.basePay), currency: d.pay.currency || "", entity: d.pay.entity || "" };
+    basePay: d.pay.basePay == null ? "" : String(d.pay.basePay), currency: d.pay.currency || "", entity: d.pay.entity || "", exempt: d.pay.exempt === true };
   ["jobTitle", "department", "manager", "startDate", "birthday", "employmentType", "notes", "otherNotes"].forEach(function (k) { x[k] = d[k] || ""; });
   return x;
 }
@@ -134,6 +134,9 @@ function renderPersonFile() {
     return row("basePay", "Weekly base pay", d.pay.basePay == null ? dim("Not entered") : E(sfAmount(d.pay.basePay, cur)), on ? input("basePay", "number", ' step="0.01" min="0" placeholder="Not entered"') : null) +
       row("currency", "Pay currency", d.pay.currency ? E(d.pay.currency) : E(cur) + ' <span class="small-note">(not set on them — ' + (d.pay.entityCurrency ? "their entity's" : "USD by default") + ")</span>",
         on ? pick("currency", o.currencies, null, "Entity's currency" + (d.pay.entityCurrency ? " (" + d.pay.entityCurrency + ")" : ", else USD")) : null) +
+      // SOI (US) only: a flag, set by HR or Leadership. Nothing works out overtime from it.
+      (d.entity === "SOI" ? row("exempt", "Exempt (salaried, no overtime)", (d.pay.exempt === true ? "Yes — exempt" : d.pay.exempt === false ? "No — hourly" : dim("Not set")) + ' <span class="small-note">Set by HR or Leadership</span>',
+        on ? '<label class="sf-check"><input type="checkbox" class="check" id="pp-exempt" data-pp-f="exempt"' + (x.exempt ? " checked" : "") + "> Exempt (salaried, no overtime)</label>" : null) : "") +
       row("", "Employee ID (from HR → Payroll)", d.pay.employeeId ? E(d.pay.employeeId) : dim("Not entered")) +
       row("", "Tax and national ID numbers", '<span class="small-note"><i>[Placeholder — not stored in the tracker. Kept in the payroll provider\'s records.]</i></span>');
   }, !self);
@@ -187,7 +190,7 @@ function renderPersonFile() {
   var history = '<div class="section-title" style="margin-top:22px;"><div><h2>History</h2><span class="small-note">Read-only, from what\'s already in the tracker.</span></div></div>' +
     '<div class="card-label">Spot bonuses and payroll adjustments</div>' +
     table(["Pay week", "Amount", "From", "What for", ""], adjRows, "None yet.") +
-    '<p class="small-note">A spot bonus can be removed here until its pay week ends; after that, ask HR.</p>' +
+    '<p class="small-note">A spot bonus can be removed here until HR approves that week and sends it to the accountants (HR → Payroll); after that, HR has to undo the approval first.</p>' +
     '<div class="card-label" style="margin-top:16px;">Approved leave</div>' + table(["Leave", "Dates", "Days"], leaveRows, "No approved leave.") +
     '<div class="card-label" style="margin-top:16px;">Performance comments</div>' + table(["Sent", "Type", "Comment", "Status"], commentRows, "No performance comments about this person.") + unmatched +
     '<div class="card-label" style="margin-top:16px;">Performance tracker (HR → Performance)</div>' + perfPart +
@@ -231,12 +234,12 @@ function ppUpload(files) {
 document.addEventListener("input", function (e) {
   var ds = e.target.dataset || {};
   if (!ppl.draft) return;
-  if (ds.ppF) ppl.draft[ds.ppF] = e.target.value;
+  if (ds.ppF) ppl.draft[ds.ppF] = e.target.type === "checkbox" ? e.target.checked : e.target.value;
   else if (ds.ppEm) ppl.draft.emergency[ds.ppEm] = e.target.value;
 });
 document.addEventListener("change", function (e) {
   var t = e.target, ds = t.dataset || {};
-  if (ds.ppF && ppl.draft) ppl.draft[ds.ppF] = t.value;
+  if (ds.ppF && ppl.draft) ppl.draft[ds.ppF] = t.type === "checkbox" ? t.checked : t.value;
   else if ("ppFiles" in ds) { ppUpload(t.files); t.value = ""; }
 });
 document.addEventListener("click", function (e) {
@@ -249,7 +252,11 @@ document.addEventListener("click", function (e) {
   else if ("ppCancel" in ds) { ppl.editing = ""; ppl.draft = null; render(); }
   else if ("ppSave" in ds && d && ppl.editing) {
     var x = ppl.draft, body = {};
-    PP_SECTIONS[ppl.editing].keys.forEach(function (k) { if (!(ppSelf(d) && (k === "entity" || k === "basePay" || k === "currency"))) body[k] = x[k]; });
+    PP_SECTIONS[ppl.editing].keys.forEach(function (k) {
+      if (ppSelf(d) && ["entity", "basePay", "currency", "exempt"].indexOf(k) !== -1) return;
+      if (k === "exempt" && d.entity !== "SOI") return;
+      body[k] = x[k];
+    });
     ppl.saving = true; render();
     api(ppBase(), { method: "PUT", body: JSON.stringify(body) })
       .then(function (r) { ppl.editing = ""; ppl.draft = null; toast(r.changed.length ? "Saved: " + r.changed.join(", ") + "." : "No changes to save."); }, function (err) { toast(err.message, true); })

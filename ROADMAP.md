@@ -233,12 +233,30 @@ Mentions of You, and files created automatically from Pentagon.
         else USD. Not to yourself; a second click within 10 seconds adds
         nothing; the server refuses if the currency changed since the
         confirm.
-      - Still open: Payroll has no "mark week done" yet, so Leadership can
-        remove a spot bonus until its pay week ends (HR can still remove
-        any adjustment on Payroll). Should Payroll get a "done" marker?
-        Should the spot bonus fall back to the entity's usual currency
-        (e.g. NZD for CAS) instead of USD when nothing is set? Performance
-        comments link only when their "about" is exactly the login name.
+      - Payroll approval (1 Nov 2026, at the user's request): "Approve and
+        send to accountants" under each entity's table on the week shown.
+        Rules, snapshot and email in `payrollcheck.js`; routes
+        `POST /api/payroll/approve` and `POST /api/payroll/approve/undo`
+        (reason required), HR managers and full access only (`hrManager`,
+        as for every Payroll change; Leadership still sees Payroll
+        read-only). Accountants' addresses per entity in
+        `payroll.json` `entities[ent].accountants` (none preset — **add
+        them on live**). Approval at `approvals[ent][week]` = `{ by, at,
+        sentTo, mailed, mailError?, snapshot }`, plus `approvalLog`. Sent
+        with `sendMail` (now takes a list in `to`) from `MS_FROM_EMAIL`
+        using the existing Mail.Send app permission, `saveCopy`, replyTo
+        the approver. An approved week shows its snapshot and is locked:
+        adjustments and spot bonuses can't be added or removed for it
+        (this replaced "until the pay week ends"). Without email (staging)
+        it's recorded with `mailed: false` and says nothing was sent.
+      - Exempt (salaried, no overtime): SOI (US) only, on People → Pay,
+        stored as `payroll.json` `people[u].exempt`; the server refuses it
+        for other entities. A flag for HR / Leadership, shown on the SOI
+        Payroll table and in the email; no overtime rules.
+      - Still open: should the spot bonus fall back to the entity's usual
+        currency (e.g. NZD for CAS) instead of USD when nothing is set?
+        Should Leadership (not only HR managers) be able to approve
+        payroll for the accountants?
 - [ ] **6. Documents** — drag-and-drop S3 file manager, read-only with
       "request edit" raising an IT ticket.
 - [ ] **7. Strategy Meeting agenda and SOP update form.**

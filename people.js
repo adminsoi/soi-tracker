@@ -93,13 +93,13 @@ function payCurrency(payroll, username, entity, currencies) {
 }
 
 /**
- * Whether Leadership may still take a spot bonus back. Payroll has no
- * "marked done" yet, so it's until the pay week it's in has ended; after
- * that only HR can remove it (HR → Payroll). Returns an error message, or "".
+ * Whether Leadership may still take a spot bonus back: until that pay week
+ * is approved and sent to the accountants on HR → Payroll (`approved`,
+ * from payrollcheck.adjustmentLocked). Returns an error message, or "".
  */
-function spotBonusLock(adj, today) {
+function spotBonusLock(adj, approved) {
   if (!adj || adj.source !== SPOT_BONUS.source) return "Only spot bonuses can be removed here — other adjustments are on HR → Payroll";
-  if (addDays(adj.week, 6) < today) return "That pay week has passed — ask HR";
+  if (approved) return "That pay week is approved and sent to the accountants — HR has to undo the approval first";
   return "";
 }
 

@@ -11,7 +11,7 @@
 // adjustments) and keeps a box per entity for HR's rules. A qualified
 // person checks every figure before any real payroll is sent. HR,
 // Leadership and full access see it (the server checks); HR managers edit.
-var pay = { data: null, at: 0, loading: false, error: "", week: "", rules: "", ruleDraft: {}, adding: false, add: {} };
+var pay = { data: null, at: 0, loading: false, error: "", week: "", rules: "", ruleDraft: {}, acctDraft: {}, adding: false, add: {}, approving: "" };
 var PAY_ENTITIES = ["SOI", "CAS", "RedSun", "NanoTech"];
 function loadPayroll() {
   if (pay.loading) return;
@@ -35,6 +35,44 @@ function payLeaveDays(i, ws) {
 }
 function payPerson(d, username) { return d.people[username] || {}; }
 function payEntityOf(d, login) { var p = payPerson(d, login.username); return PAY_ENTITIES.indexOf(p.entity) !== -1 ? p.entity : login.entity; }
+function payApproval(d, ent, ws) { return ((d.approvals || {})[ent] || {})[ws] || null; }
+// SOI (US) only: the Exempt flag HR or Leadership set on People.
+function payExemptTag(v) {
+  return v === true ? ' <span class="pill" title="Exempt (salaried, no overtime) — set by HR or Leadership on People">Exempt</span>'
+    : v === false ? ' <span class="pill" title="Not exempt — set by HR or Leadership on People">Hourly</span>' : "";
+}
+// The figures as they were approved and sent (read-only; later edits don't change them).
+function payApprovedTable(ap) {
+  var sn = ap.snapshot, sums = function (o) { return Object.keys(o).map(function (c) { return E(sfAmount(o[c], c)); }).join(" + ") || "—"; };
+  return '<div class="table-wrap"><table class="narrow"><thead><tr><th>Person</th><th>Weekly base pay</th><th>Approved leave this week (days)</th><th>Adjustments this week</th><th>Pay for the week</th></tr></thead><tbody>' +
+    (sn.rows.length ? sn.rows.map(function (r) {
+      return "<tr><td>" + E(r.person) + (sn.entity === "SOI" ? payExemptTag(r.exempt) : "") + "</td><td>" + (r.basePay == null ? '<span class="dim">Not entered</span>' : E(sfAmount(r.basePay, r.currency))) + "</td>" +
+        "<td>" + (r.leave.length ? r.leave.map(function (x) { return E(x.type) + ": " + x.days + (x.check ? ' <span class="pill rose">check</span>' : ""); }).join("<br>") : '<span class="dim">—</span>') + "</td>" +
+        "<td>" + (r.adjustments.length ? r.adjustments.map(function (a) { return E(sfAmount(a.amount, a.currency)) + ' <span class="small-note">' + E(a.reason) + (a.source === "spot-bonus" ? " · Spot bonus from " + E(a.by || "Leadership") : "") + "</span>"; }).join("<br>") : '<span class="dim">—</span>') + "</td>" +
+        '<td><span class="small-note">Waiting for HR\'s leave rules</span></td></tr>';
+    }).join("") : '<tr><td colspan="5" class="empty">Nobody on this entity had pay, leave or adjustments this week.</td></tr>') +
+    '<tr class="pay-total"><td><b>Totals as sent</b></td><td><b>' + sums(sn.totals.basePay) + '</b> <span class="pill rose">needs a qualified check</span></td><td colspan="3" class="small-note">Adjustments: ' + sums(sn.totals.adjustments) + ". Leave and adjustments aren't applied.</td></tr>" +
+    "</tbody></table></div>";
+}
+// Under each entity's table: approve and send to the accountants, or who approved it.
+function payApprovalBar(d, ent, ws, ap, can) {
+  var to = ((d.entities[ent] || {}).accountants || []);
+  var log = (d.approvalLog || []).filter(function (l) { return l.entity === ent && l.week === ws && l.what === "undone"; }).map(function (l) {
+    return '<div class="small-note">Approval undone by ' + E(l.by) + " on " + E(new Date(l.at).toLocaleString()) + ": " + E(l.reason) + "</div>";
+  }).join("");
+  if (ap) {
+    var who = "Approved by " + E(ap.by) + " on " + E(new Date(ap.at).toLocaleString());
+    var said = ap.mailed ? who + ", sent to " + E(ap.sentTo.join(", ")) + "."
+      : ap.mailError ? who + '. <b>The email to ' + E(ap.sentTo.join(", ")) + " failed:</b> " + E(ap.mailError) + " Undo the approval and approve again to resend."
+      : who + ", <b>but email isn't set up here, so nothing was sent</b> (it would have gone to " + E(ap.sentTo.join(", ")) + ").";
+    return '<div class="banner" style="margin:8px 0 18px;">🔒 ' + said + " The week is locked: these are the figures as approved." +
+      (can ? ' <button type="button" class="text-button" data-pay-unapprove="' + ent + '">Undo approval</button>' : "") + "</div>" + log;
+  }
+  if (!can) return '<p class="small-note" style="margin:8px 0 18px;">Not approved for the accountants yet.</p>' + log;
+  return '<div class="nb-foot" style="margin:8px 0 18px;"><button type="button" class="primary" data-pay-approve="' + ent + '"' + (!to.length || pay.approving === ent ? " disabled" : "") + ">" +
+    (!to.length ? "Add the accountants' email first" : pay.approving === ent ? "Approving…" : "Approve and send to accountants") + "</button>" +
+    '<span class="small-note">' + (to.length ? "To " + E(to.join(", ")) + ". They check the figures before running payroll." : "Set it under Leave rules & accountants.") + "</span></div>" + log;
+}
 function payCurrency(d, ent, p) { return (p && p.currency) || (d.entities[ent] || {}).currency || { SOI: "USD", CAS: "NZD", RedSun: "SGD", NanoTech: "GBP" }[ent]; }
 
 function renderPayroll() {
@@ -67,12 +105,12 @@ function renderPayroll() {
     });
     var shown = rows.filter(function (r) { return r.p.basePay != null || r.lv.length || r.adj.length || can; });
     var base = rows.reduce(function (s, r) { return s + (Number(r.p.basePay) || 0); }, 0);
-    var rulesOpen = pay.rules === ent;
+    var rulesOpen = pay.rules === ent, ap = payApproval(d, ent, ws);
     var draft = pay.ruleDraft[ent] || (pay.ruleDraft[ent] = Object.assign({}, rules));
     return '<div class="section-title"><div><h2>' + E(d.entityLabels[ent]) + "</h2>" +
       '<span class="small-note">' + E((e.frequency || "weekly").replace(/^./, function (c) { return c.toUpperCase(); })) + " · " + E(payCurrency(d, ent)) + " · " +
       (set ? set + " of " + d.leaveTypes.length + " leave rules written" + (e.rulesBy ? " (last by " + E(e.rulesBy) + ")" : "") : "<b>Leave rules not set by HR yet</b>") + "</span></div>" +
-      '<button type="button" class="text-button" data-pay-rules="' + ent + '">' + (rulesOpen ? "Hide leave rules" : "Leave rules") + "</button></div>" +
+      '<button type="button" class="text-button" data-pay-rules="' + ent + '">' + (rulesOpen ? "Hide leave rules & accountants" : "Leave rules & accountants") + "</button></div>" +
       (rulesOpen ? '<div class="card pay-rules" style="padding:16px 18px;margin-bottom:12px;"><div class="card-label">How each kind of leave changes pay — ' + E(d.entityLabels[ent]) + "</div>" +
         '<p class="small-note" style="margin:6px 0 12px;">For HR to fill in. The tracker shows these to whoever runs payroll; it doesn\'t apply them. Leave a box empty until HR has confirmed the rule.</p>' +
         (can ? '<div class="grid-2" style="gap:0 16px;"><div class="nb-field"><label for="pay-fr-' + ent + '">Pay period</label><select id="pay-fr-' + ent + '" data-pay-ent="' + ent + '" data-k="frequency">' + ["weekly", "fortnightly", "monthly"].map(function (f) {
@@ -84,10 +122,15 @@ function renderPayroll() {
             ? '<textarea id="pay-r-' + ent + "-" + t.id + '" rows="2" data-pay-rule="' + ent + ":" + t.id + '" placeholder="Not set">' + E(draft[t.id] || "") + "</textarea>"
             : '<div class="small-note">' + (rules[t.id] ? E(rules[t.id]) : "<i>Not set</i>") + "</div>") + "</div>";
         }).join("") +
-        (can ? '<div class="nb-foot"><button type="button" class="primary" data-pay-saverules="' + ent + '">Save leave rules</button><span class="small-note">Saved with your name and the time.</span></div>' : "") + "</div>" : "") +
-      '<div class="table-wrap"><table class="narrow"><thead><tr><th>Person</th><th>Weekly base pay</th><th>Approved leave this week (days)</th><th>Adjustments this week</th><th>Pay for the week</th></tr></thead><tbody>' +
+        (can ? '<div class="nb-foot"><button type="button" class="primary" data-pay-saverules="' + ent + '">Save leave rules</button><span class="small-note">Saved with your name and the time.</span></div>' : "") +
+        // The external accountants who check each approved week.
+        '<div class="nb-field" style="margin-top:16px;"><label for="pay-acct-' + ent + '">Accountants\' email(s)</label>' + (can
+          ? '<textarea id="pay-acct-' + ent + '" rows="2" data-pay-acct="' + ent + '" placeholder="One or more addresses, separated by commas">' + E(pay.acctDraft[ent] != null ? pay.acctDraft[ent] : (e.accountants || []).join(", ")) + "</textarea>"
+          : '<div class="small-note">' + ((e.accountants || []).length ? E(e.accountants.join(", ")) : "<i>Not set</i>") + "</div>") + "</div>" +
+        (can ? '<div class="nb-foot"><button type="button" class="primary" data-pay-saveacct="' + ent + '">Save accountants\' email</button><span class="small-note">"Approve and send to accountants" emails the week\'s figures here.</span></div>' : "") + "</div>" : "") +
+      (ap ? payApprovedTable(ap) : '<div class="table-wrap"><table class="narrow"><thead><tr><th>Person</th><th>Weekly base pay</th><th>Approved leave this week (days)</th><th>Adjustments this week</th><th>Pay for the week</th></tr></thead><tbody>' +
       (shown.length ? shown.map(function (r) {
-        return "<tr><td>" + E(r.l.username) + (can ? '<span class="co-note"><select class="fb-in" data-pay-person="' + E(r.l.username) + '" data-k="entity" aria-label="Entity">' + PAY_ENTITIES.map(function (x) {
+        return "<tr><td>" + E(r.l.username) + (ent === "SOI" ? payExemptTag(typeof r.p.exempt === "boolean" ? r.p.exempt : null) : "") + (can ? '<span class="co-note"><select class="fb-in" data-pay-person="' + E(r.l.username) + '" data-k="entity" aria-label="Entity">' + PAY_ENTITIES.map(function (x) {
             return '<option value="' + x + '"' + (x === ent ? " selected" : "") + ">" + x + "</option>"; }).join("") + "</select></span>" : "") + "</td>" +
           "<td>" + (can ? '<input class="fb-in fb-num" type="number" step="0.01" min="0" data-pay-person="' + E(r.l.username) + '" data-k="basePay" value="' + E(r.p.basePay == null ? "" : r.p.basePay) + '" placeholder="Not entered" aria-label="Weekly base pay">' : r.p.basePay == null ? '<span class="dim">Not entered</span>' : E(sfAmount(r.p.basePay, r.cur))) + "</td>" +
           "<td>" + (r.lv.length ? r.lv.join("<br>") : '<span class="dim">—</span>') + "</td>" +
@@ -97,7 +140,7 @@ function renderPayroll() {
           '<td><span class="small-note">Waiting for HR\'s leave rules</span></td></tr>';
       }).join("") : '<tr><td colspan="5" class="empty">Nobody on this entity yet.</td></tr>') +
       (shown.length ? '<tr class="pay-total"><td><b>Total base pay</b></td><td><b>' + E(sfAmount(base, payCurrency(d, ent))) + '</b> <span class="pill rose">needs a qualified check</span></td><td colspan="3" class="small-note">Base pay only. Leave and adjustments aren\'t applied.</td></tr>' : "") +
-      "</tbody></table></div>";
+      "</tbody></table></div>") + payApprovalBar(d, ent, ws, ap, can);
   }).join("");
 
   // Add an adjustment (HR managers).
@@ -140,6 +183,7 @@ document.addEventListener("input", function (e) {
   var ds = e.target.dataset || {};
   if (ds.payRule) { var p = ds.payRule.split(":"); (pay.ruleDraft[p[0]] = pay.ruleDraft[p[0]] || {})[p[1]] = e.target.value; }
   else if (ds.payAdd) pay.add[ds.payAdd] = e.target.value;
+  else if (ds.payAcct) pay.acctDraft[ds.payAcct] = e.target.value;
 });
 document.addEventListener("change", function (e) {
   var t = e.target, ds = t.dataset || {};
@@ -148,11 +192,40 @@ document.addEventListener("change", function (e) {
   else if (ds.payPerson) { var o = {}; o[ds.k] = t.value; payPut("/api/payroll/person/" + encodeURIComponent(ds.payPerson), o); }
 });
 document.addEventListener("click", function (e) {
-  var t = e.target.closest && e.target.closest("[data-pay-week],[data-pay-rules],[data-pay-saverules],[data-pay-deladj],[data-pay-addopen],[data-pay-addcancel],[data-pay-addsave],[data-pay-cancelleave]");
+  var t = e.target.closest && e.target.closest("[data-pay-week],[data-pay-rules],[data-pay-saverules],[data-pay-deladj],[data-pay-addopen],[data-pay-addcancel],[data-pay-addsave],[data-pay-cancelleave],[data-pay-saveacct],[data-pay-approve],[data-pay-unapprove]");
   if (!t) return;
   var ds = t.dataset;
   if (ds.payWeek != null) { pay.week = +ds.payWeek ? payAddDays(pay.week || payMonday(today), +ds.payWeek) : payMonday(today); render(); }
   else if (ds.payRules) { pay.rules = pay.rules === ds.payRules ? "" : ds.payRules; render(); }
+  else if (ds.paySaveacct) {
+    var ae = ds.paySaveacct, draft = pay.acctDraft[ae];
+    // The typed text stays if the server turns it down (a bad address).
+    api("/api/payroll/entity/" + encodeURIComponent(ae), { method: "PUT", body: JSON.stringify({ accountants: draft != null ? draft : ((pay.data.entities[ae] || {}).accountants || []).join(", ") }) })
+      .then(function () { delete pay.acctDraft[ae]; toast("Accountants' email saved."); }, function (err) { toast(err.message, true); })
+      .then(function () { pay.at = 0; loadPayroll(); });
+  }
+  else if (ds.payApprove) {
+    var pd = pay.data, pe = ds.payApprove, to = ((pd.entities[pe] || {}).accountants || []);
+    if (!to.length) return;
+    if (!confirm("Approve " + pd.entityLabels[pe] + ", week of " + fmtDate(pay.week) + ", and send the figures to:\n\n" + to.join("\n") +
+      "\n\nThey check them before running payroll. The week locks until someone undoes the approval." +
+      (pd.mailConfigured ? "" : "\n\nEmail isn't set up here: the approval is recorded but nothing is sent."))) return;
+    pay.approving = pe; render();
+    api("/api/payroll/approve", { method: "POST", body: JSON.stringify({ entity: pe, week: pay.week }) })
+      .then(function (ap) {
+        if (ap.mailed) toast("Approved and sent to " + ap.sentTo.join(", ") + ".");
+        else if (ap.mailError) toast("Approved, but the email failed: " + ap.mailError, true);
+        else toast("Approved, but email isn't set up here, so nothing was sent.");
+      }, function (err) { toast(err.message, true); })
+      .then(function () { pay.approving = ""; pay.at = 0; loadPayroll(); });
+  }
+  else if (ds.payUnapprove) {
+    var ue = ds.payUnapprove, uw = pay.week;
+    sfAsk("Undo the approval", "Why? It's logged, and the week unlocks. Approving again sends the email again.", function (reason) {
+      api("/api/payroll/approve/undo", { method: "POST", body: JSON.stringify({ entity: ue, week: uw, reason: reason }) })
+        .then(function () { toast("Approval undone."); }, function (err) { toast(err.message, true); }).then(function () { pay.at = 0; loadPayroll(); });
+    });
+  }
   else if (ds.paySaverules) payPut("/api/payroll/entity/" + encodeURIComponent(ds.paySaverules), { rules: pay.ruleDraft[ds.paySaverules] || {} }, "Leave rules saved.");
   else if (ds.payDeladj) {
     if (!confirm("Remove this adjustment?")) return;

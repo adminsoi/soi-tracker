@@ -440,7 +440,10 @@ access alone isn't enough).
   changed, never the text).
 - **Pay:** weekly base pay, pay currency and entity are the same record as
   **HR → Payroll** (`payroll.json`): change it on either page and both
-  show it. You can't change your own pay here. Tax and national ID numbers
+  show it. For SOI (US) employees only, **Exempt (salaried, no overtime)**
+  is a flag HR or Leadership set here; it shows as Exempt / Hourly on the
+  SOI Payroll table and in the accountants' email, and nothing works out
+  overtime from it. You can't change your own pay here. Tax and national ID numbers
   aren't stored in the tracker (a labelled placeholder says so). Nothing
   here is a payroll calculation; a qualified person checks every figure
   before any real payroll is sent.
@@ -449,8 +452,8 @@ access alone isn't enough).
   after this week's), with an optional reason. The confirm states the
   currency and week. It appears on HR → Payroll for that week (marked
   "Spot bonus from …") and in the file's history. Leadership can remove it
-  from the file until that pay week ends; after that, HR removes it on
-  Payroll.
+  from the file until HR approves that week for the accountants (below);
+  after that, HR has to undo the approval first.
 - **History** (read-only), each list with its own empty state: spot
   bonuses and payroll adjustments, approved leave, performance comments
   about the person, the Performance tracker and changes to the file.
@@ -467,6 +470,35 @@ access alone isn't enough).
     record (including people added there without a login whose name
     matches) and **Open in Performance**. Without Performance access the
     file only says whether records exist.
+
+## HR → Payroll: approve and send to the accountants
+
+Under each entity's table (SOI US, CAS NZ, Red Sun Singapore, Nanotech UK)
+for the week on screen, **Approve and send to accountants** emails that
+week's figures to the entity's external accountants, who check them before
+they run payroll. Only people who can edit Payroll (HR managers and full
+access) can approve or undo; the server checks.
+
+- **Accountants' email(s):** set per entity under **Leave rules &
+  accountants**. No addresses come preset: **add each entity's
+  accountants on live** before the first approval. Until then the button
+  says "Add the accountants' email first".
+- **The email** (after a confirm naming the recipients, entity and week):
+  subject "Payroll for check: <entity>, week of <Monday>", a table per
+  person (base pay, approved leave days, adjustments with spot bonuses
+  labelled, currency, Exempt / Hourly for SOI) and totals, a line saying
+  the figures need their check before payroll is run, and who approved it
+  and when. Nothing outside pay (no tax or ID numbers, contacts, notes or
+  performance). Sent from `MS_FROM_EMAIL` with the app's existing Mail.Send
+  permission, a copy kept in Sent Items, replies to the approver.
+- **Approval:** stored in `payroll.json` (`approvals[entity][week]`, with
+  the figures as sent, and `approvalLog`). The week then shows those
+  figures, locked: no adjustments or spot bonuses can be added or removed
+  for it, from Payroll or People. **Undo approval** needs a reason (logged)
+  and unlocks it; approving again sends again.
+- **Without email set up** (staging), the approval is still recorded and
+  the page says "Approved, but email isn't set up here, so nothing was
+  sent". A failed send says why; undo and approve again to resend.
 
 ## Operations board (Procurement · Purchasing · Warehouse)
 

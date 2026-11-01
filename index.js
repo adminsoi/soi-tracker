@@ -71,6 +71,7 @@ const { inboxThreads, syncFollowIndex, MailError } = require("./mail");
 const board = require("./board");
 const forms = require("./staffforms");
 const employment = require("./people");
+const payCheck = require("./payrollcheck");
 const { pentagonQuery } = require("./pentagon");
 const {
   PENTAGON_VIEWS,
@@ -4573,6 +4574,8 @@ function payrollShape(doc) {
   doc.entities = doc.entities && typeof doc.entities === "object" ? doc.entities : {};
   doc.people = doc.people && typeof doc.people === "object" ? doc.people : {};
   doc.adjustments = Array.isArray(doc.adjustments) ? doc.adjustments : [];
+  doc.approvals = doc.approvals && typeof doc.approvals === "object" ? doc.approvals : {};
+  doc.approvalLog = Array.isArray(doc.approvalLog) ? doc.approvalLog : [];
   return doc;
 }
 const hrManagerOnly = (req, res, next) => (forms.hrManager(req.user) ? next() : res.status(403).json({ error: "Only HR managers can change payroll" }));
@@ -4588,6 +4591,7 @@ app.get(
     const leave = (stored.items || []).filter((i) => i.kind === "leave" && i.status !== "cancelled");
     res.json({
       entities: doc.entities, people: doc.people, adjustments: doc.adjustments, logins, leave,
+      approvals: doc.approvals, approvalLog: doc.approvalLog.slice(-200), mailConfigured,
       entityLabels: PAY_ENTITY_LABEL, leaveTypes: forms.LEAVE_TYPES, currencies: forms.CURRENCIES, canEdit: forms.hrManager(req.user),
     });
   })
@@ -4603,10 +4607,18 @@ app.put(
     const ent = req.params.entity;
     if (!PAY_ENTITY_LABEL[ent]) return res.status(404).json({ error: "Unknown entity" });
     const b = req.body || {};
+    let accountants = null;
+    if ("accountants" in b) {
+      const parsed = payCheck.parseEmails(b.accountants);
+      if (parsed.error) return res.status(400).json({ error: parsed.error });
+      accountants = parsed.emails;
+    }
     let out = null;
     await withPayroll((doc) => {
       payrollShape(doc);
       const e = (doc.entities[ent] = doc.entities[ent] || {});
+      // The external accountants who check the week's figures (approve and send).
+      if (accountants) { e.accountants = accountants; e.accountantsBy = req.user.username; e.accountantsAt = Date.now(); }
       if ("frequency" in b) e.frequency = PAY_FREQUENCIES.includes(b.frequency) ? b.frequency : "weekly";
       if ("currency" in b) e.currency = forms.CURRENCIES.includes(b.currency) ? b.currency : "";
       if (b.rules && typeof b.rules === "object") {
@@ -4670,7 +4682,14 @@ app.post(
       id: newId(), person: login.username, week: b.week, amount, currency: forms.CURRENCIES.includes(b.currency) ? b.currency : "",
       reason, source: "manual", by: req.user.username, at: Date.now(),
     };
-    await withPayroll((doc) => { payrollShape(doc).adjustments.push(adj); });
+    let locked = false;
+    await withPayroll((doc) => {
+      payrollShape(doc);
+      // An approved week is locked until HR undoes the approval.
+      if (payCheck.approvalOf(doc, payCheck.entityOf(doc, normalizeUser(login), COMPANY_ENTITY), adj.week)) { locked = true; return; }
+      doc.adjustments.push(adj);
+    });
+    if (locked) return res.status(409).json({ error: "That pay week is approved and sent to the accountants — undo the approval first" });
     res.status(201).json(adj);
   })
 );
@@ -4679,7 +4698,92 @@ app.delete(
   authMiddleware,
   hrManagerOnly,
   asyncHandler(async (req, res) => {
-    await withPayroll((doc) => { payrollShape(doc); doc.adjustments = doc.adjustments.filter((a) => a.id !== req.params.id); });
+    const users = (await getUsers()).map(normalizeUser);
+    let locked = false;
+    await withPayroll((doc) => {
+      payrollShape(doc);
+      const adj = doc.adjustments.find((a) => a.id === req.params.id);
+      const login = adj && users.find((u) => sameUser(u.username, adj.person));
+      if (adj && payCheck.adjustmentLocked(doc, adj, login ? payCheck.entityOf(doc, login, COMPANY_ENTITY) : "")) { locked = true; return; }
+      doc.adjustments = doc.adjustments.filter((a) => a.id !== req.params.id);
+    });
+    if (locked) return res.status(409).json({ error: "That pay week is approved and sent to the accountants — undo the approval first" });
+    res.json({ ok: true });
+  })
+);
+
+// ---------- HR → Payroll: approve and send to the accountants ----------
+// An entity's pay week, approved by someone who can edit Payroll, is
+// emailed to that entity's external accountants for their check before
+// they run payroll (rules and email in payrollcheck.js). The figures are
+// stored with the approval as they were sent, and the week is locked (no
+// adjustments added or removed, spot bonuses included) until it's undone
+// with a reason. Without email set up (staging) the approval is still
+// recorded, marked as not sent.
+app.post(
+  "/api/payroll/approve",
+  authMiddleware,
+  hrManagerOnly,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const ent = String(b.entity || ""), week = String(b.week || "");
+    if (!PAY_ENTITY_LABEL[ent]) return res.status(404).json({ error: "Unknown entity" });
+    if (!payCheck.isMonday(week)) return res.status(400).json({ error: "Pick the pay week" });
+    const [users, stored] = await Promise.all([getUsers(), getStaffForms()]);
+    const logins = users.map(normalizeUser);
+    const me = logins.find((u) => sameUser(u.username, req.user.username)) || {};
+    let approval = null, problem = "", status = 400;
+    await withPayroll((doc) => {
+      payrollShape(doc);
+      const sentTo = ((doc.entities[ent] || {}).accountants || []).slice();
+      if (!sentTo.length) { problem = "Add the accountants' email first"; return; }
+      if (payCheck.approvalOf(doc, ent, week)) { problem = "That week is already approved"; status = 409; return; }
+      const snapshot = payCheck.buildSnapshot({ payroll: doc, logins, leave: stored.items || [], entity: ent, week, label: PAY_ENTITY_LABEL[ent], companyEntity: COMPANY_ENTITY });
+      approval = { by: req.user.username, at: Date.now(), sentTo, mailed: false, snapshot };
+      (doc.approvals[ent] = doc.approvals[ent] || {})[week] = approval;
+      doc.approvalLog.push({ entity: ent, week, what: "approved", by: approval.by, at: approval.at, sentTo });
+    });
+    if (problem) return res.status(status).json({ error: problem });
+    // Recorded first, then sent: a failed send leaves it approved and says why.
+    let mailed = false, mailError = "";
+    if (mailConfigured) {
+      const mail = payCheck.snapshotEmail(approval.snapshot, approval, escapeHtml);
+      try {
+        mailed = await sendMail({ to: approval.sentTo, subject: mail.subject, html: mail.html, saveCopy: true, replyTo: me.email ? [me.email] : undefined });
+      } catch (err) {
+        console.error("Payroll approval email failed:", err.message);
+        mailError = err.reason || "The email couldn't be sent";
+      }
+    }
+    await withPayroll((doc) => {
+      const ap = payCheck.approvalOf(payrollShape(doc), ent, week);
+      if (ap && ap.at === approval.at) { ap.mailed = mailed; if (mailError) ap.mailError = mailError; approval = ap; }
+      const log = doc.approvalLog.find((l) => l.entity === ent && l.week === week && l.at === approval.at);
+      if (log) log.mailed = mailed;
+    });
+    res.status(201).json(Object.assign({ mailConfigured }, approval));
+  })
+);
+// Undo an approval (a reason is required): the week unlocks; approving it
+// again sends again.
+app.post(
+  "/api/payroll/approve/undo",
+  authMiddleware,
+  hrManagerOnly,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const ent = String(b.entity || ""), week = String(b.week || "");
+    const reason = forms.text(b.reason, 500);
+    if (!reason) return res.status(400).json({ error: "Say why the approval is undone" });
+    let found = false;
+    await withPayroll((doc) => {
+      payrollShape(doc);
+      if (!payCheck.approvalOf(doc, ent, week)) return;
+      found = true;
+      delete doc.approvals[ent][week];
+      doc.approvalLog.push({ entity: ent, week, what: "undone", by: req.user.username, at: Date.now(), reason });
+    });
+    if (!found) return res.status(404).json({ error: "That week isn't approved" });
     res.json({ ok: true });
   })
 );
@@ -4772,12 +4876,13 @@ app.get(
     res.json(Object.assign(personSummary(login, f, payroll), {
       birthday: f.birthday || "", emergency: f.emergency || {}, notes: f.notes || "", otherNotes: f.otherNotes || "", files: f.files || [],
       history: (f.history || []).slice().reverse(), updatedBy: f.updatedBy || "", updatedAt: f.updatedAt || 0,
-      pay: { basePay: p.basePay == null ? null : p.basePay, currency: p.currency || "", entity: PAY_ENTITY_LABEL[p.entity] ? p.entity : "", employeeId: p.employeeId || "", entityCurrency: (payroll.entities[entity] || {}).currency || "" },
+      pay: { basePay: p.basePay == null ? null : p.basePay, currency: p.currency || "", entity: PAY_ENTITY_LABEL[p.entity] ? p.entity : "", employeeId: p.employeeId || "", entityCurrency: (payroll.entities[entity] || {}).currency || "",
+        exempt: typeof p.exempt === "boolean" ? p.exempt : null },
       spot: { amount: employment.SPOT_BONUS.amount, week: employment.nextPayWeek(today), currency: employment.payCurrency(payroll, login.username, entity, forms.CURRENCIES) },
       leave: items.filter((i) => i.kind === "leave" && i.status === "approved" && sameUser(i.by, login.username))
         .map((i) => ({ id: i.id, fields: i.fields, status: i.status })).sort((a, b) => String(b.fields.from).localeCompare(String(a.fields.from))),
       adjustments: payroll.adjustments.filter((a) => sameUser(a.person, login.username))
-        .map((a) => Object.assign({}, a, { removable: !employment.spotBonusLock(a, today) }))
+        .map((a) => Object.assign({}, a, { removable: !employment.spotBonusLock(a, payCheck.adjustmentLocked(payroll, a, entity)) }))
         .sort((a, b) => String(b.week).localeCompare(String(a.week)) || (b.at || 0) - (a.at || 0)),
       perfComments: perfComments.sort((a, b) => b.at - a.at), perfUnmatched: perfUnmatched.sort((a, b) => b.at - a.at),
       performance, today,
@@ -4812,19 +4917,29 @@ app.put(
     }
     if ("currency" in b) pay.currency = forms.CURRENCIES.includes(b.currency) ? b.currency : "";
     if ("entity" in b) pay.entity = PAY_ENTITY_LABEL[b.entity] ? b.entity : "";
+    // Exempt (salaried, no overtime): a flag HR or Leadership sets for SOI
+    // (US) employees only. Nothing works out overtime from it.
+    if ("exempt" in b) pay.exempt = !!b.exempt;
     if (Object.keys(pay).length && sameUser(login.username, req.user.username)) return res.status(403).json({ error: "Someone else in Leadership (or HR) changes your own pay" });
     const changed = [];
+    let problem = "";
     if (Object.keys(pay).length) {
       await withPayroll((doc) => {
         payrollShape(doc);
         const p = (doc.people[login.username] = doc.people[login.username] || {});
+        const entityAfter = payEntityFor({ people: { [login.username]: { entity: "entity" in pay ? pay.entity : p.entity } } }, login);
+        if ("exempt" in pay && entityAfter !== "SOI") {
+          if (pay.exempt) { problem = "Exempt is for SOI (US) employees only"; return; }
+          delete pay.exempt;
+        }
         for (const k of Object.keys(pay)) {
-          if ((p[k] == null ? "" : String(p[k])) !== (pay[k] == null ? "" : String(pay[k]))) changed.push({ basePay: "base pay", currency: "pay currency", entity: "entity" }[k]);
+          if ((p[k] == null ? "" : String(p[k])) !== (pay[k] == null ? "" : String(pay[k]))) changed.push({ basePay: "base pay", currency: "pay currency", entity: "entity", exempt: "exempt status" }[k]);
           p[k] = pay[k];
         }
         if (changed.length) { p.updatedBy = req.user.username; p.updatedAt = Date.now(); }
       });
     }
+    if (problem) return res.status(400).json({ error: problem });
     await withPeople((doc) => {
       const f = employment.fileOf(employment.peopleShape(doc), login.username, newId);
       changed.unshift(...employment.changedFields(f, clean.fields));
@@ -4919,6 +5034,7 @@ app.post(
     await withPayroll((doc) => {
       payrollShape(doc);
       const currency = employment.payCurrency(doc, login.username, payEntityFor(doc, login), forms.CURRENCIES);
+      if (payCheck.approvalOf(doc, payEntityFor(doc, login), week)) { problem = "Next week's payroll for their entity is already approved and sent — HR has to undo the approval first"; return; }
       if (b.currency && b.currency !== currency) { problem = `Their pay currency is now ${currency} — reload and try again`; return; }
       out = doc.adjustments.find((a) => a.source === employment.SPOT_BONUS.source && sameUser(a.person, login.username) && sameUser(a.by, req.user.username) && Date.now() - (a.at || 0) < 10000);
       if (out) return;
@@ -4944,13 +5060,12 @@ app.delete(
   asyncHandler(async (req, res) => {
     const login = await personLogin(req.params.username);
     if (!login) return res.status(404).json({ error: "No login by that name" });
-    const today = perfOfficeToday();
     let gone = null, problem = "";
     await withPayroll((doc) => {
       payrollShape(doc);
       const adj = doc.adjustments.find((a) => a.id === req.params.id && sameUser(a.person, login.username));
       if (!adj) { problem = "That spot bonus isn't here"; return; }
-      problem = employment.spotBonusLock(adj, today);
+      problem = employment.spotBonusLock(adj, payCheck.adjustmentLocked(doc, adj, payEntityFor(doc, login)));
       if (problem) return;
       doc.adjustments = doc.adjustments.filter((a) => a !== adj);
       gone = adj;
