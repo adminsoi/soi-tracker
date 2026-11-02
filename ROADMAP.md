@@ -353,7 +353,8 @@ Mentions of You, and files created automatically from Pentagon.
         added the document. Status by office date (`officeStamp`):
         expired, soon (≤ 60 days, shown on Mentions of You with the
         sidebar badge), ok.
-      - Named staff: none yet — Leadership adds them on the Legal tab.
+      - Named staff: Leadership only for now (user, 2 Nov 2026); Leadership
+        can add people later on the Legal tab.
       - Still open: should Legal people edit Legal folders without an IT
         grant? Nothing is emailed when something is about to expire.
 - [ ] **7. Strategy Meeting agenda and SOP update form.**
