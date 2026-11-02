@@ -266,9 +266,8 @@ Mentions of You, and files created automatically from Pentagon.
         the accountants; Leadership stays read-only on Payroll.
 - [x] **6. Documents** — drag-and-drop S3 file manager, read-only with
       "request edit" raising an IT ticket.
-      Tested on staging (user) and merged to `main` 2 Nov 2026, with the
-      additions below; the live `soi-tracker` stack still needs a Pull and
-      redeploy. The user's answers: each login sees its own departments' folders (full access
+      Tested on staging and redeployed 2 Nov 2026, with the additions
+      below. The user's answers: each login sees its own departments' folders (full access
       and Leadership all); edit = upload, new version (old ones kept),
       rename, move within the department, archive (never a hard delete,
       IT restores); IT grants edit access to a whole folder (and
@@ -338,8 +337,7 @@ Mentions of You, and files created automatically from Pentagon.
         files still download their attachments; nothing is emailed when
         edit access is granted or declined (the ticket's note shows it).
 - [x] **Legal** (Administration, after Finance; requested 2 Nov 2026).
-      Tested on staging (user) and merged to `main` 2 Nov 2026; live
-      redeploy pending.
+      Tested on staging and redeployed 2 Nov 2026.
       - Rules in `legal.js`; routes `GET /api/legal`,
         `PUT /api/legal/records/:id`, `PUT /api/legal/members` (Leadership),
         `GET /api/legal/mine` in `index.js`; page `public/js/legal.js`
