@@ -62,6 +62,8 @@ const {
   withPayroll,
   getPeople,
   withPeople,
+  getDocuments,
+  withDocuments,
 } = require("./s3store");
 const { sendMail, mailConfigured, MAIL_FROM } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError, nameFromTitle } = require("./calendar");
@@ -71,6 +73,7 @@ const { inboxThreads, syncFollowIndex, MailError } = require("./mail");
 const board = require("./board");
 const forms = require("./staffforms");
 const employment = require("./people");
+const docs = require("./documents");
 const payCheck = require("./payrollcheck");
 const { pentagonQuery } = require("./pentagon");
 const {
@@ -5073,6 +5076,473 @@ app.delete(
     if (problem) return res.status(400).json({ error: problem });
     await withPeople((doc) => { peopleLog(employment.fileOf(employment.peopleShape(doc), login.username, newId), req.user.username, `Removed the spot bonus for the week of ${gone.week}`); });
     res.status(204).end();
+  })
+);
+
+// ---------- Documents ----------
+// A file manager for SOI's S3 (ROADMAP.md Phase 6; rules in documents.js).
+// One space per company and department you're in (every department for full
+// access and Leadership), plus the Operations / US Gov board files you can
+// see. Read-only unless IT has granted you edit access to the folder (full
+// access edits everywhere it sees). Documents are shown in the page, never
+// offered as a download; the page says that this only discourages copying.
+const DOC_MAX = "15mb";
+function docSpaces(u) {
+  return docs.spacesFor(u, { companies: COMPANIES, departments: DEPARTMENTS, canSeeBoard: (x, b) => canSeeBoard(x, BOARDS[b]) });
+}
+function docSpace(req, res, id) {
+  const sp = docSpaces(req.user).find((s) => s.id === id);
+  if (!sp) res.status(404).json({ error: "That folder isn't here" });
+  return sp || null;
+}
+function docFileOut(f) {
+  const v = f.versions[f.versions.length - 1] || {};
+  return { id: f.id, name: f.name, type: v.type || f.type, size: v.size || 0, at: v.at || f.at, by: v.by || f.by, versions: f.versions.length, preview: docs.canPreview(v.type || f.type) };
+}
+function docBoardLabel(c) {
+  return [c.fileNo || c.quoteNo || c.rfqNo || c.orderNo || "File", c.customer || c.vendor || ""].filter(Boolean).join(" · ") + (c.archived ? " (archived)" : "");
+}
+// A "Request edit" ticket nobody has decided yet (resolving or withdrawing
+// the ticket on IT → Requests closes it too).
+const docEditOpen = (r) => !!(r.docEdit && !r.docEdit.decidedAt && !r.archived && r.status !== "done");
+// An open "Request edit" ticket of yours for this folder (or one above it).
+function docOpenRequest(list, doc, u, space, folder) {
+  const ids = new Set([""].concat(docs.chain(doc, folder).map((f) => f.id)));
+  return list.find((r) => docEditOpen(r) && sameUser(r.addedBy, u.username) && r.docEdit.space === space && ids.has(r.docEdit.folder || "")) || null;
+}
+
+app.get(
+  "/api/documents",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const doc = docs.shape(await getDocuments());
+    const now = Date.now();
+    const grants = doc.grants.filter((g) => docs.grantLive(g, now) && sameUser(g.user, req.user.username))
+      .map((g) => ({ id: g.id, space: g.space, folder: g.folder || "", path: docs.pathLabel(doc, g.space, g.folder), until: g.until || null }));
+    res.json({ spaces: docSpaces(req.user), grants, grantsAdmin: docs.grantsAdmin(req.user), fullAccess: !!req.user.fullAccess, previewTypes: docs.PREVIEW_TYPES });
+  })
+);
+
+// One folder: its subfolders and documents. ?space=…&folder=… ("" = top).
+app.get(
+  "/api/documents/list",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const sp = docSpace(req, res, String(req.query.space || ""));
+    if (!sp) return;
+    const folderId = String(req.query.folder || "");
+    if (sp.kind === "board") {
+      const cfg = BOARDS[sp.board];
+      const cards = ((await getBoard(cfg.store)).cards || []).filter((c) => canSeeBoardCard(req.user, c, cfg) && (c.files || []).length);
+      if (!folderId) {
+        return res.json({ space: sp.id, folder: "", path: [], canEdit: false,
+          folders: cards.map((c) => ({ id: c.id, name: docBoardLabel(c), at: c.updatedAt || c.createdAt || 0, count: c.files.length })).sort((a, b) => b.at - a.at),
+          files: [] });
+      }
+      const c = cards.find((x) => x.id === folderId);
+      if (!c) return res.status(404).json({ error: "That file isn't here" });
+      return res.json({ space: sp.id, folder: c.id, path: [{ id: c.id, name: docBoardLabel(c) }], canEdit: false, folders: [],
+        files: c.files.map((f) => ({ id: f.id, name: f.name, type: f.type, size: f.size, at: f.at, by: f.by, versions: 1, preview: docs.canPreview(f.type) })) });
+    }
+    const [doc, itList] = await Promise.all([getDocuments().then(docs.shape), getItRequests()]);
+    const here = docs.folderIn(doc, sp.id, folderId);
+    if (!here) return res.status(404).json({ error: "That folder isn't here" });
+    const grant = docs.liveGrant(doc, req.user, sp.id, folderId);
+    const reqOpen = docOpenRequest(itList, doc, req.user, sp.id, folderId);
+    res.json({
+      space: sp.id, folder: folderId,
+      path: docs.chain(doc, folderId).reverse().map((f) => ({ id: f.id, name: f.name })),
+      canEdit: docs.mayEdit(doc, req.user, sp.id, folderId, true),
+      editUntil: grant ? grant.until || null : undefined,
+      request: reqOpen ? { ref: ticketRef(reqOpen.id), at: reqOpen.addedAt } : null,
+      folders: doc.folders.filter((f) => f.space === sp.id && (f.parent || "") === folderId && !f.archived)
+        .map((f) => ({ id: f.id, name: f.name, at: f.at, by: f.by })).sort((a, b) => a.name.localeCompare(b.name)),
+      files: doc.files.filter((f) => f.space === sp.id && (f.folder || "") === folderId && !f.archived).map(docFileOut).sort((a, b) => a.name.localeCompare(b.name)),
+    });
+  })
+);
+
+// Show a document in the page: PDFs, pictures and text only, inline, never
+// as an attachment. ?space=…&folder=…&file=…[&v=version id]
+app.get(
+  "/api/documents/view",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const sp = docSpace(req, res, String(req.query.space || ""));
+    if (!sp) return;
+    let meta = null, key = "";
+    if (sp.kind === "board") {
+      const cfg = BOARDS[sp.board];
+      const c = ((await getBoard(cfg.store)).cards || []).find((x) => x.id === String(req.query.folder || ""));
+      meta = c && canSeeBoardCard(req.user, c, cfg) && (c.files || []).find((f) => f.id === String(req.query.file || ""));
+      if (meta) key = `${cfg.files}/${c.id}/${meta.id}`;
+    } else {
+      const doc = docs.shape(await getDocuments());
+      const f = doc.files.find((x) => x.id === String(req.query.file || "") && x.space === sp.id && !x.archived);
+      const v = f && docs.folderIn(doc, sp.id, f.folder) && (req.query.v ? f.versions.find((x) => x.id === String(req.query.v)) : f.versions[f.versions.length - 1]);
+      if (v) { meta = { name: f.name, type: v.type || f.type }; key = `documents_files/${f.id}/${v.id}`; }
+    }
+    if (!meta) return res.status(404).json({ error: "That document isn't here" });
+    if (!docs.canPreview(meta.type)) return res.status(415).json({ error: "This kind of file can't be shown in the browser" });
+    const file = await getFile(key);
+    if (!file) return res.status(404).json({ error: "That document isn't here" });
+    res.set({
+      "Content-Type": meta.type.startsWith("text/") ? meta.type + "; charset=utf-8" : meta.type,
+      "Content-Disposition": `inline; filename="${meta.name.replace(/[^\w .()-]+/g, "_")}"`,
+      "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+    });
+    if (meta.type !== "application/pdf") res.set("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'");
+    res.send(file.body);
+  })
+);
+
+// Earlier versions of a document (newest first), for those who see it.
+app.get(
+  "/api/documents/files/:id/versions",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const doc = docs.shape(await getDocuments());
+    const f = doc.files.find((x) => x.id === req.params.id && !x.archived);
+    if (!f || !docs.parseSpace(f.space) || !docSpaces(req.user).some((s) => s.id === f.space) || !docs.folderIn(doc, f.space, f.folder)) return res.status(404).json({ error: "That document isn't here" });
+    res.json({ versions: f.versions.slice().reverse().map((v) => ({ id: v.id, at: v.at, by: v.by, size: v.size, type: v.type, name: v.name || f.name, preview: docs.canPreview(v.type) })), history: (f.history || []).slice(-50).reverse() });
+  })
+);
+
+// ----- Changes (edit access needed; checked here on every request) -----
+// Runs fn(doc) inside the documents queue; fn returns an error string to stop.
+async function docChange(res, fn) {
+  let problem = "", out = null;
+  await withDocuments((doc) => {
+    docs.shape(doc);
+    const r = fn(doc);
+    if (typeof r === "string") problem = r; else out = r;
+  });
+  if (problem) { res.status(/isn't here/.test(problem) ? 404 : /^You can/.test(problem) ? 403 : 400).json({ error: problem }); return null; }
+  return out;
+}
+function docLog(f, by, what) {
+  f.history = Array.isArray(f.history) ? f.history : [];
+  f.history.push({ at: Date.now(), by, what });
+  if (f.history.length > 200) f.history = f.history.slice(-200);
+}
+const NO_EDIT = "You can only view this folder. Use Request edit to ask IT for edit access.";
+
+// Upload into a folder: ?space=…&folder=…&name=… (raw body). A live document
+// with the same name in that folder gets this as its new version.
+app.post(
+  "/api/documents/files",
+  authMiddleware,
+  express.raw({ type: () => true, limit: DOC_MAX }),
+  asyncHandler(async (req, res) => {
+    const sp = docSpace(req, res, String(req.query.space || ""));
+    if (!sp) return;
+    if (sp.kind !== "dept") return res.status(403).json({ error: "Add board documents on the board's case file" });
+    const { name, type } = boardFileMeta(req);
+    if (!type) return res.status(400).json({ error: "Add a PDF, image, Word, Excel, PowerPoint, text or email file" });
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "No file came through" });
+    const folderId = String(req.query.folder || "");
+    const pre = docs.shape(await getDocuments());
+    if (!docs.folderIn(pre, sp.id, folderId)) return res.status(404).json({ error: "That folder isn't here" });
+    if (!docs.mayEdit(pre, req.user, sp.id, folderId, true)) return res.status(403).json({ error: NO_EDIT });
+    const same = pre.files.find((f) => f.space === sp.id && (f.folder || "") === folderId && !f.archived && docs.sameName(f.name, name));
+    const fileId = same ? same.id : newId();
+    const v = { id: newId(), at: Date.now(), by: req.user.username, size: req.body.length, type, name };
+    // Stored before it's listed, so a listed version always has its bytes.
+    await putFile(`documents_files/${fileId}/${v.id}`, req.body, type);
+    const out = await docChange(res, (doc) => {
+      if (!docs.folderIn(doc, sp.id, folderId)) return "That folder isn't here";
+      if (!docs.mayEdit(doc, req.user, sp.id, folderId, true)) return NO_EDIT;
+      let f = doc.files.find((x) => x.id === fileId);
+      if (!f) {
+        f = { id: fileId, space: sp.id, folder: folderId, name, type, at: v.at, by: v.by, versions: [], history: [] };
+        doc.files.push(f);
+      }
+      f.versions.push(v);
+      f.type = type;
+      docLog(f, req.user.username, f.versions.length > 1 ? `Uploaded version ${f.versions.length}` : "Added");
+      return docFileOut(f);
+    });
+    if (out) res.status(201).json(out);
+  })
+);
+// A new version of one document (keeps its name; earlier versions stay).
+app.post(
+  "/api/documents/files/:id/versions",
+  authMiddleware,
+  express.raw({ type: () => true, limit: DOC_MAX }),
+  asyncHandler(async (req, res) => {
+    const { name, type } = boardFileMeta(req);
+    if (!type) return res.status(400).json({ error: "Add a PDF, image, Word, Excel, PowerPoint, text or email file" });
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "No file came through" });
+    const pre = docs.shape(await getDocuments());
+    const f0 = pre.files.find((x) => x.id === req.params.id && !x.archived);
+    const seen = f0 && docSpaces(req.user).some((s) => s.id === f0.space) && docs.folderIn(pre, f0.space, f0.folder);
+    if (!seen) return res.status(404).json({ error: "That document isn't here" });
+    if (!docs.mayEdit(pre, req.user, f0.space, f0.folder, true)) return res.status(403).json({ error: NO_EDIT });
+    const v = { id: newId(), at: Date.now(), by: req.user.username, size: req.body.length, type, name };
+    await putFile(`documents_files/${f0.id}/${v.id}`, req.body, type);
+    const out = await docChange(res, (doc) => {
+      const f = doc.files.find((x) => x.id === f0.id && !x.archived);
+      if (!f || !docs.folderIn(doc, f.space, f.folder)) return "That document isn't here";
+      if (!docs.mayEdit(doc, req.user, f.space, f.folder, true)) return NO_EDIT;
+      f.versions.push(v);
+      f.type = type;
+      docLog(f, req.user.username, `Uploaded version ${f.versions.length} (${name})`);
+      return docFileOut(f);
+    });
+    if (out) res.status(201).json(out);
+  })
+);
+// Rename and / or move a document within its space. Edit access is needed
+// where it is and where it goes.
+app.patch(
+  "/api/documents/files/:id",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const spaces = docSpaces(req.user);
+    const out = await docChange(res, (doc) => {
+      const f = doc.files.find((x) => x.id === req.params.id && !x.archived);
+      if (!f || !spaces.some((s) => s.id === f.space) || !docs.folderIn(doc, f.space, f.folder)) return "That document isn't here";
+      if (!docs.mayEdit(doc, req.user, f.space, f.folder, true)) return NO_EDIT;
+      const to = "folder" in b ? String(b.folder || "") : f.folder || "";
+      const name = "name" in b ? docs.cleanName(b.name) : f.name;
+      if (!name) return "Give it a name";
+      if (!docs.folderIn(doc, f.space, to)) return "That folder isn't here";
+      if (!docs.mayEdit(doc, req.user, f.space, to, true)) return "You can't add to that folder. Use Request edit there first.";
+      if (doc.files.some((x) => x !== f && x.space === f.space && (x.folder || "") === to && !x.archived && docs.sameName(x.name, name))) return `There's already a document called ${name} there`;
+      if (to !== (f.folder || "")) docLog(f, req.user.username, `Moved from ${docs.pathLabel(doc, f.space, f.folder)} to ${docs.pathLabel(doc, f.space, to)}`);
+      if (name !== f.name) docLog(f, req.user.username, `Renamed from ${f.name}`);
+      f.folder = to; f.name = name;
+      return docFileOut(f);
+    });
+    if (out) res.json(out);
+  })
+);
+// Archive (hide) a document. It stays in S3; IT can restore it.
+app.post(
+  "/api/documents/files/:id/archive",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const spaces = docSpaces(req.user);
+    const out = await docChange(res, (doc) => {
+      const f = doc.files.find((x) => x.id === req.params.id && !x.archived);
+      if (!f || !spaces.some((s) => s.id === f.space) || !docs.folderIn(doc, f.space, f.folder)) return "That document isn't here";
+      if (!docs.mayEdit(doc, req.user, f.space, f.folder, true)) return NO_EDIT;
+      Object.assign(f, { archived: true, archivedAt: Date.now(), archivedBy: req.user.username });
+      docLog(f, req.user.username, "Archived");
+      return { ok: true };
+    });
+    if (out) res.json(out);
+  })
+);
+
+app.post(
+  "/api/documents/folders",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const sp = docSpace(req, res, String(b.space || ""));
+    if (!sp) return;
+    if (sp.kind !== "dept") return res.status(403).json({ error: "Board folders come from the board" });
+    const parent = String(b.parent || "");
+    const name = docs.cleanName(b.name);
+    if (!name) return res.status(400).json({ error: "Name the folder" });
+    const out = await docChange(res, (doc) => {
+      if (!docs.folderIn(doc, sp.id, parent)) return "That folder isn't here";
+      if (!docs.mayEdit(doc, req.user, sp.id, parent, true)) return NO_EDIT;
+      if (doc.folders.some((f) => f.space === sp.id && (f.parent || "") === parent && !f.archived && docs.sameName(f.name, name))) return `There's already a folder called ${name} there`;
+      const f = { id: newId(), space: sp.id, parent, name, at: Date.now(), by: req.user.username };
+      doc.folders.push(f);
+      return { id: f.id, name: f.name, at: f.at, by: f.by };
+    });
+    if (out) res.status(201).json(out);
+  })
+);
+// Rename and / or move a folder within its space (never into itself).
+app.patch(
+  "/api/documents/folders/:id",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const spaces = docSpaces(req.user);
+    const out = await docChange(res, (doc) => {
+      const f = doc.folders.find((x) => x.id === req.params.id);
+      if (!f || !spaces.some((s) => s.id === f.space) || !docs.folderIn(doc, f.space, f.id)) return "That folder isn't here";
+      // Changing a folder needs edit access where it sits, not just inside it.
+      if (!docs.mayEdit(doc, req.user, f.space, f.parent, true)) return NO_EDIT;
+      const to = "parent" in b ? String(b.parent || "") : f.parent || "";
+      const name = "name" in b ? docs.cleanName(b.name) : f.name;
+      if (!name) return "Name the folder";
+      if (!docs.folderIn(doc, f.space, to) || docs.wouldLoop(doc, f, to)) return "It can't go there";
+      if (!docs.mayEdit(doc, req.user, f.space, to, true)) return "You can't add to that folder. Use Request edit there first.";
+      if (doc.folders.some((x) => x !== f && x.space === f.space && (x.parent || "") === to && !x.archived && docs.sameName(x.name, name))) return `There's already a folder called ${name} there`;
+      f.parent = to; f.name = name;
+      return { id: f.id, name: f.name };
+    });
+    if (out) res.json(out);
+  })
+);
+app.post(
+  "/api/documents/folders/:id/archive",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const spaces = docSpaces(req.user);
+    const out = await docChange(res, (doc) => {
+      const f = doc.folders.find((x) => x.id === req.params.id);
+      if (!f || !spaces.some((s) => s.id === f.space) || !docs.folderIn(doc, f.space, f.id)) return "That folder isn't here";
+      if (!docs.mayEdit(doc, req.user, f.space, f.parent, true)) return NO_EDIT;
+      Object.assign(f, { archived: true, archivedAt: Date.now(), archivedBy: req.user.username });
+      return { ok: true };
+    });
+    if (out) res.json(out);
+  })
+);
+
+// ----- Request edit → IT ticket → grant -----
+// Raises an IT ticket (on IT → Requests and your "What you've sent") naming
+// the folder. One open request per folder.
+app.post(
+  "/api/documents/request-edit",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const sp = docSpace(req, res, String(b.space || ""));
+    if (!sp) return;
+    if (sp.kind !== "dept") return res.status(400).json({ error: "Board documents are changed on the board itself" });
+    const folder = String(b.folder || "");
+    const doc = docs.shape(await getDocuments());
+    if (!docs.folderIn(doc, sp.id, folder)) return res.status(404).json({ error: "That folder isn't here" });
+    if (docs.mayEdit(doc, req.user, sp.id, folder, true)) return res.status(400).json({ error: "You can already edit this folder" });
+    const reason = forms.text(b.reason, 500);
+    if (!reason) return res.status(400).json({ error: "Say briefly what you need to change" });
+    const where = docs.pathLabel(doc, sp.id, folder);
+    const login = (await getUsers()).find((u) => sameUser(u.username, req.user.username)) || {};
+    let out = null;
+    await withItRequests((list) => {
+      const open = docOpenRequest(list, doc, req.user, sp.id, folder);
+      if (open) { out = { ref: ticketRef(open.id), at: open.addedAt, already: true }; return; }
+      const rec = {
+        id: "manual-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), formId: null, source: "staff",
+        submittedAt: officeStamp(new Date().toISOString()),
+        name: req.user.username, email: String(login.email || "").trim().toLowerCase().slice(0, 120),
+        phone: "", company: COMPANY_ENTITY[sp.company] || "SOI", remote: "",
+        issue: `Edit access to Documents › ${where}: ${reason}`, startedOn: "",
+        urgency: "Normal", contact: "", notes: "",
+        priority: "", status: "new", taskId: "", addedAt: Date.now(), addedBy: req.user.username,
+        docEdit: { space: sp.id, folder, where },
+      };
+      list.push(rec);
+      out = { ref: ticketRef(rec.id), at: rec.addedAt };
+    });
+    res.status(out.already ? 200 : 201).json(out);
+  })
+);
+
+// IT's view: open edit requests, live and recent grants, archived items.
+const docAdminOnly = (req, res, next) => (docs.grantsAdmin(req.user) ? next() : res.status(403).json({ error: "Edit access is handled by IT" }));
+app.get(
+  "/api/documents/access",
+  authMiddleware,
+  docAdminOnly,
+  asyncHandler(async (req, res) => {
+    const [doc, list] = await Promise.all([getDocuments().then(docs.shape), getItRequests()]);
+    const now = Date.now();
+    res.json({
+      requests: list.filter(docEditOpen).map((r) => ({
+        id: r.id, ref: ticketRef(r.id), by: r.addedBy, at: r.addedAt, where: docs.pathLabel(doc, r.docEdit.space, r.docEdit.folder), issue: r.issue,
+        gone: !docs.folderIn(doc, r.docEdit.space, r.docEdit.folder),
+      })).sort((a, b) => a.at - b.at),
+      grants: doc.grants.filter((g) => docs.grantLive(g, now) || (g.revokedAt || g.until || 0) > now - 30 * 24 * 3600 * 1000)
+        .map((g) => ({ id: g.id, user: g.user, where: docs.pathLabel(doc, g.space, g.folder), until: g.until || null, by: g.by, at: g.at, ref: g.ticket ? ticketRef(g.ticket) : "", live: docs.grantLive(g, now), revokedAt: g.revokedAt || null, revokedBy: g.revokedBy || "" }))
+        .sort((a, b) => b.at - a.at),
+      archived: doc.files.filter((f) => f.archived).map((f) => ({ kind: "file", id: f.id, name: f.name, where: docs.pathLabel(doc, f.space, f.folder), at: f.archivedAt, by: f.archivedBy }))
+        .concat(doc.folders.filter((f) => f.archived).map((f) => ({ kind: "folder", id: f.id, name: f.name, where: docs.pathLabel(doc, f.space, f.parent), at: f.archivedAt, by: f.archivedBy })))
+        .sort((a, b) => b.at - a.at).slice(0, 200),
+      grantDays: docs.GRANT_DAYS,
+    });
+  })
+);
+// Grant (or decline) a request. The grant covers the folder and everything
+// under it until the end date ("" = no expiry; left out = 30 days). Nobody
+// grants themselves.
+app.post(
+  "/api/documents/requests/:id/decide",
+  authMiddleware,
+  docAdminOnly,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const grant = b.decision === "grant";
+    if (!grant && b.decision !== "decline") return res.status(400).json({ error: "Grant or decline?" });
+    const r0 = (await getItRequests()).find((x) => x.id === req.params.id && x.docEdit);
+    if (!r0 || !docEditOpen(r0)) return res.status(404).json({ error: "That request isn't open" });
+    if (sameUser(r0.addedBy, req.user.username)) return res.status(403).json({ error: "Someone else in IT has to decide your own request" });
+    const u = await getUsers().then((list) => list.find((x) => sameUser(x.username, r0.addedBy)));
+    const until = grant ? docs.grantUntil(b.until) : { until: null };
+    if (until.error) return res.status(400).json({ error: until.error });
+    const reason = forms.text(b.reason, 300);
+    if (!grant && !reason) return res.status(400).json({ error: "Say why, for the requester" });
+    let g = null;
+    if (grant) {
+      if (!u || !docSpaces(normalizeUser(u)).some((s) => s.id === r0.docEdit.space)) return res.status(400).json({ error: "That login can't see this folder any more" });
+      g = await docChange(res, (doc) => {
+        if (!docs.folderIn(doc, r0.docEdit.space, r0.docEdit.folder)) return "That folder isn't here";
+        const x = { id: newId(), user: u.username, space: r0.docEdit.space, folder: r0.docEdit.folder || "", until: until.until, by: req.user.username, at: Date.now(), ticket: r0.id };
+        doc.grants.push(x);
+        return Object.assign({ where: docs.pathLabel(doc, x.space, x.folder) }, x);
+      });
+      if (!g) return;
+    }
+    const when = (ms) => new Date(ms).toISOString().slice(0, 10);
+    await withItRequests((list) => {
+      const r = list.find((x) => x.id === r0.id);
+      if (!r) return;
+      Object.assign(r.docEdit, { decidedAt: Date.now(), decidedBy: req.user.username, decision: grant ? "granted" : "declined", grantId: g ? g.id : "" });
+      pushActivity(r, { type: "note", by: req.user.username, text: grant
+        ? `Edit access granted to Documents › ${g.where} ${g.until ? "until " + when(g.until) : "with no end date"}${reason ? ": " + reason : ""}`
+        : `Edit access declined: ${reason}` });
+      r.status = "done";
+      pushActivity(r, { type: "status", text: "Resolved", by: req.user.username });
+    });
+    res.json({ ok: true, grant: g });
+  })
+);
+app.post(
+  "/api/documents/grants/:id/revoke",
+  authMiddleware,
+  docAdminOnly,
+  asyncHandler(async (req, res) => {
+    const out = await docChange(res, (doc) => {
+      const g = doc.grants.find((x) => x.id === req.params.id);
+      if (!g || !docs.grantLive(g, Date.now())) return "That grant isn't here";
+      Object.assign(g, { revokedAt: Date.now(), revokedBy: req.user.username });
+      return { ok: true, ticket: g.ticket || "", where: docs.pathLabel(doc, g.space, g.folder) };
+    });
+    if (!out) return;
+    if (out.ticket) await withItRequests((list) => { const r = list.find((x) => x.id === out.ticket); if (r) pushActivity(r, { type: "note", by: req.user.username, text: `Edit access to Documents › ${out.where} revoked` }); });
+    res.json({ ok: true });
+  })
+);
+// Bring back an archived document or folder (IT and full access).
+app.post(
+  "/api/documents/restore",
+  authMiddleware,
+  docAdminOnly,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const out = await docChange(res, (doc) => {
+      const list = b.kind === "folder" ? doc.folders : doc.files;
+      const x = list.find((y) => y.id === String(b.id || "") && y.archived);
+      if (!x) return "That isn't here";
+      const parent = b.kind === "folder" ? x.parent : x.folder;
+      if (!docs.folderIn(doc, x.space, parent)) return "Restore the folder it was in first";
+      const clash = list.some((y) => y !== x && y.space === x.space && !y.archived && (b.kind === "folder" ? (y.parent || "") === (parent || "") : (y.folder || "") === (parent || "")) && docs.sameName(y.name, x.name));
+      if (clash) return `Something called ${x.name} is already there — rename that first`;
+      delete x.archived; delete x.archivedAt; delete x.archivedBy;
+      if (b.kind !== "folder") docLog(x, req.user.username, "Restored");
+      return { ok: true };
+    });
+    if (out) res.json(out);
   })
 );
 

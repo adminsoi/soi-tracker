@@ -1,6 +1,6 @@
 "use strict";
-// Company pages: Strategy Meeting, SOP, Documents and Department Chat
-// (People is in people.js).
+// Company pages: Strategy Meeting, SOP and Department Chat
+// (People is in people.js, Documents in documents.js).
 // The dashboard's scripts share one global scope and load in the order
 // index.html lists them; functions called while a file loads must be
 // defined in that file or an earlier one.
@@ -15,11 +15,6 @@ function placeholderPage(title, eyebrow, lines) {
 }
 function renderStrategy() {
   return placeholderPage("Strategy Meeting", "Company", ["The strategy meeting agenda will live here (Phase 7)."]);
-}
-function renderDocuments() {
-  return placeholderPage("Documents", "Company", [
-    "A drag-and-drop file manager for the S3 folders, including each Kanban file's attachments, will live here (Phase 6). It will be read-only; <b>Request edit</b> will raise an IT ticket."
-  ]);
 }
 
 // ---------- SOP ----------

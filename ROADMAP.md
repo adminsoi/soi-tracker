@@ -257,8 +257,50 @@ Mentions of You, and files created automatically from Pentagon.
         currency (e.g. NZD for CAS) instead of USD when nothing is set?
       - Decided: only HR managers (and full access) approve payroll for
         the accountants; Leadership stays read-only on Payroll.
-- [ ] **6. Documents** — drag-and-drop S3 file manager, read-only with
+- [x] **6. Documents** — drag-and-drop S3 file manager, read-only with
       "request edit" raising an IT ticket.
+      Built 2 Nov 2026 on `staging`; not yet tested on staging. The user's
+      answers: each login sees its own departments' folders (full access
+      and Leadership all); edit = upload, new version (old ones kept),
+      rename, move within the department, archive (never a hard delete,
+      IT restores); IT grants edit access to a whole folder (and
+      everything in it) for 30 days by default; HR's people files,
+      receipts, payroll and performance stay out of Documents.
+      - Rules in `documents.js`; routes `/api/documents*` in `index.js`;
+        front end `public/js/documents.js` (after `people.js`; the
+        placeholder in `company-pages.js` was removed). README
+        *Documents (file manager on S3)*.
+      - Spaces: `dept:<company>|<department>` per company and department
+        on the login, plus `board:ops` / `board:usgov` — read-only views
+        of `board_files/` and `usgov_board_files/`, one folder per board
+        file with documents, checked with `canSeeBoardCard`.
+      - S3: `documents.json` (`folders`, `files` with `versions` and
+        `history`, `grants`), bytes under
+        `documents_files/<file id>/<version id>`.
+      - Request edit = an IT ticket (`source: "staff"`, with
+        `docEdit: { space, folder, where }`) on IT → Requests and the
+        requester's "What you've sent". IT (or full access) grants or
+        declines it on Documents → Edit access (IT), which resolves the
+        ticket with a note; nobody decides their own request; grants can
+        be revoked; resolving the ticket on IT → Requests closes the
+        request too. Full access can always edit; Leadership is read-only.
+      - View-only: PDFs, pictures, text and CSV stream inline through
+        `/api/documents/view` (no public S3 links, `no-store`), shown in a
+        viewer with a login-and-time watermark; no download button;
+        right-click, save, print and copies over 200 characters are
+        blocked. The page and README say plainly that this only
+        discourages copying (screenshots still work). Word, Excel,
+        PowerPoint and email files have no preview.
+      - Tested locally against a mock server (no Node on the Mac): folder
+        tiles, browsing, text and picture viewer, Excel "no preview",
+        Request edit, IT grant with end date, drag-to-move, drag-in
+        upload, large-copy block, light and dark. The PDF viewer showed
+        blank in the app's built-in browser — check PDFs in Chrome on
+        staging.
+      - Still open: Word / Excel previews would need converting to PDF on
+        the server (e.g. LibreOffice in the container); the board's case
+        files still download their attachments; nothing is emailed when
+        edit access is granted or declined (the ticket's note shows it).
 - [ ] **7. Strategy Meeting agenda and SOP update form.**
 - [ ] **8. Email replies** — draft, edit, send, ignore, open thread.
 - [ ] **9. Company chat.**

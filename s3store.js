@@ -170,6 +170,11 @@ function getPayroll() {
 function getPeople() {
   return readJson("people", {});
 }
+// Documents: { folders, files, grants } — each version of a document via
+// putFile under documents_files/<file id>/<version id>. See documents.js.
+function getDocuments() {
+  return readJson("documents", {});
+}
 
 // In-process queues so concurrent requests to this same container don't
 // clobber each other's read-modify-write cycle.
@@ -189,6 +194,7 @@ let boardQueue = Promise.resolve();
 let staffFormsQueue = Promise.resolve();
 let payrollQueue = Promise.resolve();
 let peopleQueue = Promise.resolve();
+let documentsQueue = Promise.resolve();
 
 function withUsers(mutator) {
   usersQueue = usersQueue.then(async () => {
@@ -355,7 +361,19 @@ function withPeople(mutator) {
   return peopleQueue;
 }
 
+function withDocuments(mutator) {
+  documentsQueue = documentsQueue.then(async () => {
+    const doc = await getDocuments();
+    const result = await mutator(doc);
+    await writeJson("documents", doc);
+    return result;
+  });
+  return documentsQueue;
+}
+
 module.exports = {
+  getDocuments,
+  withDocuments,
   getStaffForms,
   withStaffForms,
   getPayroll,

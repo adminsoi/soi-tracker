@@ -413,9 +413,9 @@ dark ones like SOI green stay visible.
   item reopens the department you last used there.
 - **SOP** shows each of your departments' quick answers and SOP documents,
   with a tab per department (the same SOPs as the Operations SOPs tabs).
-- **Strategy Meeting** and **Documents** are placeholders for later phases
-  and load no data yet. **People** is for leadership logins only (see
-  below).
+- **Strategy Meeting** is a placeholder for a later phase and loads no
+  data yet. **Documents** is the S3 file manager (see below). **People** is
+  for leadership logins only (see below).
 - **Department Chat** (was Master Chat) describes the planned company-wide
   Claude chat. It isn't switched on until it can run in SOI's compliant AWS
   environment and compliance approves its access; meanwhile it opens
@@ -470,6 +470,61 @@ access alone isn't enough).
     record (including people added there without a login whose name
     matches) and **Open in Performance**. Without Performance access the
     file only says whether records exist.
+
+## Documents (file manager on S3)
+
+Company → **Documents**: folders by department on SOI's S3, plus every
+Operations and US Gov board file's documents. Rules in `documents.js`,
+routes `/api/documents*` in `index.js`, page `public/js/documents.js`.
+
+- **Who sees what:** a folder per company and department on your login
+  (every department for full access and Leadership). **Operations board
+  files** and **US Gov board files** list one folder per board file that
+  has documents, labelled with its file number and customer, for exactly
+  the files you can open on that board. Every request is checked on the
+  server.
+- **Read-only by default.** **Request edit** (on any department folder)
+  asks what you need to change and raises an IT ticket on IT → Requests
+  (it shows under your Administration → IT → What you've sent). IT — or a
+  full-access login — decides it on Documents → **Edit access (IT)**:
+  **Grant** covers that folder and everything in it until the end date
+  (30 days unless they pick another date or "No end date"); **Decline**
+  needs a reason. Either way the ticket is resolved with a note saying
+  what was decided. Nobody decides their own request. Grants can be
+  revoked at any time. Full-access logins can always edit; Leadership
+  sees everything read-only.
+- **Edit means:** upload files (drag them from your computer onto the
+  folder, or **Upload files**), new folders, **New version** (earlier
+  versions are kept and can be viewed from the viewer's version list;
+  uploading a file with the same name as one in the folder adds a
+  version), rename, move within the department (drag a row onto a folder
+  or onto a name in the path) and **Archive**. Archive hides the item;
+  nothing is deleted from S3, and IT can **Restore** it from Edit access.
+  Board documents are read-only here: add them on the board's case file.
+- **View-only, honestly:** documents open in a viewer on the page — PDFs,
+  pictures, text and CSV — streamed through the server
+  (`/api/documents/view`, `Cache-Control: no-store`), never through public
+  S3 links. There's no download button, the viewer blocks right-click,
+  Ctrl/Cmd+S and +P, copying, and printing, copies of more than 200
+  characters anywhere on the page are blocked, and a faint watermark with
+  the viewer's login and the time is drawn over the document. **This only
+  discourages copying:** screenshots, photos of the screen and the
+  browser's developer tools still work, and the board's own case files
+  still offer their attachments as downloads. Word, Excel, PowerPoint and
+  email files can't be shown without downloading them or sending them to
+  an outside viewer, so they're listed with no preview.
+- **Kept out:** HR's employment files (`people_files/`), staff form
+  receipts and HR forms (`staff_form_files/`), payroll and performance
+  files are never listed; the HR and Finance folders say so.
+- **S3:** `documents.json` (`{ folders: [{ id, space, parent, name }],
+  files: [{ id, space, folder, name, versions: [{ id, type, size, by, at }],
+  history, archived }], grants: [{ id, user, space, folder, until, by, at,
+  ticket, revokedAt }] }`), each version under
+  `documents_files/<file id>/<version id>`. A space is
+  `dept:<company>|<department>` or `board:ops` / `board:usgov`. The IT
+  ticket carries `docEdit: { space, folder, where, decision, grantId }`.
+  Up to 15 MB per file; PDF, image, Word, Excel, PowerPoint, text, CSV or
+  email.
 
 ## HR → Payroll: approve and send to the accountants
 
@@ -589,8 +644,8 @@ board show up as they were; only the labels changed.
   — the same folders as before, so nothing was moved. The folders are named
   by the file's internal id rather than its number because numbers get
   typed in or changed later; `aog_board.json` maps each id to its file
-  number, customer and attachment names, which is what the Phase 6
-  Documents page will use to show them by name.
+  number, customer and attachment names, which is what the Documents page
+  uses to show them by name.
 - **When the server errors**, the board (and IT Requests) shows the error
   with **Try again** and waits before asking again (15 seconds, doubling up
   to 5 minutes) instead of re-asking on every redraw.
