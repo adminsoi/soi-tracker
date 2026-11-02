@@ -486,9 +486,7 @@ document.addEventListener("click", function (e) {
   if ("itcUnfile" in ds) { var cc = itrCompose(); cc.files = cc.files.filter(function (f) { return f.id !== ds.itcUnfile; }); drawItCard(); return; }
   if ("itfDl" in ds) {
     var rr = itr.data.requests.filter(function (x) { return x.id === itr.open; })[0], meta = rr && (rr.files || []).filter(function (f) { return f.id === ds.itfDl; })[0];
-    fetch("/api/it-requests/" + encodeURIComponent(itr.open) + "/files/" + encodeURIComponent(ds.itfDl), { headers: { Authorization: "Bearer " + token() } })
-      .then(function (res) { if (!res.ok) throw new Error("Couldn't download that file"); return res.blob(); })
-      .then(function (b) { var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = meta ? meta.name : "file"; document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000); }, function (err) { toast(err.message, true); });
+    viewDocument("/api/it-requests/" + encodeURIComponent(itr.open) + "/files/" + encodeURIComponent(ds.itfDl), meta && meta.name, meta && meta.type);
     return;
   }
   if ("itcResolve" in ds) { var rid = itr.open; closeItCard(); resolveDialog([rid]); return; }

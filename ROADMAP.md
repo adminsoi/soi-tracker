@@ -310,6 +310,18 @@ Mentions of You, and files created automatically from Pentagon.
         `GET /api/documents/projects`, `GET /api/tasks/:id/files/:fid/view`,
         `DELETE /api/tasks/:id/files/:fid`. Deleting a project leaves its
         copies in S3.
+        **No downloads anywhere** (same day, at the user's request: "All
+        documents should ever only be read only"): every route that serves
+        a stored file (board case and customer files, People, Performance,
+        IT request attachments, staff form receipts, SOP PDFs, Documents,
+        BD projects) goes through `sendViewOnly` — inline PDFs, pictures,
+        text only, `no-store`, never an attachment; other types refused.
+        Every page opens them with `viewDocument` (documents.js) in the
+        Documents viewer; SOPs no longer open in a new browser tab. Word /
+        Excel / email files therefore can't be opened anywhere until a
+        PDF conversion exists. Left alone: Performance's "Download record"
+        and the IT notebook's "Download PDF" (print pages of the tracker's
+        own records) and IT's emailed replies with attachments.
         US Government folders exist only under SOI Aviation
         (`DEPT_COMPANIES` in `documents.js`). PDFs did show in the viewer
         on the second local test.

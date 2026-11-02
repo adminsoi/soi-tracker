@@ -528,10 +528,21 @@ routes `/api/documents*` in `index.js`, page `public/js/documents.js`.
   characters anywhere on the page are blocked, and a faint watermark with
   the viewer's login and the time is drawn over the document. **This only
   discourages copying:** screenshots, photos of the screen and the
-  browser's developer tools still work, and the board's own case files
-  still offer their attachments as downloads. Word, Excel, PowerPoint and
+  browser's developer tools still work. Word, Excel, PowerPoint and
   email files can't be shown without downloading them or sending them to
   an outside viewer, so they're listed with no preview.
+- **No downloads anywhere:** every stored document in the tracker is
+  view-only, not just the ones in Documents. Board case files and customer
+  files, People supporting documents, Performance files, IT request
+  attachments, staff form receipts, SOP PDFs and BD project documents all
+  open in the same viewer, and every route that serves a file goes
+  through `sendViewOnly` in `index.js`: PDFs, pictures and text inline
+  with `no-store`, never as an attachment; anything else is refused
+  ("can't be shown in the browser, and downloading is switched off — ask
+  for a PDF"). Uploading is unchanged. Not covered: Performance's
+  **Download record** and the IT notebook's **Download PDF** print pages
+  the tracker builds itself (not stored documents), and IT's emailed
+  replies still carry the files IT attaches to them.
 - **Kept out:** HR's employment files (`people_files/`), staff form
   receipts and HR forms (`staff_form_files/`), payroll and performance
   files are never listed; the HR and Finance folders say so.

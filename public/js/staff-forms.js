@@ -382,9 +382,7 @@ document.addEventListener("click", function (e) {
   }
   if (ds.sfDl) {
     var p = ds.sfDl.split(":");
-    fetch("/api/staff-forms/" + encodeURIComponent(p[0]) + "/files/" + encodeURIComponent(p[1]), { headers: { Authorization: "Bearer " + token() } })
-      .then(function (res) { if (!res.ok) throw new Error("Couldn't download that file"); return res.blob(); })
-      .then(function (b) { var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = t.textContent.replace(/^📎\s*/, "") || "file"; document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000); }, function (err) { toast(err.message, true); });
+    viewDocument("/api/staff-forms/" + encodeURIComponent(p[0]) + "/files/" + encodeURIComponent(p[1]), t.textContent.replace(/^📎\s*/, ""), "");
   }
 });
 

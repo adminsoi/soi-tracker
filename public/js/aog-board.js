@@ -389,12 +389,8 @@ function brdApi(id, path, body, method) {
       .then(function (card) { if (card && card.id) brdPut(card); return card; }, function (err) { toast(err.message, true); throw err; });
   });
 }
-function brdDownload(url, name) {
-  fetch(url, { headers: { Authorization: "Bearer " + token() } })
-    .then(function (r) { if (!r.ok) throw new Error("Couldn't download that file"); return r.blob(); })
-    .then(function (b) { var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = name || "file"; document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000); },
-          function (err) { toast(err.message, true); });
-}
+// Attachments open view-only in the Documents viewer (documents.js); no downloads.
+function brdView(url, meta) { viewDocument(url, meta && meta.name, meta && meta.type); }
 function brdUpload(files, urlFor, done) {
   var list = Array.prototype.slice.call(files || []);
   if (!list.length) return;
@@ -538,8 +534,8 @@ document.addEventListener("click", function (e) {
     return;
   }
   if ("brdCupload" in ds) { $("#brdCFile").click(); return; }
-  if ("brdDl" in ds) { var c1 = brdCard(id), meta = c1 && (c1.files || []).filter(function (x) { return x.id === ds.brdDl; })[0]; brdDownload(brdUrl("/api/board/" + encodeURIComponent(id) + "/files/" + encodeURIComponent(ds.brdDl)), meta && meta.name); return; }
-  if ("brdCdl" in ds) { var fl = (((brd.data.customers || {})[brd.customer] || {}).files || []).filter(function (x) { return x.id === ds.brdCdl; })[0]; brdDownload(brdUrl("/api/board-customers/files/" + encodeURIComponent(ds.brdCdl)), fl && fl.name); return; }
+  if ("brdDl" in ds) { var c1 = brdCard(id), meta = c1 && (c1.files || []).filter(function (x) { return x.id === ds.brdDl; })[0]; brdView(brdUrl("/api/board/" + encodeURIComponent(id) + "/files/" + encodeURIComponent(ds.brdDl)), meta); return; }
+  if ("brdCdl" in ds) { var fl = (((brd.data.customers || {})[brd.customer] || {}).files || []).filter(function (x) { return x.id === ds.brdCdl; })[0]; brdView(brdUrl("/api/board-customers/files/" + encodeURIComponent(ds.brdCdl)), fl); return; }
   if ("brdArchive" in ds) {
     var arch = ds.brdArchive === "1";
     if (arch && !confirm("Archive this file? It leaves the board but its documents, notes and history are kept.")) return;

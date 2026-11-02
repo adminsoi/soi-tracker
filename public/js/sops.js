@@ -48,12 +48,10 @@ function parseQa(text) {
   });
   return out.filter(function (x) { return x.q; }).map(function (x) { return { q: x.q, a: x.a.trim() }; });
 }
-function openSop(id) {
-  var w = window.open("", "_blank");
-  fetch("/api/sops/" + encodeURIComponent(id) + "/file", { headers: { Authorization: "Bearer " + token() } })
-    .then(function (r) { if (!r.ok) throw new Error("Couldn't open that SOP"); return r.blob(); })
-    .then(function (b) { var u = URL.createObjectURL(b); if (w) w.location = u; else window.location = u; },
-          function (err) { if (w) w.close(); toast(err.message, true); });
+// Opens view-only in the Documents viewer (documents.js), not a new tab
+// where the browser's PDF viewer would offer a download.
+function openSop(id, name) {
+  viewDocument("/api/sops/" + encodeURIComponent(id) + "/file", name || "SOP", "application/pdf");
 }
 function renderSops(dept) {
   var st = sopData[dept];
@@ -103,7 +101,7 @@ function renderSopQa(dept, d, can) {
     var sop = x.sopId && byId[x.sopId];
     return '<details class="qa"' + (q ? " open" : "") + "><summary>" + E(x.q) + (x.dept === "*" ? ' <span class="qa-all">ALL DEPARTMENTS</span>' : "") + "</summary>" +
       '<div class="qa-body"><div class="nb-read">' + (x.a ? nbFormat(x.a) : '<p class="dim">No answer yet.</p>') + "</div>" +
-      '<div class="qa-foot">' + (sop ? '<button type="button" class="text-button" data-sop-open="' + E(sop.id) + '">Open ' + E(sop.code || sop.title) + " ↗</button>" : "") +
+      '<div class="qa-foot">' + (sop ? '<button type="button" class="text-button" data-sop-open="' + E(sop.id) + '">Open ' + E(sop.code || sop.title) + "</button>" : "") +
       (can ? '<button type="button" class="text-button" data-sop-editq="' + E(x.id) + '">Edit</button>' : "") +
       "<span>Updated " + E(new Date(x.updatedAt || x.createdAt).toLocaleDateString()) + (x.by ? " · " + E(x.by) : "") + "</span></div></div></details>";
   }).join("") : '<div class="empty">' + (d.qa.length ? "No questions match." : can ? "No quick answers yet. Add the questions people ask when the manager is out — or paste a whole list." : "No quick answers yet.") + "</div>";
@@ -160,7 +158,7 @@ document.addEventListener("click", function (e) {
   if (!t) return;
   var ds = t.dataset, dept = sopDeptNow(), st = sopData[dept], d = st && st.data;
   if (ds.sopView) { sopUi.view[dept] = ds.sopView; render(); return; }
-  if (ds.sopOpen) { openSop(ds.sopOpen); return; }
+  if (ds.sopOpen) { var so = d && (d.sops || []).filter(function (x) { return x.id === ds.sopOpen; })[0]; openSop(ds.sopOpen, so && [so.code, so.title].filter(Boolean).join(" ")); return; }
   if ("sopUpload" in ds) { $("#sopFile").click(); return; }
   if ("sopAddq" in ds) { sopUi.adding = true; sopUi.editing = ""; sopUi.pasting = false; sopUi.form = {}; render(); var q = $("#sopq"); if (q) q.focus(); return; }
   if ("sopPaste" in ds) { sopUi.pasting = true; sopUi.adding = false; sopUi.editing = ""; render(); var pb = $("#sopPasteBox"); if (pb) pb.focus(); return; }

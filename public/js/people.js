@@ -155,7 +155,7 @@ function renderPersonFile() {
 
   var docs = '<div class="card" style="padding:16px 18px;margin-bottom:14px;"><div class="card-label">Supporting documents</div>' +
     '<div class="perf-files" style="margin-top:8px;">' + d.files.map(function (f) {
-      return '<span class="perf-file">📎 <button type="button" data-pp-dl="' + E(f.id) + '" title="Download">' + E(f.name) + "</button>" +
+      return '<span class="perf-file">📎 <button type="button" data-pp-dl="' + E(f.id) + '" title="View">' + E(f.name) + "</button>" +
         '<span class="small-note">' + Math.max(1, Math.round(f.size / 1024)) + " KB · " + E(f.by) + '</span><button type="button" data-pp-rmfile="' + E(f.id) + '" title="Remove" aria-label="Remove document">✕</button></span>';
     }).join("") + '<input type="file" data-pp-files multiple hidden><button type="button" class="text-button" data-pp-attach>📎 Add a document</button></div>' +
     '<p class="small-note" style="margin-top:8px;">Contract, offer letter, certificates. PDF, image, Word, Excel, text or email, up to 10 MB each.</p></div>';
@@ -287,9 +287,7 @@ document.addEventListener("click", function (e) {
   else if ("ppAttach" in ds) { var inp = $("#view").querySelector("[data-pp-files]"); if (inp) inp.click(); }
   else if (ds.ppDl && d) {
     var meta = d.files.filter(function (f) { return f.id === ds.ppDl; })[0];
-    fetch(ppBase() + "/files/" + encodeURIComponent(ds.ppDl), { headers: { Authorization: "Bearer " + token() } })
-      .then(function (r) { if (!r.ok) throw new Error("Couldn't download that file"); return r.blob(); })
-      .then(function (b) { var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = meta ? meta.name : "file"; document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000); }, function (err) { toast(err.message, true); });
+    viewDocument(ppBase() + "/files/" + encodeURIComponent(ds.ppDl), meta && meta.name, meta && meta.type);
   }
   else if (ds.ppRmfile) {
     if (!confirm("Remove this document? It's deleted from storage.")) return;

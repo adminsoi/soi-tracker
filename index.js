@@ -1590,16 +1590,29 @@ app.post(
 
 // Case-file attachments (PDFs, pictures, invoices, screenshots, emails), up to
 // 15 MB each, stored under board_files/<card>/ in S3 (usgov_board_files/ for
-// the US Gov board). Always downloaded,
-// never shown in the page.
+// the US Gov board). Like every stored document they're view-only: shown in
+// the page, never offered as a download (sendViewOnly).
 function boardFileMeta(req) {
   const name = String(req.query.name || "file").replace(/[\\/\r\n"]+/g, "_").slice(0, 160);
   const ext = (name.match(/\.([a-z0-9]{2,5})$/i) || [])[1];
   const type = ext && PERF_FILE_TYPES[ext.toLowerCase()];
   return { name, type };
 }
-function sendBoardFile(res, meta, file) {
-  res.set({ "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${meta.name.replace(/[^\w .()-]+/g, "_")}"`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" });
+// Every stored document goes out through here, view-only (ROADMAP.md
+// Phase 6): PDFs, pictures and text inline for the page's viewer, never as
+// an attachment, never cached; anything else (Word, Excel, email…) is
+// refused, because the browser can't show it without downloading it.
+// This discourages copying; it can't stop a screenshot.
+function sendViewOnly(res, meta, file) {
+  const ext = (String(meta.name || "").match(/\.([a-z0-9]{2,5})$/i) || [])[1];
+  const type = [meta.type, file.contentType, ext && PERF_FILE_TYPES[ext.toLowerCase()]].find((t) => t && docs.canPreview(t));
+  if (!type) return res.status(415).json({ error: "This kind of file can't be shown in the browser, and downloading is switched off. Ask whoever added it for a PDF." });
+  res.set({
+    "Content-Type": type.startsWith("text/") ? type + "; charset=utf-8" : type,
+    "Content-Disposition": `inline; filename="${String(meta.name || "document").replace(/[^\w .()-]+/g, "_")}"`,
+    "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+  });
+  if (type !== "application/pdf") res.set("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'");
   res.send(file.body);
 }
 app.post(
@@ -1629,7 +1642,7 @@ app.get(
     const meta = (c.files || []).find((f) => f.id === req.params.fid);
     const file = meta && (await getFile(`${boardOf(req).files}/${c.id}/${meta.id}`));
     if (!file) return res.status(404).json({ error: "That file isn't here" });
-    sendBoardFile(res, meta, file);
+    sendViewOnly(res, meta, file);
   })
 );
 
@@ -1663,7 +1676,7 @@ app.get(
     for (const x of Object.values(doc.customers || {})) meta = meta || (x.files || []).find((f) => f.id === req.params.fid);
     const file = meta && (await getFile(`${cfg.customerFiles}/${meta.id}`));
     if (!file) return res.status(404).json({ error: "That file isn't here" });
-    sendBoardFile(res, meta, file);
+    sendViewOnly(res, meta, file);
   })
 );
 
@@ -2712,8 +2725,7 @@ app.get(
     if (!meta) return res.status(404).json({ error: "That file isn't here" });
     const file = await getFile(`performance_files/${meta.id}`);
     if (!file) return res.status(404).json({ error: "The file is missing" });
-    res.set({ "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${meta.name.replace(/[^\w .()-]+/g, "_")}"`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" });
-    res.send(file.body);
+    sendViewOnly(res, meta, file);
   })
 );
 app.delete(
@@ -2855,9 +2867,7 @@ app.get(
     if (!sop || !canReadSops(req.user, sop.dept)) return res.status(404).json({ error: "That SOP isn't here" });
     const file = await getFile(`sop_files/${sop.id}`);
     if (!file) return res.status(404).json({ error: "The PDF is missing" });
-    const name = (sop.fileName || `${sop.code || "SOP"} ${sop.title}.pdf`).replace(/[^\w .()-]+/g, "_");
-    res.set({ "Content-Type": "application/pdf", "Content-Disposition": `inline; filename="${name}"`, "Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff" });
-    res.send(file.body);
+    sendViewOnly(res, { name: sop.fileName || `${sop.code || "SOP"} ${sop.title}.pdf`, type: "application/pdf" }, file);
   })
 );
 
@@ -3762,8 +3772,7 @@ app.get(
     const meta = r && (r.files || []).find((f) => f.id === req.params.fid);
     const file = meta && (await getFile(`it_request_files/${r.id}/${meta.id}`));
     if (!file) return res.status(404).json({ error: "That file isn't here" });
-    res.set({ "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${meta.name.replace(/[^\w .()-]+/g, "_")}"`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" });
-    res.send(file.body);
+    sendViewOnly(res, meta, file);
   })
 );
 
@@ -4425,8 +4434,7 @@ app.get(
     const meta = (item.files || []).find((f) => f.id === req.params.fid);
     const file = meta && (await getFile(`staff_form_files/${item.id}/${meta.id}`));
     if (!file) return res.status(404).json({ error: "That file isn't here" });
-    res.set({ "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${meta.name.replace(/[^\w .()-]+/g, "_")}"`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" });
-    res.send(file.body);
+    sendViewOnly(res, meta, file);
   })
 );
 // A reimbursement goes to Finance once it has a receipt.
@@ -4993,8 +5001,7 @@ app.get(
     const meta = f && (f.files || []).find((x) => x.id === req.params.fid);
     const file = meta && (await getFile(`people_files/${f.id}/${meta.id}`));
     if (!file) return res.status(404).json({ error: "That file isn't here" });
-    res.set({ "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${meta.name.replace(/[^\w .()-]+/g, "_")}"`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" });
-    res.send(file.body);
+    sendViewOnly(res, meta, file);
   })
 );
 app.delete(
@@ -5193,16 +5200,10 @@ app.get(
     const src = await docSource(req, res, req.query);
     if (!src) return;
     const { meta, key } = src;
-    if (!docs.canPreview(meta.type)) return res.status(415).json({ error: "This kind of file can't be shown in the browser" });
+    if (!docs.canPreview(meta.type)) return res.status(415).json({ error: "This kind of file can't be shown in the browser, and downloading is switched off." });
     const file = await getFile(key);
     if (!file) return res.status(404).json({ error: "That document isn't here" });
-    res.set({
-      "Content-Type": meta.type.startsWith("text/") ? meta.type + "; charset=utf-8" : meta.type,
-      "Content-Disposition": `inline; filename="${meta.name.replace(/[^\w .()-]+/g, "_")}"`,
-      "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
-    });
-    if (meta.type !== "application/pdf") res.set("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'");
-    res.send(file.body);
+    sendViewOnly(res, meta, file);
   })
 );
 
@@ -5518,16 +5519,9 @@ app.get(
     const t = tasks.find((x) => x.id === req.params.id);
     const meta = t && maySeeProject(req.user, t, tasks) && (t.files || []).find((f) => f.id === req.params.fid);
     if (!meta) return res.status(404).json({ error: "That document isn't here" });
-    if (!docs.canPreview(meta.type)) return res.status(415).json({ error: "This kind of file can't be shown in the browser" });
     const file = await getFile(`task_files/${t.id}/${meta.id}`);
     if (!file) return res.status(404).json({ error: "That document isn't here" });
-    res.set({
-      "Content-Type": meta.type.startsWith("text/") ? meta.type + "; charset=utf-8" : meta.type,
-      "Content-Disposition": `inline; filename="${meta.name.replace(/[^\w .()-]+/g, "_")}"`,
-      "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
-    });
-    if (meta.type !== "application/pdf") res.set("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'");
-    res.send(file.body);
+    sendViewOnly(res, meta, file);
   })
 );
 // Take a document off a project (whoever may edit the project). Only this

@@ -301,6 +301,14 @@ document.addEventListener("input", function (e) {
   if (e.target.id === "dcAddQ" && dcAdd) { dcAdd.q = e.target.value; dcAddDraw(); }
 });
 
+// Every stored document in the tracker (board case and customer files,
+// People, Performance, IT requests, staff forms, SOPs) opens here, view-only;
+// the server never sends one as a download. Word, Excel and email files get
+// the server's "can't be shown" message.
+function viewDocument(url, name, type) {
+  dcViewer({ id: url, name: name || "Document", type: type || "", preview: true, versions: 1 }, "", { url: url });
+}
+
 // A Business Development project's documents (shown on its row).
 document.addEventListener("click", function (e) {
   var t = e.target.closest && e.target.closest("[data-proj-doc],[data-proj-doc-del]");

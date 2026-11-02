@@ -140,7 +140,7 @@ function renderPerfPerson() {
   if (!d || d.key !== perf.sel) return '<div class="nb-empty">Loading…</div>';
   var filesFor = function (id) { return d.files.filter(function (f) { return (f.entryId || "") === id; }); };
   var fileChip = function (f) {
-    return '<span class="perf-file">📎 <button type="button" data-perf-dl="' + E(f.id) + '" title="Download">' + E(f.name) + "</button>" +
+    return '<span class="perf-file">📎 <button type="button" data-perf-dl="' + E(f.id) + '" title="View">' + E(f.name) + "</button>" +
       '<span class="small-note">' + Math.max(1, Math.round(f.size / 1024)) + ' KB</span><button type="button" data-perf-rmfile="' + E(f.id) + '" title="Remove" aria-label="Remove attachment">✕</button></span>';
   };
   var attachRow = function (id, label) {
@@ -398,10 +398,7 @@ document.addEventListener("click", function (e) {
   }
   if (ds.perfDl) {
     var meta = d.files.filter(function (x) { return x.id === ds.perfDl; })[0];
-    fetch(base + "/files/" + encodeURIComponent(ds.perfDl), { headers: { Authorization: "Bearer " + token() } })
-      .then(function (r) { if (!r.ok) throw new Error("Couldn't download that file"); return r.blob(); })
-      .then(function (b) { var a2 = document.createElement("a"); a2.href = URL.createObjectURL(b); a2.download = meta ? meta.name : "file"; document.body.appendChild(a2); a2.click(); setTimeout(function () { URL.revokeObjectURL(a2.href); a2.remove(); }, 1000); },
-            function (err) { toast(err.message, true); });
+    viewDocument(base + "/files/" + encodeURIComponent(ds.perfDl), meta && meta.name, meta && meta.type);
     return;
   }
   if (ds.perfRmfile) {
