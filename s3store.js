@@ -180,6 +180,11 @@ function getDocuments() {
 function getLegal() {
   return readJson("legal", {});
 }
+// Strategy Meeting (Leadership only): { meetings: [{ id, date, title,
+// items: [{ topic, owner, …, actions: [...] }] }] }. See strategy.js.
+function getStrategy() {
+  return readJson("strategy", {});
+}
 
 // In-process queues so concurrent requests to this same container don't
 // clobber each other's read-modify-write cycle.
@@ -201,6 +206,7 @@ let payrollQueue = Promise.resolve();
 let peopleQueue = Promise.resolve();
 let documentsQueue = Promise.resolve();
 let legalQueue = Promise.resolve();
+let strategyQueue = Promise.resolve();
 
 function withUsers(mutator) {
   usersQueue = usersQueue.then(async () => {
@@ -387,7 +393,19 @@ function withLegal(mutator) {
   return legalQueue;
 }
 
+function withStrategy(mutator) {
+  strategyQueue = strategyQueue.then(async () => {
+    const doc = await getStrategy();
+    const result = await mutator(doc);
+    await writeJson("strategy", doc);
+    return result;
+  });
+  return strategyQueue;
+}
+
 module.exports = {
+  getStrategy,
+  withStrategy,
   getLegal,
   withLegal,
   getDocuments,

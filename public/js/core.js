@@ -401,8 +401,9 @@ function navItems() {
   if (me.fullAccess || me.departments.length > 1) items.push({ group: "OVERVIEW", id: "overview", ic: "◷", label: "Overview" });
   items.push({ group: "YOU", id: "mentions", ic: "@", label: "Mentions of You", badge: mineOpen });
   items.push({ id: "inbox", ic: "✉", label: "Emails", badge: inboxNeeds });
-  items.push({ group: "COMPANY", id: "strategy", ic: "◇", label: "Strategy Meeting" });
-  items.push({ id: "sop", ic: "☰", label: "SOP" });
+  // Strategy Meeting: Leadership only (the server checks every request too).
+  if (me.leadership) items.push({ group: "COMPANY", id: "strategy", ic: "◇", label: "Strategy Meeting" });
+  items.push({ group: me.leadership ? "" : "COMPANY", id: "sop", ic: "☰", label: "SOP", badge: sopWaiting });
   // Leadership only (the server checks every People request too).
   if (me.leadership) items.push({ id: "people", ic: "☺", label: "People" });
   items.push({ id: "documents", ic: "▢", label: "Documents" });

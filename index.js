@@ -66,6 +66,8 @@ const {
   withDocuments,
   getLegal,
   withLegal,
+  getStrategy,
+  withStrategy,
 } = require("./s3store");
 const { sendMail, mailConfigured, MAIL_FROM } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError, nameFromTitle } = require("./calendar");
@@ -77,6 +79,7 @@ const forms = require("./staffforms");
 const employment = require("./people");
 const docs = require("./documents");
 const legal = require("./legal");
+const strategy = require("./strategy");
 const payCheck = require("./payrollcheck");
 const { pentagonQuery } = require("./pentagon");
 const {
@@ -2776,10 +2779,12 @@ const sopText = (v, n) => String(v == null ? "" : v).trim().slice(0, n);
 function sopShape(doc) {
   doc.sops = Array.isArray(doc.sops) ? doc.sops : [];
   doc.qa = Array.isArray(doc.qa) ? doc.qa : [];
+  doc.requests = Array.isArray(doc.requests) ? doc.requests : [];
   return doc;
 }
 function sopDeptOk(dept) { return dept === SOP_ALL || DEPARTMENTS.includes(dept); }
-function canReadSops(user, dept) { return dept === SOP_ALL || inDepartment(user, dept); }
+// Leadership reads every SOP's PDFs too: they approve the change requests.
+function canReadSops(user, dept) { return dept === SOP_ALL || inDepartment(user, dept) || !!user.leadership; }
 function newId() { return Date.now().toString(36) + require("crypto").randomBytes(5).toString("hex"); }
 
 app.get(
@@ -2860,6 +2865,7 @@ app.delete(
     });
     if (!gone) return res.status(404).json({ error: "That SOP isn't here any more" });
     await deleteFile(`sop_files/${gone.id}`).catch(() => {});
+    for (const v of gone.versions || []) await deleteFile(`sop_versions/${gone.id}/${v.id}`).catch(() => {});
     res.status(204).end();
   })
 );
@@ -2873,6 +2879,208 @@ app.get(
     const file = await getFile(`sop_files/${sop.id}`);
     if (!file) return res.status(404).json({ error: "The PDF is missing" });
     sendViewOnly(res, { name: sop.fileName || `${sop.code || "SOP"} ${sop.title}.pdf`, type: "application/pdf" }, file);
+  })
+);
+
+// An older version of an SOP, kept when a new one replaced it.
+app.get(
+  "/api/sops/:id/versions/:vid/file",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const sop = sopShape(await getSops()).sops.find((y) => y.id === req.params.id);
+    const v = sop && (sop.versions || []).find((x) => x.id === req.params.vid);
+    if (!v || !canReadSops(req.user, sop.dept)) return res.status(404).json({ error: "That version isn't here" });
+    const file = await getFile(`sop_versions/${sop.id}/${v.id}`);
+    if (!file) return res.status(404).json({ error: "The PDF is missing" });
+    sendViewOnly(res, { name: v.fileName || `${sop.code || "SOP"} ${sop.title} ${v.version || ""}.pdf`, type: "application/pdf" }, file);
+  })
+);
+
+// A new version of an SOP: the current PDF moves to sop_versions/<sop>/<id>
+// (still viewable from the SOP's row) and the new one takes its place.
+// Used by a department manager's "New version" and by an approved change
+// request that came with a PDF.
+async function sopNewVersion(sopId, body, meta, by) {
+  const cur = sopShape(await getSops()).sops.find((y) => y.id === sopId);
+  if (!cur) return null;
+  const vid = newId();
+  const old = await getFile(`sop_files/${sopId}`);
+  if (old) await putFile(`sop_versions/${sopId}/${vid}`, old.body, "application/pdf");
+  await putFile(`sop_files/${sopId}`, body, "application/pdf");
+  return withSops((doc) => {
+    const x = sopShape(doc).sops.find((y) => y.id === sopId);
+    if (!x) return null;
+    x.versions = Array.isArray(x.versions) ? x.versions : [];
+    if (old) x.versions.unshift({ id: vid, fileName: x.fileName, size: x.size, version: x.version, at: x.uploadedAt, by: x.uploadedBy });
+    Object.assign(x, { fileName: sopText(meta.fileName, 200) || x.fileName, size: body.length, version: sopText(meta.version, 30), uploadedAt: Date.now(), uploadedBy: by, updatedAt: Date.now() });
+    if (meta.request) x.request = meta.request;
+    return Object.assign({}, x);
+  });
+}
+const isPdf = (b) => Buffer.isBuffer(b) && b.slice(0, 5).toString() === "%PDF-";
+app.post(
+  "/api/sops/:id/version",
+  authMiddleware,
+  express.raw({ type: () => true, limit: "20mb" }),
+  asyncHandler(async (req, res) => {
+    const sop = sopShape(await getSops()).sops.find((y) => y.id === req.params.id);
+    if (!sop) return res.status(404).json({ error: "That SOP isn't here any more" });
+    if (!isManager(req.user) || !(sop.dept === SOP_ALL || inDepartment(req.user, sop.dept))) return res.status(403).json({ error: "Only the department's managers add a new version" });
+    if (!isPdf(req.body)) return res.status(400).json({ error: "SOPs need to be PDF files" });
+    res.json(await sopNewVersion(sop.id, req.body, { fileName: req.query.fileName, version: req.query.version }, req.user.username));
+  })
+);
+
+// ---------- SOP change requests ----------
+// Anyone proposes a change to an SOP they can read (or a new SOP for one of
+// their departments): what, why, and optionally the new PDF. Leadership
+// approves or declines — never their own. An approved change with a PDF
+// becomes the SOP's new version (a new SOP for "new"); without one it's
+// recorded and a department manager adds the PDF with "New version".
+function sopRequestView(r, user, doc) {
+  const sop = r.sopId && doc.sops.find((y) => y.id === r.sopId);
+  return Object.assign({}, r, {
+    sopLabel: sop ? [sop.code, sop.title].filter(Boolean).join(" · ") : r.sopLabel || "",
+    mine: sameUser(r.by, user.username),
+    canDecide: r.status === "pending" && !!user.leadership && !sameUser(r.by, user.username),
+  });
+}
+const sopRequestSeen = (r, user) => sameUser(r.by, user.username) || !!user.leadership;
+
+app.get(
+  "/api/sop-requests",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const doc = sopShape(await getSops());
+    res.json({
+      leadership: !!req.user.leadership,
+      requests: doc.requests.filter((r) => sopRequestSeen(r, req.user)).map((r) => sopRequestView(r, req.user, doc)).sort((a, b) => b.at - a.at),
+    });
+  })
+);
+app.post(
+  "/api/sop-requests",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const kind = b.kind === "new" ? "new" : "change";
+    const what = String(b.what == null ? "" : b.what).trim().slice(0, 5000);
+    const why = String(b.why == null ? "" : b.why).trim().slice(0, 3000);
+    if (!what) return res.status(400).json({ error: "Say what should change" });
+    const doc = sopShape(await getSops());
+    const r = { id: newId(), kind, what, why, status: "pending", by: req.user.username, at: Date.now() };
+    if (kind === "change") {
+      const sop = doc.sops.find((y) => y.id === b.sopId);
+      if (!sop || !(sop.dept === SOP_ALL || inDepartment(req.user, sop.dept))) return res.status(400).json({ error: "Pick one of your departments' SOPs" });
+      Object.assign(r, { sopId: sop.id, dept: sop.dept, sopLabel: [sop.code, sop.title].filter(Boolean).join(" · ") });
+    } else {
+      const dept = String(b.dept || "");
+      if (!DEPARTMENTS.includes(dept) || !inDepartment(req.user, dept)) return res.status(400).json({ error: "Pick one of your departments" });
+      const title = sopText(b.title, 160);
+      if (!title) return res.status(400).json({ error: "Give the new SOP a title" });
+      Object.assign(r, { dept, title, code: sopText(b.code, 30), sopLabel: [sopText(b.code, 30), title].filter(Boolean).join(" · ") });
+    }
+    await withSops((d) => { sopShape(d).requests.push(r); });
+    res.status(201).json(sopRequestView(r, req.user, doc));
+  })
+);
+// The proposed PDF: the person who asked, while it's still pending.
+app.post(
+  "/api/sop-requests/:id/file",
+  authMiddleware,
+  express.raw({ type: () => true, limit: "20mb" }),
+  asyncHandler(async (req, res) => {
+    if (!isPdf(req.body)) return res.status(400).json({ error: "Attach the new SOP as a PDF" });
+    const r0 = sopShape(await getSops()).requests.find((y) => y.id === req.params.id);
+    if (!r0 || !sameUser(r0.by, req.user.username)) return res.status(404).json({ error: "That request isn't yours" });
+    if (r0.status !== "pending") return res.status(400).json({ error: "That request has already been decided" });
+    await putFile(`sop_request_files/${r0.id}`, req.body, "application/pdf");
+    const r = await withSops((d) => {
+      const x = sopShape(d).requests.find((y) => y.id === r0.id);
+      if (!x || x.status !== "pending") return null;
+      x.file = { name: sopText(req.query.fileName, 200) || "Proposed SOP.pdf", size: req.body.length, at: Date.now() };
+      return Object.assign({}, x);
+    });
+    if (!r) return res.status(400).json({ error: "That request has already been decided" });
+    res.json(r);
+  })
+);
+app.get(
+  "/api/sop-requests/:id/file",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const r = sopShape(await getSops()).requests.find((y) => y.id === req.params.id);
+    if (!r || !r.file || !sopRequestSeen(r, req.user)) return res.status(404).json({ error: "That PDF isn't here" });
+    const file = await getFile(`sop_request_files/${r.id}`);
+    if (!file) return res.status(404).json({ error: "The PDF is missing" });
+    sendViewOnly(res, { name: r.file.name, type: "application/pdf" }, file);
+  })
+);
+app.post(
+  "/api/sop-requests/:id/withdraw",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const out = await withSops((d) => {
+      const x = sopShape(d).requests.find((y) => y.id === req.params.id);
+      if (!x || !sameUser(x.by, req.user.username)) return { status: 404, error: "That request isn't yours" };
+      if (x.status !== "pending") return { status: 400, error: "That request has already been decided" };
+      Object.assign(x, { status: "withdrawn", decidedAt: Date.now(), decidedBy: req.user.username });
+      return { r: Object.assign({}, x) };
+    });
+    if (out.error) return res.status(out.status).json({ error: out.error });
+    res.json(out.r);
+  })
+);
+// Leadership approves or declines (a note is needed to decline).
+app.post(
+  "/api/sop-requests/:id/decide",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!req.user.leadership) return res.status(403).json({ error: "Only Leadership approves SOP changes" });
+    const b = req.body || {};
+    const approve = b.approve === true;
+    const note = String(b.note == null ? "" : b.note).trim().slice(0, 2000);
+    if (!approve && !note) return res.status(400).json({ error: "Say why it's declined" });
+    // Claim the request first, so two approvals at once can't apply it twice.
+    const claim = await withSops((d) => {
+      const x = sopShape(d).requests.find((y) => y.id === req.params.id);
+      if (!x) return { status: 404, error: "That request isn't here any more" };
+      if (sameUser(x.by, req.user.username)) return { status: 403, error: "Someone else in Leadership has to decide your own request" };
+      if (x.status !== "pending") return { status: 400, error: "That request has already been decided" };
+      if (!approve) return { r0: Object.assign({}, x) };
+      if (x.kind === "change" && x.file && !d.sops.some((y) => y.id === x.sopId)) return { status: 400, error: "That SOP has been removed since — decline the request" };
+      x.status = "approving";
+      return { r0: Object.assign({}, x) };
+    });
+    if (claim.error) return res.status(claim.status).json({ error: claim.error });
+    const r0 = claim.r0;
+    const unclaim = () => withSops((d) => { const x = sopShape(d).requests.find((y) => y.id === r0.id); if (x && x.status === "approving") x.status = "pending"; });
+    // Approved with a PDF: it becomes the SOP's new version, or a new SOP.
+    let sopId = r0.sopId || "";
+    if (approve && r0.file) {
+      try {
+        const file = await getFile(`sop_request_files/${r0.id}`);
+        if (!file) { await unclaim(); return res.status(400).json({ error: "The proposed PDF is missing — ask for it again" }); }
+        const version = sopText(b.version, 30);
+        if (r0.kind === "change") {
+          await sopNewVersion(r0.sopId, file.body, { fileName: r0.file.name, version, request: r0.id }, r0.by);
+        } else {
+          sopId = newId();
+          await putFile(`sop_files/${sopId}`, file.body, "application/pdf");
+          const sop = { id: sopId, dept: r0.dept, code: r0.code || "", title: r0.title, version, fileName: r0.file.name, size: file.body.length, uploadedAt: Date.now(), uploadedBy: r0.by, request: r0.id };
+          await withSops((d) => { sopShape(d).sops.push(sop); });
+        }
+      } catch (err) { await unclaim(); throw err; }
+    }
+    const out = await withSops((d) => {
+      const x = sopShape(d).requests.find((y) => y.id === r0.id);
+      if (!x || x.status !== (approve ? "approving" : "pending")) return null;
+      Object.assign(x, { status: approve ? "approved" : "declined", decidedBy: req.user.username, decidedAt: Date.now(), note, applied: !!(approve && x.file) });
+      if (sopId) x.sopId = sopId;
+      return sopRequestView(x, req.user, d);
+    });
+    if (!out) return res.status(400).json({ error: "That request has already been decided" });
+    res.json(out);
   })
 );
 
@@ -5853,6 +6061,115 @@ app.get(
     res.json({ items: rows.filter((r) => sameUser(r.owner, req.user.username) && (r.status === "soon" || r.status === "expired"))
       .map((r) => ({ id: r.id, name: r.name, section: r.section, sectionLabel: label[r.section], company: r.company, expiry: r.expiry, daysLeft: r.daysLeft, status: r.status }))
       .sort((a, b) => a.daysLeft - b.daysLeft) });
+  })
+);
+
+// ---------- Strategy Meeting ----------
+// Company → Strategy Meeting (rules in strategy.js): weekly meetings, each
+// an agenda of items with an owner, minutes, notes, decisions and action
+// items. Leadership only on every route, except that the person an action
+// item is for sees it on Mentions of You and ticks it done.
+function strategyOnly(req, res, next) {
+  if (req.user.leadership) return next();
+  res.status(403).json({ error: "The Strategy Meeting is for Leadership logins" });
+}
+async function strategyLogins() {
+  return (await getUsers()).map(normalizeUser).map((u) => u.username).sort((a, b) => a.localeCompare(b));
+}
+const loginFinder = (names) => (v) => names.find((n) => sameUser(n, v)) || "";
+
+app.get(
+  "/api/strategy",
+  authMiddleware,
+  strategyOnly,
+  asyncHandler(async (req, res) => {
+    const doc = strategy.shape(await getStrategy());
+    res.json({ meetings: doc.meetings.slice().sort(strategy.byDateDesc), nextDate: strategy.nextDate(doc, officeToday()), logins: await strategyLogins() });
+  })
+);
+// A new meeting; agenda items not marked discussed at the last one carry over.
+app.post(
+  "/api/strategy/meetings",
+  authMiddleware,
+  strategyOnly,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const date = String(b.date || "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "Pick the meeting date" });
+    const m = await withStrategy((doc) => {
+      strategy.shape(doc);
+      const meeting = { id: newId(), date, title: forms.text(b.title, 120), items: b.carry === false ? [] : strategy.carryOver(doc, date, newId), rev: 1, createdBy: req.user.username, createdAt: Date.now() };
+      doc.meetings.push(meeting);
+      return meeting;
+    });
+    res.status(201).json(m);
+  })
+);
+// Save the whole meeting. `rev` must match, so two people editing at once
+// don't overwrite each other.
+app.put(
+  "/api/strategy/meetings/:id",
+  authMiddleware,
+  strategyOnly,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const isLogin = loginFinder(await strategyLogins());
+    const out = await withStrategy((doc) => {
+      const m = strategy.shape(doc).meetings.find((x) => x.id === req.params.id);
+      if (!m) return { status: 404, error: "That meeting isn't here any more" };
+      if (+b.rev !== (m.rev || 1)) return { status: 409, error: "Someone else changed this meeting — it has been reloaded. Make your change again." };
+      const { meeting, error } = strategy.cleanMeeting(b, m, isLogin, newId);
+      if (error) return { status: 400, error };
+      Object.assign(m, meeting, { rev: (m.rev || 1) + 1, updatedBy: req.user.username, updatedAt: Date.now() });
+      return { meeting: m };
+    });
+    if (out.error) return res.status(out.status).json({ error: out.error });
+    res.json(out.meeting);
+  })
+);
+app.delete(
+  "/api/strategy/meetings/:id",
+  authMiddleware,
+  strategyOnly,
+  asyncHandler(async (req, res) => {
+    const ok = await withStrategy((doc) => {
+      const list = strategy.shape(doc).meetings;
+      const i = list.findIndex((x) => x.id === req.params.id);
+      if (i === -1) return false;
+      list.splice(i, 1);
+      return true;
+    });
+    if (!ok) return res.status(404).json({ error: "That meeting isn't here any more" });
+    res.status(204).end();
+  })
+);
+// Mentions of You: open action items for this login. Only the item's topic,
+// the action and its due date leave the meeting.
+app.get(
+  "/api/strategy/mine",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const doc = strategy.shape(await getStrategy());
+    res.json({ items: strategy.allActions(doc).filter((x) => !x.action.done && sameUser(x.action.person, req.user.username))
+      .map((x) => ({ id: x.action.id, text: x.action.text, due: x.action.due, topic: x.item.topic, meetingDate: x.meeting.date }))
+      .sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999")) });
+  })
+);
+// Tick an action item done (or not done): the person it's for, or Leadership.
+app.post(
+  "/api/strategy/actions/:id/done",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const done = !!(req.body || {}).done;
+    const out = await withStrategy((doc) => {
+      const x = strategy.allActions(doc).find((y) => y.action.id === req.params.id);
+      if (!x || (!req.user.leadership && !sameUser(x.action.person, req.user.username))) return null;
+      x.action.done = done;
+      if (done) { x.action.doneAt = Date.now(); x.action.doneBy = req.user.username; } else { delete x.action.doneAt; delete x.action.doneBy; }
+      return { id: x.action.id, done };
+    });
+    if (!out) return res.status(404).json({ error: "That action item isn't yours or isn't here any more" });
+    res.json(out);
   })
 );
 

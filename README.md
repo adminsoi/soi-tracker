@@ -11,7 +11,8 @@ in an S3 bucket — no separate database container needed.
 index.js        Express API and the server entry point
 *.js            Server helpers (auth, S3 storage, Microsoft Graph mail and
                 calendar, IT requests, Pentagon queries, the Operations board,
-                staff forms and People rules)
+                staff forms, People, Documents, Legal and Strategy
+                Meeting rules)
 index.html      The tracker page: its layout only
 public/         The tracker's stylesheet and scripts, one file per area
                 (core, departments, aog-board, inbox, …), loaded in the
@@ -255,10 +256,58 @@ Each department has an **SOPs** tab, readable by everyone in that department
 - **SOP documents** — upload the PDFs (up to 20 MB each). The number, title
   and version come from the file name (`SOP-WH002_v01.pdf` → WH-002 ·
   Receiving · v01) and can be fixed in the table. An SOP can be shown in
-  every department (e.g. CUST-001). **Open** shows the PDF in a new tab.
+  every department (e.g. CUST-001). **Open** shows the PDF view-only in
+  the Documents viewer. A manager in the department can add a **New
+  version**; the old PDF is kept and listed under the row (**n older**),
+  view-only, for everyone who reads the SOP.
 
-PDFs are stored privately in S3 under `sop_files/`, the rest in `sops.json`.
-Nothing here uses AI.
+### SOP change requests (the SOP update form)
+
+Anyone can **Propose a change** to one of their departments' SOPs (from the
+toolbar or the SOP's row), or propose a **New SOP** for one of their
+departments: what should change, why, and optionally the new version as a
+PDF (attachable or replaceable until it's decided; **Withdraw** until
+then). **Leadership** approves or declines on **SOP → Change requests** and
+on Mentions of You (with a badge on SOP); nobody decides their own request,
+and declining needs a note. All checked on the server.
+
+- Approved **with a PDF**: it becomes the SOP's current version (the old one
+  moves to the SOP's older versions), or a new SOP for a "New SOP" request,
+  with the version label Leadership types.
+- Approved **without a PDF**: recorded; a department manager adds the PDF
+  with **New version**.
+- Leadership can view every SOP's PDFs (to judge a request), even outside
+  their departments.
+
+PDFs are stored privately in S3 under `sop_files/` (current),
+`sop_versions/<sop>/<version>/` (older) and `sop_request_files/<request>`
+(proposed); the rest, including `requests`, in `sops.json`. Every PDF is
+served view-only through `sendViewOnly`. Nothing here uses AI.
+
+## Strategy Meeting (Leadership only)
+
+**Company → Strategy Meeting** is the weekly meeting's agenda. Only logins
+with the **Leadership** tick see it (full access alone isn't enough); every
+route checks that on the server.
+
+- **+ New meeting** is dated a week after the latest one (any date can be
+  picked) and carries over the agenda items not ticked **Discussed** at the
+  last meeting (untick the box to start empty).
+- Each **agenda item**: topic, owner (a login), minutes, notes, decisions,
+  Discussed, and **action items** (what, who — any login — and a due
+  date). Items can be moved up and removed. **Save agenda** saves the whole
+  meeting; if someone else saved it in the meantime the page reloads it
+  instead of overwriting their change.
+- Each open action item shows on its person's **Mentions of You** (only the
+  item's topic, the action and the due date — not the rest of the
+  meeting), red once overdue, counted in the sidebar badge. They tick it
+  done there; Leadership can tick it on the agenda too. Carried-over items
+  don't copy their action items: those stay on the meeting they were set
+  in until done.
+
+Stored in `strategy.json` (rules in `strategy.js`). Don't type government
+client details, contract terms or supplier prices into the agenda. Nothing
+here uses AI.
 
 ## Calendar
 
@@ -391,7 +440,7 @@ dark ones like SOI green stay visible.
 
 - **Sidebar**, top to bottom: Work — **Operations** and **Administration**;
   **Overview**; You — **Mentions of You**, **Emails**; Company —
-  **Strategy Meeting**, **SOP**, **People** (leadership logins only),
+  **Strategy Meeting** and **People** (leadership logins only), **SOP**,
   **Documents**, **Department Chat**; and at the bottom, Tools — **Calendar**
   and **Global**. Pentagon isn't a sidebar item; its data feeds the
   Operations tabs and the board. Old `#performance` links open HR's
@@ -412,10 +461,11 @@ dark ones like SOI green stay visible.
   Finance, Tasks, Projects, Invoices; Admin — Tasks, Projects. Each sidebar
   item reopens the department you last used there.
 - **SOP** shows each of your departments' quick answers and SOP documents,
-  with a tab per department (the same SOPs as the Operations SOPs tabs).
-- **Strategy Meeting** is a placeholder for a later phase and loads no
-  data yet. **Documents** is the S3 file manager (see below). **People** is
-  for leadership logins only (see below).
+  with a tab per department (the same SOPs as the Operations SOPs tabs), and
+  a **Change requests** tab (see *SOP change requests*).
+- **Strategy Meeting** is the weekly agenda (see *Strategy Meeting*).
+  **Documents** is the S3 file manager (see below). **People** is for
+  leadership logins only (see below).
 - **Department Chat** (was Master Chat) describes the planned company-wide
   Claude chat. It isn't switched on until it can run in SOI's compliant AWS
   environment and compliance approves its access; meanwhile it opens
