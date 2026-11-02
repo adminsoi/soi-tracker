@@ -209,12 +209,15 @@ var SOP_REQ_TAB = "__requests";
 function loadSopRequests() {
   if (sopReq.loading) return Promise.resolve(sopReq.data);
   sopReq.loading = true;
+  var before = JSON.stringify([sopReq.data, sopReq.error]);
   return api("/api/sop-requests").then(function (d) { sopReq.data = d; sopReq.error = ""; }, function (err) { sopReq.error = err.message; })
     .then(function () {
       sopReq.loading = false; sopReq.at = Date.now();
       var n = sopReq.data ? sopReq.data.requests.filter(function (r) { return r.canDecide; }).length : 0;
       if (n !== sopWaiting) { sopWaiting = n; renderNav(); }
-      requestRender();
+      // Redraw only when something changed: Mentions of You reloads this
+      // every time it draws, so an unconditional redraw would loop (flicker).
+      if (JSON.stringify([sopReq.data, sopReq.error]) !== before) requestRender();
       return sopReq.data;
     });
 }

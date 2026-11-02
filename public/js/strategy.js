@@ -176,7 +176,9 @@ function stTick(id, done) {
 }
 var stMine = { items: null, at: 0 };
 function loadStrategyMine() {
-  return api("/api/strategy/mine").then(function (d) { stMine.items = d.items; stMine.at = Date.now(); return d.items; }, function () { return stMine.items || []; });
+  // `at` is set even on failure, so a failing request isn't retried on every redraw.
+  stMine.at = Date.now();
+  return api("/api/strategy/mine").then(function (d) { stMine.items = d.items; stMine.at = Date.now(); return d.items; }, function () { stMine.items = stMine.items || []; return stMine.items; });
 }
 // The block on Mentions of You (mentions.js); empty when there's nothing open.
 function strategyActions() {
