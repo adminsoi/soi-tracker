@@ -303,6 +303,13 @@ Mentions of You, and files created automatically from Pentagon.
         board are adopted first) or, for Leadership, a person's employment
         file. A copy, not a link; both histories record it. Route
         `POST /api/documents/add-to`, sharing `docSource` with the viewer.
+        Also (same day, at the user's request) **Business Development
+        projects** as a target: copies listed under the project on BD →
+        Projects, opened view-only, removable by whoever can edit the
+        project; `task.files`, `task_files/<task id>/<file id>`, routes
+        `GET /api/documents/projects`, `GET /api/tasks/:id/files/:fid/view`,
+        `DELETE /api/tasks/:id/files/:fid`. Deleting a project leaves its
+        copies in S3.
         US Government folders exist only under SOI Aviation
         (`DEPT_COMPANIES` in `documents.js`). PDFs did show in the viewer
         on the second local test.

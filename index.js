@@ -5445,6 +5445,21 @@ app.post(
         label = `${cfg.name} › ${docBoardLabel(c)}`;
       }, cfg.store);
       if (gone) return res.status(404).json({ error: "That board file isn't here" });
+    } else if (b.target === "project") {
+      const all = await getTasks();
+      const pre = all.find((t) => t.id === String(b.project || ""));
+      if (!pre || !bdProject(pre) || !maySeeProject(req.user, pre, all)) return res.status(404).json({ error: "That project isn't here" });
+      const meta = { id: newId(), name, type, size: file.body.length, at: Date.now(), by, fromDocuments: src.where };
+      await putFile(`task_files/${pre.id}/${meta.id}`, file.body, type);
+      let gone = false;
+      await withTasks((tasks) => {
+        const t = tasks.find((x) => x.id === pre.id);
+        if (!t || !bdProject(t)) { gone = true; return; }
+        t.files = Array.isArray(t.files) ? t.files : [];
+        t.files.push(meta);
+        label = `Business Development › ${t.title || "project"}`;
+      });
+      if (gone) return res.status(404).json({ error: "That project isn't here" });
     } else if (b.target === "person") {
       if (!employment.isLeadership(req.user)) return res.status(403).json({ error: "People is for Leadership only" });
       const login = await personLogin(String(b.username || ""));
@@ -5460,7 +5475,7 @@ app.post(
       });
       label = `${login.username}'s employment file`;
     } else {
-      return res.status(400).json({ error: "Add it to a board file or a person's file" });
+      return res.status(400).json({ error: "Add it to a board file, a project or a person's file" });
     }
     // The document's own history (department folders; never names the person's file).
     if (src.docFile) {
@@ -5468,6 +5483,72 @@ app.post(
       await withDocuments((doc) => { const f = docs.shape(doc).files.find((x) => x.id === src.docFile.id); if (f) docLog(f, by, note); });
     }
     res.status(201).json({ ok: true, to: label });
+  })
+);
+
+// Business Development projects (top-level, not quick tasks) can hold
+// copies of documents too, under task_files/<task id>/<file id>. They're
+// seen by whoever sees the project on Business Development → Projects:
+// managers in the department, the person responsible and who added it, and
+// whoever has one of its sub-tasks.
+function bdProject(t) {
+  return t.department === "Business Development" && !t.parentId && t.kind !== "task" && t.source !== "form";
+}
+function maySeeProject(u, t, tasks) {
+  if (!canTouch(u, t)) return false;
+  return canSee(u, t) || tasks.some((s) => s.parentId === t.id && canSee(u, s));
+}
+app.get(
+  "/api/documents/projects",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const tasks = await getTasks();
+    res.json({ projects: tasks.filter((t) => bdProject(t) && maySeeProject(req.user, t, tasks)).map((t) => ({
+      id: t.id, title: t.title || "", owner: t.owner || "", dueDate: t.dueDate || "", done: t.status === "done", company: taskCompany(t), files: (t.files || []).length,
+    })) });
+  })
+);
+// A project's document, shown in the Documents viewer (same rules as there:
+// inline, PDFs / pictures / text only, never as a download).
+app.get(
+  "/api/tasks/:id/files/:fid/view",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const tasks = await getTasks();
+    const t = tasks.find((x) => x.id === req.params.id);
+    const meta = t && maySeeProject(req.user, t, tasks) && (t.files || []).find((f) => f.id === req.params.fid);
+    if (!meta) return res.status(404).json({ error: "That document isn't here" });
+    if (!docs.canPreview(meta.type)) return res.status(415).json({ error: "This kind of file can't be shown in the browser" });
+    const file = await getFile(`task_files/${t.id}/${meta.id}`);
+    if (!file) return res.status(404).json({ error: "That document isn't here" });
+    res.set({
+      "Content-Type": meta.type.startsWith("text/") ? meta.type + "; charset=utf-8" : meta.type,
+      "Content-Disposition": `inline; filename="${meta.name.replace(/[^\w .()-]+/g, "_")}"`,
+      "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+    });
+    if (meta.type !== "application/pdf") res.set("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'");
+    res.send(file.body);
+  })
+);
+// Take a document off a project (whoever may edit the project). Only this
+// copy goes; the original stays in Documents.
+app.delete(
+  "/api/tasks/:id/files/:fid",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    let problem = "", gone = null;
+    await withTasks((tasks) => {
+      const t = tasks.find((x) => x.id === req.params.id);
+      if (!t || !maySeeProject(req.user, t, tasks)) { problem = "404"; return; }
+      if (!canEdit(req.user, t)) { problem = "403"; return; }
+      gone = (t.files || []).find((f) => f.id === req.params.fid);
+      if (!gone) { problem = "404"; return; }
+      t.files = t.files.filter((f) => f !== gone);
+    });
+    if (problem === "404") return res.status(404).json({ error: "That document isn't here" });
+    if (problem === "403") return res.status(403).json({ error: "Only someone who can edit this project can remove its documents" });
+    await deleteFile(`task_files/${req.params.id}/${gone.id}`);
+    res.status(204).end();
   })
 );
 

@@ -366,10 +366,19 @@ function projectRow(p, subs) {
   var cls = "project " + (isDone(p) ? "done " : "") + (isOverdue(p) ? "overdue " : "") + (p.draft ? "draft" : "");
   var tools = (!p.draft && ed ? '<button type="button" class="text-button" data-add-sub="' + E(p.id) + '">+ Sub-task</button>' : "") + delButton(p);
   return '<tr class="' + cls + '"><td>' + input(p, "title", p.title, "text", "Project name", ed) +
-    '<span class="co-note">' + (subs.length ? doneSubs + "/" + subs.length + " sub-tasks done" : "No sub-tasks yet") + (activeCompany === ALL && p.company ? " · " + E(shortCo(p.company)) : "") + "</span>" + addedNote(p) + "</td>" +
+    '<span class="co-note">' + (subs.length ? doneSubs + "/" + subs.length + " sub-tasks done" : "No sub-tasks yet") + (activeCompany === ALL && p.company ? " · " + E(shortCo(p.company)) : "") + "</span>" + addedNote(p) + projectDocs(p, ed) + "</td>" +
     "<td>" + responsibleCell(p) + "</td><td>" + input(p, "dueDate", p.dueDate, "date", "", ed) + "</td>" +
     '<td class="center">' + doneToggle(p) + '</td><td class="notes-cell">' + input(p, "notes", p.notes, "textarea", "", ed) + "</td>" +
     '<td class="row-tools">' + tools + "</td></tr>";
+}
+// Documents added to a project from Documents → Add to… (copies, view-only;
+// documents.js opens and removes them).
+function projectDocs(p, ed) {
+  if (!p.files || !p.files.length) return "";
+  return '<div class="proj-docs">' + p.files.map(function (f) {
+    return '<span class="proj-doc"><button type="button" class="text-button" data-proj-doc="' + E(p.id + "|" + f.id) + '">📄 ' + E(f.name) + "</button>" +
+      (ed ? '<button type="button" class="text-button danger" data-proj-doc-del="' + E(p.id + "|" + f.id) + '" aria-label="Remove ' + E(f.name) + ' from this project">Remove</button>' : "") + "</span>";
+  }).join("") + "</div>";
 }
 function subRow(s) {
   var ed = s.draft || canEditTask(s);

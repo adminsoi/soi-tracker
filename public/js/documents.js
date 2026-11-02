@@ -13,6 +13,7 @@
 var dcs = { meta: null, metaAt: 0, loading: false, error: "", space: "", folder: "", list: null, listKey: "", listAt: 0, listLoading: "", listError: "",
   tab: "browse", access: null, accessAt: 0, accessLoading: false, accessError: "", until: {}, noExpiry: {}, dragOver: false };
 var DC_COPY_MAX = 200; // characters; bigger copies on this page are blocked
+var DC_PREVIEW = ["application/pdf", "image/png", "image/jpeg", "image/gif", "image/webp", "text/plain", "text/csv"]; // as documents.js on the server
 
 function loadDocMeta() {
   if (dcs.loading) return;
@@ -175,7 +176,10 @@ function dcCloseViewer() {
   if (dcViewing && dcViewing.url) URL.revokeObjectURL(dcViewing.url);
   dcViewing = null;
 }
-function dcViewer(file, versionId) {
+// opts.url shows a document kept somewhere else (a Business Development
+// project's copy) with the same view-only rules; no versions or Add to….
+function dcViewer(file, versionId, opts) {
+  opts = opts || {};
   dcCloseViewer();
   dcViewing = { file: file, v: versionId || "" };
   var wrap = document.createElement("div");
@@ -186,14 +190,14 @@ function dcViewer(file, versionId) {
   for (var i = 0; i < 18; i++) mark += "<span>" + stamp + "</span>";
   wrap.innerHTML = '<div class="rs-card dc-view-card" role="dialog" aria-modal="true" aria-labelledby="dcViewT">' +
     '<div class="dc-view-head"><h3 id="dcViewT">' + E(file.name) + '</h3><span class="small-note" id="dcViewInfo">' + E(dcKind(file.type)) + "</span>" +
-    '<button type="button" data-dc-addto-open>Add to…</button><button type="button" data-dc-close aria-label="Close">Close</button></div>' +
+    (opts.url ? "" : '<button type="button" data-dc-addto-open>Add to…</button>') + '<button type="button" data-dc-close aria-label="Close">Close</button></div>' +
     '<div class="dc-view-body" id="dcViewBody"><div class="empty">Loading…</div></div><div class="dc-mark" aria-hidden="true">' + mark + "</div>" +
     '<p class="small-note dc-view-foot">View only. Downloading, printing and large copies are blocked here, but a screenshot is still possible — don\'t share what you see outside SOI.</p></div>';
   document.body.appendChild(wrap);
   var body = document.getElementById("dcViewBody");
   if (!file.preview && !versionId) { body.innerHTML = '<div class="empty">' + E(dcKind(file.type)) + " files can't be shown in the browser without downloading them, so there's no preview. Ask the folder's owner, or use Request edit if you need to work on it.</div>"; }
   else {
-    var url = "/api/documents/view?space=" + encodeURIComponent(dcs.space) + "&folder=" + encodeURIComponent(dcs.folder) + "&file=" + encodeURIComponent(file.id) + (versionId ? "&v=" + encodeURIComponent(versionId) : "");
+    var url = opts.url || "/api/documents/view?space=" + encodeURIComponent(dcs.space) + "&folder=" + encodeURIComponent(dcs.folder) + "&file=" + encodeURIComponent(file.id) + (versionId ? "&v=" + encodeURIComponent(versionId) : "");
     fetch(url, { headers: { Authorization: "Bearer " + token() } }).then(function (r) {
       if (!r.ok) return r.json().catch(function () { return {}; }).then(function (x) { throw new Error(x.error || "Couldn't open that document"); });
       return r.blob();
@@ -207,7 +211,7 @@ function dcViewer(file, versionId) {
     }).catch(function (err) { body.innerHTML = '<div class="banner">' + E(err.message) + "</div>"; });
   }
   // Earlier versions (department folders only).
-  if (dcSpace(dcs.space).kind === "dept" && file.versions > 1) {
+  if (!opts.url && dcSpace(dcs.space).kind === "dept" && file.versions > 1) {
     api("/api/documents/files/" + encodeURIComponent(file.id) + "/versions").then(function (d) {
       var info = document.getElementById("dcViewInfo");
       if (!info || !dcViewing || dcViewing.file !== file) return;
@@ -225,6 +229,7 @@ function dcFile(id) { return dcs.list && dcs.list.files.filter(function (f) { re
 var dcAdd = null; // { file, v, space, folder, tab, q, lists: { ops, usgov, person }, errors, busy }
 function dcAddTabs() {
   var t = (dcs.meta.spaces || []).filter(function (s) { return s.kind === "board"; }).map(function (s) { return { id: s.board, label: s.board === "usgov" ? "US Gov board file" : "Operations board file" }; });
+  if (me.fullAccess || me.departments.indexOf("Business Development") !== -1) t.push({ id: "project", label: "Business Development project" });
   if (me.leadership) t.push({ id: "person", label: "Person's file" });
   return t;
 }
@@ -246,7 +251,11 @@ function dcAddLoad() {
   a.errors[tab] = "loading";
   var done = function (list) { a.lists[tab] = list; delete a.errors[tab]; if (dcAdd === a) dcAddDraw(); };
   var fail = function (err) { a.errors[tab] = err.message; if (dcAdd === a) dcAddDraw(); };
-  if (tab === "person") api("/api/people").then(function (d) { done(d.people.map(function (p) { return { id: p.username, label: p.username, sub: [p.jobTitle, p.department].filter(Boolean).join(" · "), find: [p.username, p.email, p.jobTitle, p.department].join(" ") }; })); }, fail);
+  if (tab === "project") api("/api/documents/projects").then(function (d) {
+    done(d.projects.map(function (p) { return { id: p.id, label: p.title || "Untitled project", sub: [p.done ? "Done" : "Open", p.owner, p.dueDate && "due " + p.dueDate, activeCompany === ALL ? shortCo(p.company) : "", p.files ? p.files + " document" + (p.files === 1 ? "" : "s") : ""].filter(Boolean).join(" · "), find: [p.title, p.owner].join(" ") }; })
+      .sort(function (a, b) { return a.label.localeCompare(b.label); }));
+  }, fail);
+  else if (tab === "person") api("/api/people").then(function (d) { done(d.people.map(function (p) { return { id: p.username, label: p.username, sub: [p.jobTitle, p.department].filter(Boolean).join(" · "), find: [p.username, p.email, p.jobTitle, p.department].join(" ") }; })); }, fail);
   else api("/api/board" + (tab === "usgov" ? "?board=usgov" : "")).then(function (d) {
     var st = {}; (d.stages || []).forEach(function (x) { st[x.id] = x.label; });
     done((d.cards || []).map(function (c) {
@@ -265,7 +274,7 @@ function dcAddDraw() {
   el.innerHTML = '<div class="rs-card rs-wide dc-add-card" role="dialog" aria-modal="true" aria-labelledby="dcAddT"><h3 id="dcAddT">Add to…</h3>' +
     '<p class="small-note">Adds a copy of <b>' + E(a.file.name) + "</b>. Later versions here don't follow it; both histories record where it came from.</p>" +
     '<div class="seg" role="tablist">' + dcAddTabs().map(function (t) { return '<button type="button" role="tab" class="' + (t.id === a.tab ? "active" : "") + '" aria-selected="' + (t.id === a.tab) + '" data-dc-add-tab="' + E(t.id) + '">' + E(t.label) + "</button>"; }).join("") + "</div>" +
-    '<input type="search" id="dcAddQ" placeholder="' + (a.tab === "person" ? "Search by name, department or job title" : "Search by file, RFQ, quote, SO or PO number, or customer") + '" value="' + E(a.q) + '" aria-label="Search">' +
+    '<input type="search" id="dcAddQ" placeholder="' + (a.tab === "person" ? "Search by name, department or job title" : a.tab === "project" ? "Search by project name or person responsible" : "Search by file, RFQ, quote, SO or PO number, or customer") + '" value="' + E(a.q) + '" aria-label="Search">' +
     '<div class="dc-add-list">' + (err && err !== "loading" ? '<div class="banner">' + E(err) + "</div>" : !list ? '<div class="empty">Loading…</div>' : !rows.length ? '<div class="empty">Nothing matches.</div>' :
       rows.slice(0, 60).map(function (x) { return '<button type="button" class="dc-add-row" data-dc-add-pick="' + E(x.id) + '"' + (a.busy ? " disabled" : "") + "><b>" + E(x.label) + "</b><small>" + E(x.sub) + "</small></button>"; }).join("") +
       (rows.length > 60 ? '<p class="small-note">' + (rows.length - 60) + " more — search to narrow it down.</p>" : "")) + "</div>" +
@@ -275,21 +284,39 @@ function dcAddDraw() {
 function dcAddPick(id) {
   var a = dcAdd, row = (a.lists[a.tab] || []).filter(function (x) { return x.id === id; })[0];
   if (!row || a.busy) return;
-  var where = a.tab === "person" ? row.label + "'s employment file" : row.label;
+  var where = a.tab === "person" ? row.label + "'s employment file" : a.tab === "project" ? "the project " + row.label : row.label;
   if (!confirm("Add a copy of " + a.file.name + " to " + where + "?")) return;
   a.busy = true; dcAddDraw();
   // A Pentagon document not on the board yet is stored first, as the board does.
-  var real = a.tab !== "person" && String(id).indexOf("pg:") === 0
+  var real = (a.tab === "ops" || a.tab === "usgov") && String(id).indexOf("pg:") === 0
     ? api("/api/board/adopt" + (a.tab === "usgov" ? "?board=usgov" : ""), { method: "POST", body: JSON.stringify({ id: id }) }).then(function (c) { return c.id; })
     : Promise.resolve(id);
   real.then(function (rid) {
-    var body = { space: a.space, folder: a.folder, file: a.file.id, v: a.v, target: a.tab === "person" ? "person" : "board" };
-    if (a.tab === "person") body.username = rid; else { body.board = a.tab; body.card = rid; }
+    var body = { space: a.space, folder: a.folder, file: a.file.id, v: a.v, target: a.tab === "person" || a.tab === "project" ? a.tab : "board" };
+    if (a.tab === "person") body.username = rid; else if (a.tab === "project") body.project = rid; else { body.board = a.tab; body.card = rid; }
     return api("/api/documents/add-to", { method: "POST", body: JSON.stringify(body) });
-  }).then(function (x) { dcAddClose(); toast("Added to " + x.to + "."); }, function (err) { a.busy = false; dcAddDraw(); toast(err.message, true); });
+  }).then(function (x) { var proj = a.tab === "project"; dcAddClose(); toast("Added to " + x.to + "."); if (proj && typeof refresh === "function") refresh(); }, function (err) { a.busy = false; dcAddDraw(); toast(err.message, true); });
 }
 document.addEventListener("input", function (e) {
   if (e.target.id === "dcAddQ" && dcAdd) { dcAdd.q = e.target.value; dcAddDraw(); }
+});
+
+// A Business Development project's documents (shown on its row).
+document.addEventListener("click", function (e) {
+  var t = e.target.closest && e.target.closest("[data-proj-doc],[data-proj-doc-del]");
+  if (!t) return;
+  var ids = (t.dataset.projDoc || t.dataset.projDocDel).split("|");
+  var p = tasks.filter(function (x) { return x.id === ids[0]; })[0];
+  var f = p && (p.files || []).filter(function (x) { return x.id === ids[1]; })[0];
+  if (!f) return;
+  if (t.dataset.projDoc) {
+    dcViewer({ id: f.id, name: f.name, type: f.type, preview: DC_PREVIEW.indexOf(f.type) !== -1, versions: 1 }, "",
+      { url: "/api/tasks/" + encodeURIComponent(p.id) + "/files/" + encodeURIComponent(f.id) + "/view" });
+    return;
+  }
+  if (!confirm("Remove " + f.name + " from this project? The original stays in Documents.")) return;
+  api("/api/tasks/" + encodeURIComponent(p.id) + "/files/" + encodeURIComponent(f.id), { method: "DELETE" })
+    .then(function () { p.files = p.files.filter(function (x) { return x !== f; }); toast("Removed."); render(); }, function (err) { toast(err.message, true); });
 });
 
 // ---- Changes ----

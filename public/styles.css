@@ -807,3 +807,5 @@
   .dc-add-row { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; background: var(--card); }
   .dc-add-row:hover { border-color: var(--muted); }
   .dc-add-row small { color: var(--muted); font-size: 11px; }
+  .proj-docs { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 4px 8px 0; }
+  .proj-doc .text-button { font-size: 11px; margin-right: 6px; }

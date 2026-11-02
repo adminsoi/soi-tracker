@@ -506,8 +506,15 @@ routes `/api/documents*` in `index.js`, page `public/js/documents.js`.
   shown): adds a **copy** to a board file's case file — search by file,
   RFQ, quote, SO or PO number or customer, on the Operations or US Gov
   board you can open (a Pentagon quote not on the board yet is put on it
-  first, as the board does) — or, for Leadership, to a person's
-  employment file on People. Anyone who can view the document can do it;
+  first, as the board does) — to a **Business Development project** (one
+  you can see on Business Development → Projects: managers in the
+  department, the person responsible, who added it and anyone with one of
+  its sub-tasks) — or, for Leadership, to a person's employment file on
+  People. A project's documents are listed under its name on the Projects
+  table and open in the same view-only viewer
+  (`GET /api/tasks/:id/files/:fid/view`); whoever can edit the project can
+  **Remove** a copy (the original stays in Documents). Stored on the
+  project's task as `files`, bytes under `task_files/<task id>/<file id>`. Anyone who can view the document can do it;
   the server checks the target's own rules (`POST /api/documents/add-to`).
   Later versions in Documents don't follow the copy. The board file's
   history says "Attached … from Documents › …" and the attachment keeps
