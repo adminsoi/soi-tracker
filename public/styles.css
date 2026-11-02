@@ -809,3 +809,16 @@
   .dc-add-row small { color: var(--muted); font-size: 11px; }
   .proj-docs { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 4px 8px 0; }
   .proj-doc .text-button { font-size: 11px; margin-right: 6px; }
+  /* Legal (legal.js): expiry status pills; expired rows in red. */
+  .lg-pill { display: inline-block; font-size: 10px; font-weight: 600; padding: 4px 8px; border-radius: 20px; white-space: nowrap; }
+  .lg-expired { background: #f6dcd8; color: #8f2a1d; }
+  .lg-soon { background: #f6ead2; color: #7a5410; }
+  .lg-row-expired td, li.lg-row-expired { background: rgba(198, 60, 45, .07); }
+  .lg-row-expired td:first-child { box-shadow: inset 3px 0 #c0392b; }
+  .lg-table input[type="date"], .lg-table select { font-size: 12px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); }
+  .lg-members { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 8px; }
+  .lg-due-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .lg-due-list li { padding: 6px 8px; border-radius: 6px; }
+  html[data-theme="dark"] .lg-expired { background: rgba(230, 90, 80, .18); color: #ff9d92; }
+  html[data-theme="dark"] .lg-soon { background: rgba(230, 160, 60, .17); color: #f3c47e; }
+  html[data-theme="dark"] .lg-row-expired td, html[data-theme="dark"] li.lg-row-expired { background: rgba(230, 90, 80, .10); }

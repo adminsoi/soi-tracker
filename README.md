@@ -556,6 +556,38 @@ routes `/api/documents*` in `index.js`, page `public/js/documents.js`.
   Up to 15 MB per file; PDF, image, Word, Excel, PowerPoint, text, CSV or
   email.
 
+## Legal (Administration → Legal)
+
+After Finance on Administration. **Leadership plus the people Leadership
+adds** only: the tab is hidden from everyone else and every `/api/legal*`
+route answers 403 to them (full access alone isn't enough, as for People).
+Rules in `legal.js`, routes in `index.js`, page `public/js/legal.js`.
+
+- **Sections:** US Government Contracts (SOI Aviation only), Business
+  Development, Insurance, Vendors. Each lists the documents in its folder
+  in **Documents → Legal** (and its subfolders), per company. The Legal
+  space and its four section folders are created the first time Legal is
+  opened; they can't be renamed, moved or archived (a folder already
+  there with the same name is used). Documents are added, versioned and
+  archived in Documents under its usual rules (read-only until IT grants
+  edit access) and open view-only from Legal.
+- **Per document:** expiry (renewal) date, notes and the person
+  responsible (anyone with Legal; until someone is picked, whoever added
+  the document), typed by hand. Status: **Expired** rows are red;
+  **Expires in N days** within 60 days. Filters: due within 60 days,
+  expired, no date; search covers name, folder, notes and person.
+- **Mentions of You:** documents you're responsible for that expire within
+  60 days or already have show in a **Legal renewals** box (and count in
+  the sidebar badge); clicking one opens that Legal section.
+- **People with Legal:** Leadership adds and removes them at the bottom of
+  the Legal tab. They also see the Legal folders in Documents.
+- **S3:** `legal.json` (`{ members: [usernames], records: { <document id>:
+  { expiry, notes, owner, by, at } } }`); the documents are in
+  `documents.json` / `documents_files/` like any other. Section folders
+  carry `legal: "usgov" | "bd" | "insurance" | "vendors"`.
+- Contract contents, prices, certificate or approval numbers aren't
+  generated or sent anywhere; nothing in Legal goes to AI.
+
 ## HR → Payroll: approve and send to the accountants
 
 Under each entity's table (SOI US, CAS NZ, Red Sun Singapore, Nanotech UK)

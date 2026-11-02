@@ -12,7 +12,7 @@ var ALL = "AOG"; // "All companies" (full-access accounts with more than one com
 var COMPANY_ORDER = ["SOI Aviation", "CAS", "RedSun Aviation", "NanoTech Aviation"];
 var COMPANY_SHORT = { "SOI Aviation": "SOI", "CAS": "CAS", "RedSun Aviation": "RedSun", "NanoTech Aviation": "Nano" };
 // Tab order follows the design; anything else the server lists comes after.
-var DEPT_ORDER = ["Procurement", "Purchasing", "Warehouse", "IT", "Administrative", "HR", "Accounting & Finance", "Business Development", "US Government"];
+var DEPT_ORDER = ["Procurement", "Purchasing", "Warehouse", "IT", "Administrative", "HR", "Accounting & Finance", "Legal", "Business Development", "US Government"];
 var DEPT_SHORT = { "Administrative": "Admin", "Accounting & Finance": "Finance", "Business Development": "Business Dev" };
 var DEPT_TAGLINE = {
   "Business Development": "Pipeline analytics from Pentagon — RFQs, quotes and orders — plus business development projects.",
@@ -26,13 +26,15 @@ var OPS_DEPTS = ["Procurement", "Purchasing", "Warehouse"];
 // Sidebar groups: IT, Admin, HR and Finance live under Administration;
 // everything else under Operations, where Procurement, Purchasing and
 // Warehouse share one tab (and one board).
-var ADMIN_DEPTS = ["IT", "Administrative", "HR", "Accounting & Finance"];
+// Legal isn't a department on logins: Leadership plus the people they add
+// (me.legal, legal.js).
+var ADMIN_DEPTS = ["IT", "Administrative", "HR", "Accounting & Finance", "Legal"];
 var lastDeptIn = {}; // group -> last department opened there
 function deptGroup(d) { return ADMIN_DEPTS.indexOf(d) !== -1 ? "admin" : "main"; }
 // Everyone gets Administration: its Staff-Facing forms are for all staff.
 // Department-Facing is only for the department's own people (inMyDept).
 function deptsIn(group) {
-  if (group === "admin") return ADMIN_DEPTS.filter(function (d) { return !DEPARTMENTS.length || DEPARTMENTS.indexOf(d) !== -1; });
+  if (group === "admin") return ADMIN_DEPTS.filter(function (d) { return d === "Legal" ? !!me.legal : !DEPARTMENTS.length || DEPARTMENTS.indexOf(d) !== -1; });
   return visibleDepartments().filter(function (d) { return deptGroup(d) === group; });
 }
 function inMyDept(d) { return !!(me.fullAccess || me.departments.indexOf(d) !== -1); }

@@ -35,6 +35,13 @@ function renderDepartment() {
   var opsHere = depts.filter(function (d) { return OPS_DEPTS.indexOf(d) !== -1; });
   if (!activeDept) return '<div class="empty">Your login has no departments yet. Ask an admin to add one.</div>';
   var dept = activeDept;
+  // Legal has its own sections instead of projects (legal.js).
+  if (dept === "Legal") {
+    setBreadcrumb(["Administration", shortCo(activeCompany), "Legal"]);
+    return renderLegal('<div class="intro"><div><div class="eyebrow">Administration / ' + E(shortCo(activeCompany)) + "</div><h1>Legal · " + E(shortCo(activeCompany)) + "</h1>" +
+      "<p>Contracts, insurance and vendor documents with their expiry (renewal) dates. Leadership and the people they add only.</p></div>" +
+      companySwitcher(0) + "</div>" + '<div class="tabs" role="tablist">' + deptTabs(depts, opsHere, dept) + "</div>");
+  }
   var views = pentagonViewsFor(dept);
   var subs = [];
   // Finance: Approvals (above "Approved to pay"), Transfers ("Approved to

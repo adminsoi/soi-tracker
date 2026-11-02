@@ -175,6 +175,11 @@ function getPeople() {
 function getDocuments() {
   return readJson("documents", {});
 }
+// Legal: { members: [usernames], records: { documentId: { expiry, notes,
+// owner } } }. The documents are in Documents. See legal.js.
+function getLegal() {
+  return readJson("legal", {});
+}
 
 // In-process queues so concurrent requests to this same container don't
 // clobber each other's read-modify-write cycle.
@@ -195,6 +200,7 @@ let staffFormsQueue = Promise.resolve();
 let payrollQueue = Promise.resolve();
 let peopleQueue = Promise.resolve();
 let documentsQueue = Promise.resolve();
+let legalQueue = Promise.resolve();
 
 function withUsers(mutator) {
   usersQueue = usersQueue.then(async () => {
@@ -371,7 +377,19 @@ function withDocuments(mutator) {
   return documentsQueue;
 }
 
+function withLegal(mutator) {
+  legalQueue = legalQueue.then(async () => {
+    const doc = await getLegal();
+    const result = await mutator(doc);
+    await writeJson("legal", doc);
+    return result;
+  });
+  return legalQueue;
+}
+
 module.exports = {
+  getLegal,
+  withLegal,
   getDocuments,
   withDocuments,
   getStaffForms,

@@ -64,6 +64,8 @@ const {
   withPeople,
   getDocuments,
   withDocuments,
+  getLegal,
+  withLegal,
 } = require("./s3store");
 const { sendMail, mailConfigured, MAIL_FROM } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError, nameFromTitle } = require("./calendar");
@@ -74,6 +76,7 @@ const board = require("./board");
 const forms = require("./staffforms");
 const employment = require("./people");
 const docs = require("./documents");
+const legal = require("./legal");
 const payCheck = require("./payrollcheck");
 const { pentagonQuery } = require("./pentagon");
 const {
@@ -264,6 +267,8 @@ app.get("/api/me", authMiddleware, asyncHandler(async (req, res) => {
     leadership: req.user.leadership,
     pentagonCode: req.user.pentagonCode,
     pentagonMentions: getsPentagonMentions(req.user),
+    // Administration → Legal (Leadership plus the named staff; legal.js).
+    legal: legal.hasLegal(req.user, await freshLegal()),
   });
 }));
 
@@ -5095,8 +5100,16 @@ app.delete(
 // offered as a download; the page says that this only discourages copying.
 const DOC_MAX = "15mb";
 function docSpaces(u) {
-  return docs.spacesFor(u, { companies: COMPANIES, departments: DEPARTMENTS, canSeeBoard: (x, b) => canSeeBoard(x, BOARDS[b]) });
+  return docs.spacesFor(u, { companies: COMPANIES, departments: DEPARTMENTS, canSeeBoard: (x, b) => canSeeBoard(x, BOARDS[b]), legal: legal.hasLegal(u, legalSnap.doc) });
 }
+// Legal's named staff, read at most every 30 seconds (and kept current by
+// every Legal change), so Documents knows who sees the Legal folders.
+let legalSnap = { at: 0, doc: legal.shape({}) };
+async function freshLegal() {
+  if (Date.now() - legalSnap.at > 30000) legalSnap = { at: Date.now(), doc: legal.shape(await getLegal()) };
+  return legalSnap.doc;
+}
+app.use("/api/documents", (req, res, next) => { freshLegal().then(() => next(), next); });
 function docSpace(req, res, id) {
   const sp = docSpaces(req.user).find((s) => s.id === id);
   if (!sp) res.status(404).json({ error: "That folder isn't here" });
@@ -5380,6 +5393,7 @@ app.patch(
     const out = await docChange(res, (doc) => {
       const f = doc.folders.find((x) => x.id === req.params.id);
       if (!f || !spaces.some((s) => s.id === f.space) || !docs.folderIn(doc, f.space, f.id)) return "That folder isn't here";
+      if (f.legal) return docs.LOCKED_FOLDER;
       // Changing a folder needs edit access where it sits, not just inside it.
       if (!docs.mayEdit(doc, req.user, f.space, f.parent, true)) return NO_EDIT;
       const to = "parent" in b ? String(b.parent || "") : f.parent || "";
@@ -5402,6 +5416,7 @@ app.post(
     const out = await docChange(res, (doc) => {
       const f = doc.folders.find((x) => x.id === req.params.id);
       if (!f || !spaces.some((s) => s.id === f.space) || !docs.folderIn(doc, f.space, f.id)) return "That folder isn't here";
+      if (f.legal) return docs.LOCKED_FOLDER;
       if (!docs.mayEdit(doc, req.user, f.space, f.parent, true)) return NO_EDIT;
       Object.assign(f, { archived: true, archivedAt: Date.now(), archivedBy: req.user.username });
       return { ok: true };
@@ -5690,6 +5705,154 @@ app.post(
       return { ok: true };
     });
     if (out) res.json(out);
+  })
+);
+
+// ---------- Legal ----------
+// Administration → Legal (rules in legal.js): one tab per section, listing
+// the documents in that section's Documents folder (and its subfolders)
+// with an expiry date, notes and a person responsible typed in here.
+// Leadership plus the named staff only, checked on every route.
+const legalOnly = asyncHandler(async (req, res, next) => {
+  if (legal.hasLegal(req.user, await freshLegal())) return next();
+  res.status(403).json({ error: "Legal is for Leadership and the people they add" });
+});
+const officeToday = () => officeStamp(new Date().toISOString()).slice(0, 10);
+
+// The section folders, made the first time Legal is opened: a "Legal" space
+// per company in Documents with one folder per section (US Government
+// Contracts under SOI Aviation only). A folder already there with the same
+// name is taken over rather than duplicated.
+async function legalFolders() {
+  const want = [];
+  for (const company of COMPANIES) for (const s of legal.sectionsFor(company)) want.push({ space: docs.deptSpaceId(company, legal.LEGAL), company, s });
+  const missing = (doc) => want.filter((w) => !doc.folders.some((f) => f.space === w.space && f.legal === w.s.id && !f.archived));
+  let doc = docs.shape(await getDocuments());
+  if (missing(doc).length) {
+    await withDocuments((d) => {
+      docs.shape(d);
+      for (const w of missing(d)) {
+        const same = d.folders.find((f) => f.space === w.space && !f.parent && !f.archived && docs.sameName(f.name, w.s.label));
+        if (same) same.legal = w.s.id;
+        else d.folders.push({ id: newId(), space: w.space, parent: "", name: w.s.label, at: Date.now(), by: "tracker", legal: w.s.id });
+      }
+    });
+    doc = docs.shape(await getDocuments());
+  }
+  return { doc, sections: want.map((w) => Object.assign({ folder: doc.folders.find((f) => f.space === w.space && f.legal === w.s.id && !f.archived) }, w)) };
+}
+// Who's responsible: whoever was picked, else whoever added the document.
+function legalOwner(rec, f) {
+  return rec && "owner" in rec ? rec.owner : (f.versions[0] || {}).by || f.by || "";
+}
+// Every Legal document this login sees, with its record and status.
+async function legalRows(u) {
+  const [{ doc, sections }, ldoc] = await Promise.all([legalFolders(), freshLegal()]);
+  const today = officeToday();
+  const rows = [];
+  for (const sec of sections) {
+    if (!sec.folder || !(u.companies || []).includes(sec.company)) continue;
+    for (const f of doc.files) {
+      if (f.space !== sec.space || f.archived || !docs.folderIn(doc, f.space, f.folder)) continue;
+      const up = docs.chain(doc, f.folder);
+      const at = up.findIndex((x) => x.id === sec.folder.id);
+      if (at === -1) continue;
+      const rec = ldoc.records[f.id] || {};
+      const v = f.versions[f.versions.length - 1] || {};
+      rows.push({
+        id: f.id, section: sec.s.id, company: sec.company, space: f.space, folder: f.folder || "",
+        name: f.name, type: v.type || f.type, at: v.at || f.at, by: v.by || f.by,
+        path: up.slice(0, at).reverse().map((x) => x.name).join(" › "),
+        expiry: rec.expiry || "", notes: rec.notes || "", owner: legalOwner(rec, f),
+        status: legal.status(rec.expiry, today), daysLeft: legal.daysLeft(rec.expiry, today), updatedBy: rec.by || "", updatedAt: rec.at || 0,
+      });
+    }
+  }
+  return { rows, sections, doc, today };
+}
+
+app.get(
+  "/api/legal",
+  authMiddleware,
+  legalOnly,
+  asyncHandler(async (req, res) => {
+    const { rows, sections, doc, today } = await legalRows(req.user);
+    const ldoc = await freshLegal();
+    const logins = (await getUsers()).map(normalizeUser);
+    // People who can be responsible: anyone with Legal sharing a company.
+    const people = logins.filter((u) => legal.hasLegal(u, ldoc) && u.companies.some((c) => req.user.companies.includes(c))).map((u) => u.username).sort((a, b) => a.localeCompare(b));
+    res.json({
+      today, soonDays: legal.SOON_DAYS, rows, people,
+      sections: sections.filter((s) => s.folder && req.user.companies.includes(s.company)).map((s) => ({
+        id: s.s.id, label: s.s.label, company: s.company, space: s.space, folder: s.folder.id,
+        canEdit: docs.mayEdit(doc, req.user, s.space, s.folder.id, true),
+      })),
+      // Leadership manages the named staff.
+      members: req.user.leadership ? ldoc.members : undefined,
+      logins: req.user.leadership ? logins.filter((u) => !u.leadership).map((u) => u.username).sort((a, b) => a.localeCompare(b)) : undefined,
+    });
+  })
+);
+// Expiry date, notes and person responsible for one Legal document.
+app.put(
+  "/api/legal/records/:id",
+  authMiddleware,
+  legalOnly,
+  asyncHandler(async (req, res) => {
+    const { rows } = await legalRows(req.user);
+    const row = rows.find((r) => r.id === req.params.id);
+    if (!row) return res.status(404).json({ error: "That document isn't in Legal" });
+    const { out, error } = legal.cleanRecord(req.body || {});
+    if (error) return res.status(400).json({ error });
+    if (out.owner) {
+      const ldoc = await freshLegal();
+      const who = (await getUsers()).map(normalizeUser).find((u) => sameUser(u.username, out.owner));
+      if (!who || !legal.hasLegal(who, ldoc)) return res.status(400).json({ error: "The person responsible needs Legal access" });
+      out.owner = who.username;
+    }
+    const doc = await withLegal((d) => {
+      legal.shape(d);
+      d.records[row.id] = Object.assign({}, d.records[row.id], out, { by: req.user.username, at: Date.now() });
+      return d;
+    });
+    legalSnap = { at: Date.now(), doc: legal.shape(doc) };
+    const rec = doc.records[row.id], today = officeToday();
+    res.json(Object.assign(row, { expiry: rec.expiry || "", notes: rec.notes || "", owner: "owner" in rec ? rec.owner : row.owner,
+      status: legal.status(rec.expiry, today), daysLeft: legal.daysLeft(rec.expiry, today), updatedBy: rec.by, updatedAt: rec.at }));
+  })
+);
+// The named staff (Leadership has Legal already). Leadership only.
+app.put(
+  "/api/legal/members",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!req.user.leadership) return res.status(403).json({ error: "Only Leadership adds or removes people on Legal" });
+    const want = Array.isArray((req.body || {}).members) ? req.body.members : null;
+    if (!want) return res.status(400).json({ error: "Send the list of people" });
+    const logins = (await getUsers()).map(normalizeUser);
+    const members = [];
+    for (const m of want) {
+      const u = logins.find((x) => sameUser(x.username, m));
+      if (!u) return res.status(400).json({ error: `No login called ${String(m).slice(0, 60)}` });
+      if (!members.includes(u.username)) members.push(u.username);
+    }
+    const doc = await withLegal((d) => { legal.shape(d); d.members = members; d.membersBy = req.user.username; d.membersAt = Date.now(); return d; });
+    legalSnap = { at: Date.now(), doc: legal.shape(doc) };
+    res.json({ members });
+  })
+);
+// Mentions of You: Legal documents you're responsible for that expire
+// within 60 days or already have. Nothing for logins without Legal.
+app.get(
+  "/api/legal/mine",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!legal.hasLegal(req.user, await freshLegal())) return res.json({ items: [] });
+    const { rows } = await legalRows(req.user);
+    const label = Object.fromEntries(legal.SECTIONS.map((s) => [s.id, s.label]));
+    res.json({ items: rows.filter((r) => sameUser(r.owner, req.user.username) && (r.status === "soon" || r.status === "expired"))
+      .map((r) => ({ id: r.id, name: r.name, section: r.section, sectionLabel: label[r.section], company: r.company, expiry: r.expiry, daysLeft: r.daysLeft, status: r.status }))
+      .sort((a, b) => a.daysLeft - b.daysLeft) });
   })
 );
 

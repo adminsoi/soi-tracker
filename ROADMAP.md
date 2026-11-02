@@ -25,6 +25,13 @@ it's merged and redeployed.
   - Finance — Staff: reimbursement request → Department: Approvals
     (everything above "Approved to pay") and Transfers ("Approved to pay"
     and below). Every table gets per-column filters.
+  - Legal (added 2 Nov 2026), after Finance — tabs US Government
+    Contracts (SOI Aviation only), Business Development, Insurance,
+    Vendors. Each is a list of the documents in its Documents folder with
+    an expiry (renewal) date and notes typed by hand. Leadership plus
+    named staff only, enforced on the server like People; Leadership adds
+    and removes the named staff. Anything expiring within 60 days shows on
+    the responsible person's Mentions of You; expired items are red.
 - **Kanban files** come in automatically from Pentagon (RFQ → Quote → SO →
   PO), with **+ Add file** by hand too. Columns: RFQ, Quoted (blue) · Sale
   Received, Purchased (indigo) · Item Received, Item Sent (violet).
@@ -329,6 +336,26 @@ Mentions of You, and files created automatically from Pentagon.
         the server (e.g. LibreOffice in the container); the board's case
         files still download their attachments; nothing is emailed when
         edit access is granted or declined (the ticket's note shows it).
+- [x] **Legal** (Administration, after Finance; requested 2 Nov 2026).
+      Built 2 Nov 2026 on `staging`; not yet tested on staging.
+      - Rules in `legal.js`; routes `GET /api/legal`,
+        `PUT /api/legal/records/:id`, `PUT /api/legal/members` (Leadership),
+        `GET /api/legal/mine` in `index.js`; page `public/js/legal.js`
+        (Legal joins `ADMIN_DEPTS` but isn't a login department:
+        `/api/me` returns `legal`). README *Legal (Administration → Legal)*.
+      - Documents: a `dept:<company>|Legal` space per company, only for
+        logins with Legal (`spacesFor`'s `legal`, from a 30-second cache
+        of `legal.json`); section folders carry `legal: <section>` and are
+        locked against rename / move / archive. Uploading still follows
+        Documents' rules (IT grants edit access).
+      - `legal.json`: `members`, `records[<document id>] = { expiry,
+        notes, owner, by, at }`. Person responsible defaults to whoever
+        added the document. Status by office date (`officeStamp`):
+        expired, soon (≤ 60 days, shown on Mentions of You with the
+        sidebar badge), ok.
+      - Named staff: none yet — Leadership adds them on the Legal tab.
+      - Still open: should Legal people edit Legal folders without an IT
+        grant? Nothing is emailed when something is about to expire.
 - [ ] **7. Strategy Meeting agenda and SOP update form.**
 - [ ] **8. Email replies** — draft, edit, send, ignore, open thread.
 - [ ] **9. Company chat.**

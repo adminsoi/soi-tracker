@@ -57,12 +57,16 @@ function parseSpace(id) {
 /**
  * The spaces this login sees. Department spaces: one per company on the login
  * and department on the login (every department for full access and
- * Leadership), US Government only under SOI Aviation. Board spaces follow the boards' own rules (canSeeBoard).
+ * Leadership), US Government only under SOI Aviation, plus Legal when
+ * `legal` says this login has it. Board spaces follow the boards' own rules (canSeeBoard).
  */
-function spacesFor(u, { companies, departments, canSeeBoard }) {
+function spacesFor(u, { companies, departments, canSeeBoard, legal }) {
   const out = [];
   for (const company of companies.filter((c) => (u.companies || []).includes(c))) {
     for (const dept of departments) if (deptInCompany(dept, company) && (top(u) || inDept(u, dept))) out.push({ id: deptSpaceId(company, dept), kind: "dept", company, dept, label: dept });
+    // Legal (legal.js): Leadership and the named staff only, never by
+    // department or full access.
+    if (legal) out.push({ id: deptSpaceId(company, "Legal"), kind: "dept", company, dept: "Legal", label: "Legal" });
   }
   for (const [id, b] of Object.entries(BOARD_SPACES)) if (canSeeBoard(u, b.board)) out.push({ id, kind: "board", board: b.board, label: b.label });
   return out;
@@ -130,13 +134,16 @@ function grantUntil(v, now = Date.now()) {
   return { until };
 }
 
+// Legal's section folders ({ legal: section id }) are what the Legal tabs
+// list, so they can't be renamed, moved or archived.
+const LOCKED_FOLDER = "This is one of Legal's section folders, so it can't be renamed, moved or archived";
 /** Would moving folder f under parent put it inside itself? */
 function wouldLoop(doc, f, parent) {
   return !!parent && chain(doc, parent).some((x) => x.id === f.id);
 }
 
 module.exports = {
-  GRANT_DAYS, PREVIEW_TYPES, BOARD_SPACES,
+  GRANT_DAYS, PREVIEW_TYPES, BOARD_SPACES, LOCKED_FOLDER,
   canPreview, grantsAdmin, parseSpace, deptSpaceId, spacesFor, shape, cleanName, sameName,
   chain, folderIn, pathLabel, grantLive, liveGrant, mayEdit, grantUntil, wouldLoop,
 };
