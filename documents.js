@@ -43,6 +43,9 @@ const BOARD_SPACES = {
   "board:ops": { board: "ops", label: "Operations board files" },
   "board:usgov": { board: "usgov", label: "US Gov board files" },
 };
+// Departments that exist in only some companies (US Government is SOI's).
+const DEPT_COMPANIES = { "US Government": ["SOI Aviation"] };
+const deptInCompany = (dept, company) => !DEPT_COMPANIES[dept] || DEPT_COMPANIES[dept].includes(company);
 const deptSpaceId = (company, dept) => `dept:${company}|${dept}`;
 function parseSpace(id) {
   const s = String(id || "");
@@ -54,12 +57,12 @@ function parseSpace(id) {
 /**
  * The spaces this login sees. Department spaces: one per company on the login
  * and department on the login (every department for full access and
- * Leadership). Board spaces follow the boards' own rules (canSeeBoard).
+ * Leadership), US Government only under SOI Aviation. Board spaces follow the boards' own rules (canSeeBoard).
  */
 function spacesFor(u, { companies, departments, canSeeBoard }) {
   const out = [];
   for (const company of companies.filter((c) => (u.companies || []).includes(c))) {
-    for (const dept of departments) if (top(u) || inDept(u, dept)) out.push({ id: deptSpaceId(company, dept), kind: "dept", company, dept, label: dept });
+    for (const dept of departments) if (deptInCompany(dept, company) && (top(u) || inDept(u, dept))) out.push({ id: deptSpaceId(company, dept), kind: "dept", company, dept, label: dept });
   }
   for (const [id, b] of Object.entries(BOARD_SPACES)) if (canSeeBoard(u, b.board)) out.push({ id, kind: "board", board: b.board, label: b.label });
   return out;

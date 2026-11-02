@@ -799,3 +799,11 @@
   .dc-mark { position: absolute; inset: 60px 24px 40px; pointer-events: none; overflow: hidden; display: flex; flex-wrap: wrap; gap: 70px 90px; align-content: flex-start; transform: rotate(-18deg); opacity: .09; font-size: 13px; }
   .dc-view-foot { margin: 8px 0 0; }
   @media print { .dc-viewer { display: none !important; } }
+  .rs-card.dc-add-card { z-index: 70; }
+  .dc-add { z-index: 70; }
+  .dc-add-card .seg { margin: 4px 0 10px; }
+  .dc-add-card input[type="search"] { width: 100%; padding: 9px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); }
+  .dc-add-list { margin-top: 10px; max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+  .dc-add-row { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; background: var(--card); }
+  .dc-add-row:hover { border-color: var(--muted); }
+  .dc-add-row small { color: var(--muted); font-size: 11px; }

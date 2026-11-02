@@ -5162,27 +5162,37 @@ app.get(
   })
 );
 
+// A document you can see, by { space, folder, file, v } (v = a version id;
+// the latest when left out): its name and type, its S3 key and where it is.
+// Answers 404 itself and returns null when it isn't yours to see.
+async function docSource(req, res, q) {
+  const sp = docSpace(req, res, String(q.space || ""));
+  if (!sp) return null;
+  let meta = null, key = "", where = "", docFile = null;
+  if (sp.kind === "board") {
+    const cfg = BOARDS[sp.board];
+    const c = ((await getBoard(cfg.store)).cards || []).find((x) => x.id === String(q.folder || ""));
+    meta = c && canSeeBoardCard(req.user, c, cfg) && (c.files || []).find((f) => f.id === String(q.file || ""));
+    if (meta) { key = `${cfg.files}/${c.id}/${meta.id}`; where = `${sp.label} › ${docBoardLabel(c)}`; }
+  } else {
+    const doc = docs.shape(await getDocuments());
+    const f = doc.files.find((x) => x.id === String(q.file || "") && x.space === sp.id && !x.archived);
+    const v = f && docs.folderIn(doc, sp.id, f.folder) && (q.v ? f.versions.find((x) => x.id === String(q.v)) : f.versions[f.versions.length - 1]);
+    if (v) { meta = { name: f.name, type: v.type || f.type }; key = `documents_files/${f.id}/${v.id}`; where = docs.pathLabel(doc, sp.id, f.folder); docFile = f; }
+  }
+  if (!meta) { res.status(404).json({ error: "That document isn't here" }); return null; }
+  return { sp, meta, key, where, docFile };
+}
+
 // Show a document in the page: PDFs, pictures and text only, inline, never
 // as an attachment. ?space=…&folder=…&file=…[&v=version id]
 app.get(
   "/api/documents/view",
   authMiddleware,
   asyncHandler(async (req, res) => {
-    const sp = docSpace(req, res, String(req.query.space || ""));
-    if (!sp) return;
-    let meta = null, key = "";
-    if (sp.kind === "board") {
-      const cfg = BOARDS[sp.board];
-      const c = ((await getBoard(cfg.store)).cards || []).find((x) => x.id === String(req.query.folder || ""));
-      meta = c && canSeeBoardCard(req.user, c, cfg) && (c.files || []).find((f) => f.id === String(req.query.file || ""));
-      if (meta) key = `${cfg.files}/${c.id}/${meta.id}`;
-    } else {
-      const doc = docs.shape(await getDocuments());
-      const f = doc.files.find((x) => x.id === String(req.query.file || "") && x.space === sp.id && !x.archived);
-      const v = f && docs.folderIn(doc, sp.id, f.folder) && (req.query.v ? f.versions.find((x) => x.id === String(req.query.v)) : f.versions[f.versions.length - 1]);
-      if (v) { meta = { name: f.name, type: v.type || f.type }; key = `documents_files/${f.id}/${v.id}`; }
-    }
-    if (!meta) return res.status(404).json({ error: "That document isn't here" });
+    const src = await docSource(req, res, req.query);
+    if (!src) return;
+    const { meta, key } = src;
     if (!docs.canPreview(meta.type)) return res.status(415).json({ error: "This kind of file can't be shown in the browser" });
     const file = await getFile(key);
     if (!file) return res.status(404).json({ error: "That document isn't here" });
@@ -5396,6 +5406,68 @@ app.post(
       return { ok: true };
     });
     if (out) res.json(out);
+  })
+);
+
+// Add to…: copy a document you can see onto a board file's case file
+// (Operations or US Gov, e.g. a quote) or a person's employment file
+// (Leadership only). It's a copy — later versions here don't follow it —
+// and both sides' history says where it came from and went. The target's
+// own rules apply: you must be able to open that board file or People.
+// Body: { space, folder, file, v?, target: "board" | "person", board, card, username }.
+const DOC_ADD_PEOPLE_MAX = 10 * 1024 * 1024; // People's own upload limit
+app.post(
+  "/api/documents/add-to",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const src = await docSource(req, res, b);
+    if (!src) return;
+    const file = await getFile(src.key);
+    if (!file) return res.status(404).json({ error: "That document isn't here" });
+    const { name, type } = src.meta;
+    const by = req.user.username;
+    let label = "";
+    if (b.target === "board") {
+      const cfg = BOARDS[b.board];
+      if (!cfg || !canSeeBoard(req.user, cfg)) return res.status(403).json({ error: "You can't add to that board" });
+      const pre = ((await getBoard(cfg.store)).cards || []).find((c) => c.id === String(b.card || ""));
+      if (!pre || !canSeeBoardCard(req.user, pre, cfg)) return res.status(404).json({ error: "That board file isn't here" });
+      const meta = { id: newId(), name, type, size: file.body.length, at: Date.now(), by, kind: type.startsWith("image/") ? "picture" : type === "application/pdf" ? "pdf" : /outlook|rfc822/.test(type) ? "email" : "other", stage: pre.stage, fromDocuments: src.where };
+      await putFile(`${cfg.files}/${pre.id}/${meta.id}`, file.body, type);
+      let gone = false;
+      await withBoard((doc) => {
+        const c = (doc.cards || []).find((x) => x.id === pre.id);
+        if (!c || !canSeeBoardCard(req.user, c, cfg)) { gone = true; return; }
+        c.files = c.files || [];
+        c.files.push(meta);
+        logCard(c, by, `Attached ${name} from Documents › ${src.where}`);
+        label = `${cfg.name} › ${docBoardLabel(c)}`;
+      }, cfg.store);
+      if (gone) return res.status(404).json({ error: "That board file isn't here" });
+    } else if (b.target === "person") {
+      if (!employment.isLeadership(req.user)) return res.status(403).json({ error: "People is for Leadership only" });
+      const login = await personLogin(String(b.username || ""));
+      if (!login) return res.status(404).json({ error: "No login by that name" });
+      if (file.body.length > DOC_ADD_PEOPLE_MAX) return res.status(400).json({ error: "Employment files take documents up to 10 MB" });
+      const meta = { id: newId(), name, type, size: file.body.length, at: Date.now(), by, fromDocuments: src.where };
+      const folder = await withPeople((doc) => employment.fileOf(employment.peopleShape(doc), login.username, newId).id);
+      await putFile(`people_files/${folder}/${meta.id}`, file.body, type);
+      await withPeople((doc) => {
+        const f = employment.fileOf(employment.peopleShape(doc), login.username, newId);
+        f.files.push(meta);
+        peopleLog(f, by, `Added ${name} from Documents`);
+      });
+      label = `${login.username}'s employment file`;
+    } else {
+      return res.status(400).json({ error: "Add it to a board file or a person's file" });
+    }
+    // The document's own history (department folders; never names the person's file).
+    if (src.docFile) {
+      const note = b.target === "person" ? "Copied to an employment file (People)" : `Copied to ${label}`;
+      await withDocuments((doc) => { const f = docs.shape(doc).files.find((x) => x.id === src.docFile.id); if (f) docLog(f, by, note); });
+    }
+    res.status(201).json({ ok: true, to: label });
   })
 );
 

@@ -478,7 +478,8 @@ Operations and US Gov board file's documents. Rules in `documents.js`,
 routes `/api/documents*` in `index.js`, page `public/js/documents.js`.
 
 - **Who sees what:** a folder per company and department on your login
-  (every department for full access and Leadership). **Operations board
+  (every department for full access and Leadership; US Government only
+  under SOI Aviation). **Operations board
   files** and **US Gov board files** list one folder per board file that
   has documents, labelled with its file number and customer, for exactly
   the files you can open on that board. Every request is checked on the
@@ -501,6 +502,17 @@ routes `/api/documents*` in `index.js`, page `public/js/documents.js`.
   or onto a name in the path) and **Archive**. Archive hides the item;
   nothing is deleted from S3, and IT can **Restore** it from Edit access.
   Board documents are read-only here: add them on the board's case file.
+- **Add to…** (on every document, and in the viewer for the version
+  shown): adds a **copy** to a board file's case file — search by file,
+  RFQ, quote, SO or PO number or customer, on the Operations or US Gov
+  board you can open (a Pentagon quote not on the board yet is put on it
+  first, as the board does) — or, for Leadership, to a person's
+  employment file on People. Anyone who can view the document can do it;
+  the server checks the target's own rules (`POST /api/documents/add-to`).
+  Later versions in Documents don't follow the copy. The board file's
+  history says "Attached … from Documents › …" and the attachment keeps
+  `fromDocuments`; the document's history says where it was copied
+  (only "an employment file" for People).
 - **View-only, honestly:** documents open in a viewer on the page — PDFs,
   pictures, text and CSV — streamed through the server
   (`/api/documents/view`, `Cache-Control: no-store`), never through public

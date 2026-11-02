@@ -114,7 +114,7 @@ function renderDocFolder() {
     return '<tr class="dc-row"' + (d.canEdit ? ' draggable="true" data-dc-drag="file:' + E(f.id) + '"' : "") + ">" +
       '<td><span class="dc-ic" aria-hidden="true">' + "📄" + '</span><button type="button" class="dc-name" data-dc-view="' + E(f.id) + '">' + E(f.name) + "</button>" + (f.versions > 1 ? ' <span class="small-note">v' + f.versions + "</span>" : "") + "</td>" +
       "<td>" + E(dcKind(f.type)) + "</td><td>" + E(dcSize(f.size)) + "</td><td>" + E(dcDate(f.at)) + "</td><td>" + E(f.by || "") + "</td>" +
-      '<td class="dc-acts">' + (d.canEdit ? '<button type="button" class="text-button" data-dc-version="' + E(f.id) + '">New version</button><button type="button" class="text-button" data-dc-rename="' + E(f.id) + '">Rename</button><button type="button" class="text-button danger" data-dc-archive="' + E(f.id) + '">Archive</button>' : "") + "</td></tr>";
+      '<td class="dc-acts"><button type="button" class="text-button" data-dc-addto="' + E(f.id) + '">Add to…</button>' + (d.canEdit ? '<button type="button" class="text-button" data-dc-version="' + E(f.id) + '">New version</button><button type="button" class="text-button" data-dc-rename="' + E(f.id) + '">Rename</button><button type="button" class="text-button danger" data-dc-archive="' + E(f.id) + '">Archive</button>' : "") + "</td></tr>";
   }));
   var table = rows.length ? '<table class="plain dc-table"><thead><tr><th>Name</th><th>Kind</th><th>Size</th><th>Updated</th><th>By</th><th></th></tr></thead><tbody>' + rows.join("") + "</tbody></table>"
     : '<div class="empty">' + (d.canEdit ? "This folder is empty. Drag files here from your computer, or use Upload files." : "This folder is empty.") + "</div>";
@@ -177,7 +177,7 @@ function dcCloseViewer() {
 }
 function dcViewer(file, versionId) {
   dcCloseViewer();
-  dcViewing = { file: file };
+  dcViewing = { file: file, v: versionId || "" };
   var wrap = document.createElement("div");
   wrap.id = "dcViewer";
   wrap.className = "rs-modal dc-viewer";
@@ -186,7 +186,7 @@ function dcViewer(file, versionId) {
   for (var i = 0; i < 18; i++) mark += "<span>" + stamp + "</span>";
   wrap.innerHTML = '<div class="rs-card dc-view-card" role="dialog" aria-modal="true" aria-labelledby="dcViewT">' +
     '<div class="dc-view-head"><h3 id="dcViewT">' + E(file.name) + '</h3><span class="small-note" id="dcViewInfo">' + E(dcKind(file.type)) + "</span>" +
-    '<button type="button" data-dc-close aria-label="Close">Close</button></div>' +
+    '<button type="button" data-dc-addto-open>Add to…</button><button type="button" data-dc-close aria-label="Close">Close</button></div>' +
     '<div class="dc-view-body" id="dcViewBody"><div class="empty">Loading…</div></div><div class="dc-mark" aria-hidden="true">' + mark + "</div>" +
     '<p class="small-note dc-view-foot">View only. Downloading, printing and large copies are blocked here, but a screenshot is still possible — don\'t share what you see outside SOI.</p></div>';
   document.body.appendChild(wrap);
@@ -219,6 +219,79 @@ function dcViewer(file, versionId) {
 }
 function dcFile(id) { return dcs.list && dcs.list.files.filter(function (f) { return f.id === id; })[0]; }
 
+// ---- Add to… ----
+// Copies a document onto a board file's case file (e.g. a quote) or, for
+// Leadership, a person's employment file. The server checks both sides.
+var dcAdd = null; // { file, v, space, folder, tab, q, lists: { ops, usgov, person }, errors, busy }
+function dcAddTabs() {
+  var t = (dcs.meta.spaces || []).filter(function (s) { return s.kind === "board"; }).map(function (s) { return { id: s.board, label: s.board === "usgov" ? "US Gov board file" : "Operations board file" }; });
+  if (me.leadership) t.push({ id: "person", label: "Person's file" });
+  return t;
+}
+function dcAddOpen(file, v) {
+  var tabs = dcAddTabs();
+  if (!tabs.length) { toast("There's nowhere you can add documents to.", true); return; }
+  dcAdd = { file: file, v: v || "", space: dcs.space, folder: dcs.folder, tab: tabs[0].id, q: "", lists: {}, errors: {}, busy: false };
+  var wrap = document.createElement("div");
+  wrap.className = "rs-modal dc-add";
+  wrap.id = "dcAdd";
+  document.body.appendChild(wrap);
+  dcAddDraw();
+  dcAddLoad();
+}
+function dcAddClose() { var el = document.getElementById("dcAdd"); if (el) el.remove(); dcAdd = null; }
+function dcAddLoad() {
+  var tab = dcAdd.tab, a = dcAdd;
+  if (a.lists[tab] || a.errors[tab] === "loading") return;
+  a.errors[tab] = "loading";
+  var done = function (list) { a.lists[tab] = list; delete a.errors[tab]; if (dcAdd === a) dcAddDraw(); };
+  var fail = function (err) { a.errors[tab] = err.message; if (dcAdd === a) dcAddDraw(); };
+  if (tab === "person") api("/api/people").then(function (d) { done(d.people.map(function (p) { return { id: p.username, label: p.username, sub: [p.jobTitle, p.department].filter(Boolean).join(" · "), find: [p.username, p.email, p.jobTitle, p.department].join(" ") }; })); }, fail);
+  else api("/api/board" + (tab === "usgov" ? "?board=usgov" : "")).then(function (d) {
+    var st = {}; (d.stages || []).forEach(function (x) { st[x.id] = x.label; });
+    done((d.cards || []).map(function (c) {
+      var nos = [c.fileNo, c.rfqNo && "RFQ " + c.rfqNo, c.quoteNo && "Quote " + c.quoteNo, c.orderNo && "SO " + c.orderNo, c.poNo && "PO " + c.poNo].filter(Boolean);
+      return { id: c.id, label: (nos.join(" · ") || "File") + (c.customer || c.vendor ? " — " + (c.customer || c.vendor) : ""), sub: [st[c.stage] || c.stage, c.platforms, c.assignee].filter(Boolean).join(" · "),
+        find: [c.fileNo, c.rfqNo, c.quoteNo, c.orderNo, c.poNo, c.customer, c.vendor, c.platforms, c.assignee].join(" ") };
+    }));
+  }, fail);
+}
+function dcAddDraw() {
+  var el = document.getElementById("dcAdd");
+  if (!el || !dcAdd) return;
+  var a = dcAdd, list = a.lists[a.tab], err = a.errors[a.tab], q = a.q.trim().toLowerCase();
+  var rows = list ? list.filter(function (x) { return !q || x.find.toLowerCase().indexOf(q) !== -1; }) : [];
+  var focus = document.activeElement && document.activeElement.id === "dcAddQ", pos = focus ? document.activeElement.selectionStart : null;
+  el.innerHTML = '<div class="rs-card rs-wide dc-add-card" role="dialog" aria-modal="true" aria-labelledby="dcAddT"><h3 id="dcAddT">Add to…</h3>' +
+    '<p class="small-note">Adds a copy of <b>' + E(a.file.name) + "</b>. Later versions here don't follow it; both histories record where it came from.</p>" +
+    '<div class="seg" role="tablist">' + dcAddTabs().map(function (t) { return '<button type="button" role="tab" class="' + (t.id === a.tab ? "active" : "") + '" aria-selected="' + (t.id === a.tab) + '" data-dc-add-tab="' + E(t.id) + '">' + E(t.label) + "</button>"; }).join("") + "</div>" +
+    '<input type="search" id="dcAddQ" placeholder="' + (a.tab === "person" ? "Search by name, department or job title" : "Search by file, RFQ, quote, SO or PO number, or customer") + '" value="' + E(a.q) + '" aria-label="Search">' +
+    '<div class="dc-add-list">' + (err && err !== "loading" ? '<div class="banner">' + E(err) + "</div>" : !list ? '<div class="empty">Loading…</div>' : !rows.length ? '<div class="empty">Nothing matches.</div>' :
+      rows.slice(0, 60).map(function (x) { return '<button type="button" class="dc-add-row" data-dc-add-pick="' + E(x.id) + '"' + (a.busy ? " disabled" : "") + "><b>" + E(x.label) + "</b><small>" + E(x.sub) + "</small></button>"; }).join("") +
+      (rows.length > 60 ? '<p class="small-note">' + (rows.length - 60) + " more — search to narrow it down.</p>" : "")) + "</div>" +
+    '<div style="display:flex;justify-content:flex-end;margin-top:12px;"><button type="button" data-dc-add-cancel>Cancel</button></div></div>';
+  if (focus) { var i = document.getElementById("dcAddQ"); i.focus(); try { i.setSelectionRange(pos, pos); } catch (x) {} }
+}
+function dcAddPick(id) {
+  var a = dcAdd, row = (a.lists[a.tab] || []).filter(function (x) { return x.id === id; })[0];
+  if (!row || a.busy) return;
+  var where = a.tab === "person" ? row.label + "'s employment file" : row.label;
+  if (!confirm("Add a copy of " + a.file.name + " to " + where + "?")) return;
+  a.busy = true; dcAddDraw();
+  // A Pentagon document not on the board yet is stored first, as the board does.
+  var real = a.tab !== "person" && String(id).indexOf("pg:") === 0
+    ? api("/api/board/adopt" + (a.tab === "usgov" ? "?board=usgov" : ""), { method: "POST", body: JSON.stringify({ id: id }) }).then(function (c) { return c.id; })
+    : Promise.resolve(id);
+  real.then(function (rid) {
+    var body = { space: a.space, folder: a.folder, file: a.file.id, v: a.v, target: a.tab === "person" ? "person" : "board" };
+    if (a.tab === "person") body.username = rid; else { body.board = a.tab; body.card = rid; }
+    return api("/api/documents/add-to", { method: "POST", body: JSON.stringify(body) });
+  }).then(function (x) { dcAddClose(); toast("Added to " + x.to + "."); }, function (err) { a.busy = false; dcAddDraw(); toast(err.message, true); });
+}
+document.addEventListener("input", function (e) {
+  if (e.target.id === "dcAddQ" && dcAdd) { dcAdd.q = e.target.value; dcAddDraw(); }
+});
+
 // ---- Changes ----
 function dcUpload(files, url) {
   brdUpload(files, url, function () { dcRefresh(); });
@@ -246,9 +319,13 @@ function dcRequestEdit() {
 }
 
 document.addEventListener("click", function (e) {
-  var t = e.target.closest && e.target.closest("[data-dc-tab],[data-dc-space],[data-dc-home],[data-dc-crumb],[data-dc-folder-open],[data-dc-view],[data-dc-close],[data-dc-upload],[data-dc-newfolder],[data-dc-rename],[data-dc-rename-folder],[data-dc-archive],[data-dc-archive-folder],[data-dc-version],[data-dc-request],[data-dc-req-cancel],[data-dc-req-send],[data-dc-grant],[data-dc-decline],[data-dc-revoke],[data-dc-restore]");
-  if (!t) { if (e.target.id === "dcViewer") dcCloseViewer(); if (e.target.id === "dcReq") e.target.remove(); return; }
+  var t = e.target.closest && e.target.closest("[data-dc-addto],[data-dc-addto-open],[data-dc-add-tab],[data-dc-add-pick],[data-dc-add-cancel],[data-dc-tab],[data-dc-space],[data-dc-home],[data-dc-crumb],[data-dc-folder-open],[data-dc-view],[data-dc-close],[data-dc-upload],[data-dc-newfolder],[data-dc-rename],[data-dc-rename-folder],[data-dc-archive],[data-dc-archive-folder],[data-dc-version],[data-dc-request],[data-dc-req-cancel],[data-dc-req-send],[data-dc-grant],[data-dc-decline],[data-dc-revoke],[data-dc-restore]");
+  if (!t) { if (e.target.id === "dcViewer") dcCloseViewer(); if (e.target.id === "dcReq") e.target.remove(); if (e.target.id === "dcAdd") dcAddClose(); return; }
   var ds = t.dataset;
+  if ("dcAddtoOpen" in ds && dcViewing) { dcAddOpen(dcViewing.file, dcViewing.v); return; }
+  if (ds.dcAddTab && dcAdd) { dcAdd.tab = ds.dcAddTab; dcAdd.q = ""; dcAddDraw(); dcAddLoad(); return; }
+  if (ds.dcAddPick && dcAdd) { dcAddPick(ds.dcAddPick); return; }
+  if ("dcAddCancel" in ds) { dcAddClose(); return; }
   if ("dcClose" in ds) { dcCloseViewer(); return; }
   if ("dcReqCancel" in ds) { var q = document.getElementById("dcReq"); if (q) q.remove(); return; }
   if ("dcReqSend" in ds) {
@@ -269,6 +346,7 @@ document.addEventListener("click", function (e) {
   if ("dcCrumb" in ds) { dcOpen(dcs.space, ds.dcCrumb); return; }
   if (ds.dcFolderOpen) { dcOpen(dcs.space, ds.dcFolderOpen); return; }
   if (ds.dcView) { var f = dcFile(ds.dcView); if (f) dcViewer(f); return; }
+  if (ds.dcAddto) { var fa = dcFile(ds.dcAddto); if (fa) dcAddOpen(fa); return; }
   if ("dcUpload" in ds) { $("#dcFile").click(); return; }
   if ("dcRequest" in ds) { dcRequestEdit(); return; }
   if ("dcNewfolder" in ds) {
@@ -393,6 +471,7 @@ document.addEventListener("contextmenu", function (e) {
   if (e.target.closest && e.target.closest("#dcViewer")) e.preventDefault();
 });
 document.addEventListener("keydown", function (e) {
+  if (e.key === "Escape" && dcAdd) { dcAddClose(); return; }
   if (!document.getElementById("dcViewer")) return;
   if (e.key === "Escape") { dcCloseViewer(); return; }
   if ((e.ctrlKey || e.metaKey) && /^[sp]$/i.test(e.key)) { e.preventDefault(); toast("Saving and printing are blocked for documents.", true); }

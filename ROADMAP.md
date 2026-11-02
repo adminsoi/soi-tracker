@@ -294,9 +294,18 @@ Mentions of You, and files created automatically from Pentagon.
       - Tested locally against a mock server (no Node on the Mac): folder
         tiles, browsing, text and picture viewer, Excel "no preview",
         Request edit, IT grant with end date, drag-to-move, drag-in
-        upload, large-copy block, light and dark. The PDF viewer showed
-        blank in the app's built-in browser — check PDFs in Chrome on
-        staging.
+        upload, large-copy block, light and dark. Staging test passed
+        (user, 2 Nov 2026).
+      - After the staging test (2 Nov 2026, at the user's request):
+        **Add to…** copies a document onto a board file's case file (any
+        Operations / US Gov file you can open, searchable by file, RFQ,
+        quote, SO, PO number or customer; Pentagon quotes not yet on the
+        board are adopted first) or, for Leadership, a person's employment
+        file. A copy, not a link; both histories record it. Route
+        `POST /api/documents/add-to`, sharing `docSource` with the viewer.
+        US Government folders exist only under SOI Aviation
+        (`DEPT_COMPANIES` in `documents.js`). PDFs did show in the viewer
+        on the second local test.
       - Still open: Word / Excel previews would need converting to PDF on
         the server (e.g. LibreOffice in the container); the board's case
         files still download their attachments; nothing is emailed when
