@@ -359,8 +359,8 @@ Mentions of You, and files created automatically from Pentagon.
         grant? Nothing is emailed when something is about to expire.
 - [x] **7. Strategy Meeting agenda and SOP update form.**
       Tested on staging and merged to `main` 3 Nov 2026 (live needs Pull +
-      redeploy). The Strategy Meeting redesign below is on `staging` only,
-      waiting for the user's test. The user's first answers: Strategy Meeting is Leadership only;
+      redeploy). The Strategy Meeting redesign below was tested on staging
+      and merged to `main` 3 Nov 2026 too. The user's first answers: Strategy Meeting is Leadership only;
       weekly; an agenda item holds topic, owner, minutes, notes, decisions
       and action items; action items go to Mentions of You. SOP changes:
       anyone proposes, Leadership approves, an approved PDF becomes a new
