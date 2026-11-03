@@ -431,8 +431,8 @@ Mentions of You, and files created automatically from Pentagon.
         /api/sops/:id`) let any manager change any department's SOPs;
         nothing is emailed when an SOP request is decided (a strategy note
         for someone emails them like any new task, if mail is set up).
-- [ ] **8. Email replies** — draft, edit, send, ignore, open thread.
-      Built 3 Nov 2026 on `staging`; not yet tested on staging.
+- [x] **8. Email replies** — draft, edit, send, ignore, open thread.
+      Tested on staging and redeployed 3 Nov 2026; real sending not yet checked on live.
       - Under each open row on Emails: **Reply**, **✦ Draft with AI**,
         **Open thread**, **Ignore**, Open in Outlook. Rules and the AI
         prompt in `replies.js`; Bedrock in `bedrock.js`; Graph reads and
@@ -461,8 +461,8 @@ Mentions of You, and files created automatically from Pentagon.
       - Tested locally against a mock server (no Node on the Mac): thread,
         draft with placeholders, Send blocked until they're filled, dry
         run, Ignore / Undo; `replies.js` rules tested in JavaScriptCore.
-- [ ] **Improvements and "Chat with AOG"** (added 3 Nov 2026, outside the
-      numbered phases). Built on `staging`; not yet tested on staging.
+- [x] **Improvements and "Chat with AOG"** (added 3 Nov 2026, outside the
+      numbered phases). Tested on staging and redeployed 3 Nov 2026.
       - Rules in `improvements.js` (areas, priorities, statuses, who
         manages, what each login sees); routes in `index.js`:
         `GET|POST /api/improvements`,
