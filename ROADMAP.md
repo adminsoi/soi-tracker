@@ -357,7 +357,51 @@ Mentions of You, and files created automatically from Pentagon.
         can add people later on the Legal tab.
       - Still open: should Legal people edit Legal folders without an IT
         grant? Nothing is emailed when something is about to expire.
-- [ ] **7. Strategy Meeting agenda and SOP update form.**
+- [x] **7. Strategy Meeting agenda and SOP update form.**
+      Tested on staging and merged to `main` 3 Nov 2026 (live needs Pull +
+      redeploy). The user's answers: Strategy Meeting is Leadership only;
+      weekly; an agenda item holds topic, owner, minutes, notes, decisions
+      and action items; action items go to Mentions of You. SOP changes:
+      anyone proposes, Leadership approves, an approved PDF becomes a new
+      version.
+      - Strategy Meeting: rules in `strategy.js`; routes `GET /api/strategy`,
+        `POST /api/strategy/meetings`, `PUT|DELETE /api/strategy/meetings/:id`
+        (Leadership, the `leadership` tick only), `GET /api/strategy/mine`,
+        `POST /api/strategy/actions/:id/done` (the assignee or Leadership).
+        Page `public/js/strategy.js` (after `legal.js`; the placeholder in
+        `company-pages.js` was removed); the sidebar item is hidden from
+        everyone else. README *Strategy Meeting*.
+      - `strategy.json`: `meetings[] = { id, date, title, rev, items: [{ id,
+        topic, owner, minutes, notes, decisions, discussed, carriedFrom?,
+        actions: [{ id, text, person, due, done, doneAt, doneBy }] }] }`.
+        A new meeting is dated a week after the latest and carries over
+        items not ticked Discussed (without their action items, which stay
+        on the meeting they were set in until done). The whole meeting is
+        saved at once; `rev` stops two people overwriting each other. Done
+        is changed only through its own route, never by a save.
+      - Mentions of You shows the assignee's open action items (topic,
+        action, due date only), red once overdue, in the sidebar badge.
+      - SOP update form (`sops.js`, routes `/api/sop-requests*` in
+        `index.js`): anyone proposes a change to one of their departments'
+        SOPs, or a new SOP, with what / why and an optional PDF
+        (`sop_request_files/<id>`); Leadership approves or declines on
+        SOP → Change requests and Mentions of You (badge on SOP), never
+        their own; declining needs a note. The request is claimed
+        (`approving`) before the PDF is applied, so two approvals can't
+        apply it twice. Approved with a PDF → the SOP's new version (old
+        PDF to `sop_versions/<sop>/<version>`, listed as "n older" on the
+        row) or a new SOP; without one → recorded, and a department manager
+        adds it with **New version** (`POST /api/sops/:id/version`, that
+        department's managers only). Leadership can read every SOP's PDFs.
+        All view-only through `sendViewOnly` / `viewDocument`.
+      - Fixed after the staging test (3 Nov 2026): Mentions of You
+        flickered — it reloads its counts on every draw, and loading SOP
+        requests redrew the page every time (a loop). It now redraws only
+        when the requests changed.
+      - Still open: the older SOP edit / remove routes (`PATCH|DELETE
+        /api/sops/:id`) let any manager change any department's SOPs;
+        nothing is emailed when a request is decided or an action item is
+        set.
 - [ ] **8. Email replies** — draft, edit, send, ignore, open thread.
 - [ ] **9. Company chat.**
 - [ ] **10. README update and final review.**
