@@ -735,6 +735,10 @@ app.post(
     if (FINANCE_TICKS.some((k) => k in fields) && !manager) {
       return res.status(403).json({ error: "Only a manager can tick that off" });
     }
+    // Approved to pay is what a manager approved: others add notes only.
+    if (list === "approvedToPay" && !manager && (op === "add" || op === "delete" || (op === "update" && Object.keys(fields).some((k) => k !== "notes")))) {
+      return res.status(403).json({ error: "Only a manager can change an approved payment" });
+    }
 
     let problem = null;
     let result = null;
@@ -945,6 +949,10 @@ app.put(
     }
     const key = String(req.params.key || "").trim().slice(0, 80);
     if (!key) return res.status(400).json({ error: "Missing document number" });
+    // The key names its list ("quotes:Q-1"; RFQs have no prefix), so a mark
+    // can only be set through the list it belongs to.
+    const keyView = Object.keys(VIEW_DEPARTMENTS).find((v) => key.startsWith(`${v}:`)) || "rfqs";
+    if (keyView !== view) return res.status(400).json({ error: "That document isn't on this list" });
     if ("status" in body && !TASK_STATUSES.includes(body.status)) {
       return res.status(400).json({ error: "Invalid status" });
     }
@@ -1545,6 +1553,22 @@ app.post(
       if (!!l.flagged === flagged) return;
       Object.assign(l, { flagged, flaggedBy: flagged ? req.user.username : "", flaggedAt: flagged ? Date.now() : 0 });
       logCard(c, req.user.username, `${flagged ? "Flagged" : "Unflagged"} ${l.pn || "a line"}`);
+    });
+  })
+);
+
+// No Quote: SOI isn't quoting this file. Anyone who can see it ticks or
+// unticks it in any column; the file stays where it is and moving it keeps it.
+app.post(
+  "/api/board/:id/noquote",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const on = !!(req.body || {}).noQuote;
+    await changeCard(req, res, (c) => {
+      if (!!c.noQuote === on) return;
+      if (on) c.noQuote = { by: req.user.username, at: Date.now() };
+      else delete c.noQuote;
+      logCard(c, req.user.username, on ? "Marked No Quote" : "No Quote removed");
     });
   })
 );
@@ -2943,6 +2967,8 @@ function sopShape(doc) {
 function sopDeptOk(dept) { return dept === SOP_ALL || DEPARTMENTS.includes(dept); }
 // Leadership reads every SOP's PDFs too: they approve the change requests.
 function canReadSops(user, dept) { return dept === SOP_ALL || inDepartment(user, dept) || !!user.leadership; }
+// Changing or removing an SOP or a quick answer: a manager of its department.
+function mayEditSops(user, dept) { return isManager(user) && (dept === SOP_ALL || inDepartment(user, dept)); }
 function newId() { return Date.now().toString(36) + require("crypto").randomBytes(5).toString("hex"); }
 
 app.get(
@@ -2994,9 +3020,11 @@ app.patch(
     if (!isManager(req.user)) return res.status(403).json({ error: "Only managers can change SOPs" });
     const b = req.body || {};
     if ("dept" in b && !sopDeptOk(b.dept)) return res.status(400).json({ error: "Bad department" });
+    if ("dept" in b && !mayEditSops(req.user, b.dept)) return res.status(400).json({ error: "Pick one of your departments" });
     const sop = await withSops((doc) => {
       const x = sopShape(doc).sops.find((y) => y.id === req.params.id);
       if (!x) return null;
+      if (!mayEditSops(req.user, x.dept)) return { forbidden: true };
       if ("code" in b) x.code = sopText(b.code, 30);
       if ("title" in b) x.title = sopText(b.title, 160) || x.title;
       if ("version" in b) x.version = sopText(b.version, 30);
@@ -3005,6 +3033,7 @@ app.patch(
       return Object.assign({}, x);
     });
     if (!sop) return res.status(404).json({ error: "That SOP isn't here any more" });
+    if (sop.forbidden) return res.status(403).json({ error: "Only that department's managers can change it" });
     res.json(sop);
   })
 );
@@ -3018,10 +3047,12 @@ app.delete(
       const list = sopShape(doc).sops;
       const i = list.findIndex((y) => y.id === req.params.id);
       if (i === -1) return null;
+      if (!mayEditSops(req.user, list[i].dept)) return { forbidden: true };
       for (const q of doc.qa) if (q.sopId === req.params.id) q.sopId = "";
       return list.splice(i, 1)[0];
     });
     if (!gone) return res.status(404).json({ error: "That SOP isn't here any more" });
+    if (gone.forbidden) return res.status(403).json({ error: "Only that department's managers can remove it" });
     await deleteFile(`sop_files/${gone.id}`).catch(() => {});
     for (const v of gone.versions || []) await deleteFile(`sop_versions/${gone.id}/${v.id}`).catch(() => {});
     res.status(204).end();
@@ -3275,12 +3306,14 @@ app.patch(
     const item = await withSops((doc) => {
       const x = sopShape(doc).qa.find((y) => y.id === req.params.id);
       if (!x) return null;
+      if (!mayEditSops(req.user, x.dept)) return { forbidden: true };
       const c = cleanQa(Object.assign({}, x, b));
       if (!c.q) return { error: "A question can't be empty" };
       Object.assign(x, c, { updatedAt: Date.now(), by: req.user.username });
       return Object.assign({}, x);
     });
     if (!item) return res.status(404).json({ error: "That answer isn't here any more" });
+    if (item.forbidden) return res.status(403).json({ error: "Only that department's managers can change it" });
     if (item.error) return res.status(400).json(item);
     res.json(item);
   })
@@ -3294,10 +3327,12 @@ app.delete(
       const list = sopShape(doc).qa;
       const i = list.findIndex((y) => y.id === req.params.id);
       if (i === -1) return false;
+      if (!mayEditSops(req.user, list[i].dept)) return "forbidden";
       list.splice(i, 1);
       return true;
     });
     if (!ok) return res.status(404).json({ error: "That answer isn't here any more" });
+    if (ok === "forbidden") return res.status(403).json({ error: "Only that department's managers can remove it" });
     res.status(204).end();
   })
 );
@@ -5024,6 +5059,7 @@ app.put(
     const login = (await getUsers()).find((u) => sameUser(u.username, req.params.username));
     if (!login) return res.status(404).json({ error: "No login by that name" });
     const b = req.body || {};
+    if ("basePay" in b && sameUser(login.username, req.user.username)) return res.status(403).json({ error: "Someone else in HR changes your own pay" });
     let out = null, problem = "";
     await withPayroll((doc) => {
       payrollShape(doc);
@@ -5055,6 +5091,7 @@ app.post(
     const users = await getUsers();
     const login = users.find((u) => sameUser(u.username, b.person));
     if (!login) return res.status(400).json({ error: "Pick a person" });
+    if (sameUser(login.username, req.user.username)) return res.status(403).json({ error: "Someone else in HR adds pay for you" });
     const amount = Math.round(Number(b.amount) * 100) / 100;
     if (!Number.isFinite(amount) || !amount || Math.abs(amount) >= 1e6) return res.status(400).json({ error: "Enter an amount" });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(b.week || "")) return res.status(400).json({ error: "Pick the pay week" });

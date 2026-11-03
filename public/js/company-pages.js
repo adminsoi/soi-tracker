@@ -6,15 +6,6 @@
 // index.html lists them; functions called while a file loads must be
 // defined in that file or an earlier one.
 
-// ---------- Placeholders ----------
-// Pages from ROADMAP.md that later phases build. They load no data yet.
-function placeholderPage(title, eyebrow, lines) {
-  setBreadcrumb(["Company", title]);
-  return '<div class="intro"><div><div class="eyebrow">' + E(eyebrow) + "</div><h1>" + E(title) + "</h1>" +
-    lines.map(function (l) { return "<p>" + l + "</p>"; }).join("") + "</div></div>" +
-    '<div class="empty">Nothing here yet.</div>';
-}
-
 // ---------- SOP ----------
 // Every department's SOPs in one place, with a tab per department you're in,
 // and a Change requests tab (the SOP update form's requests, sops.js).

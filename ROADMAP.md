@@ -365,8 +365,7 @@ Mentions of You, and files created automatically from Pentagon.
         (`DEPT_COMPANIES` in `documents.js`). PDFs did show in the viewer
         on the second local test.
       - Still open: Word / Excel previews would need converting to PDF on
-        the server (e.g. LibreOffice in the container); the board's case
-        files still download their attachments; nothing is emailed when
+        the server (e.g. LibreOffice in the container); nothing is emailed when
         edit access is granted or declined (the ticket's note shows it).
 - [x] **Legal** (Administration, after Finance; requested 2 Nov 2026).
       Tested on staging and redeployed 2 Nov 2026.
@@ -442,9 +441,9 @@ Mentions of You, and files created automatically from Pentagon.
         flickered — it reloads its counts on every draw, and loading SOP
         requests redrew the page every time (a loop). It now redraws only
         when the requests changed.
-      - Still open: the older SOP edit / remove routes (`PATCH|DELETE
-        /api/sops/:id`) let any manager change any department's SOPs;
-        nothing is emailed when an SOP request is decided (a strategy note
+      - Fixed in Phase 10: the older SOP edit / remove routes (`PATCH|DELETE
+        /api/sops/:id`, and the same for quick answers) now need a manager
+        of that SOP's department. Still open: nothing is emailed when an SOP request is decided (a strategy note
         for someone emails them like any new task, if mail is set up).
 - [x] **8. Email replies** — draft, edit, send, ignore, open thread.
       Tested on staging and redeployed 3 Nov 2026; real sending not yet checked on live.
@@ -530,4 +529,51 @@ Mentions of You, and files created automatically from Pentagon.
         in JavaScriptCore; the page (send, follow-up, list, IT read-only
         view, light and dark). The Bedrock tool loop and the real tools
         are first exercised on staging.
-- [ ] **10. README update and final review.**
+- [ ] **10. README update and final review.** Built 3 Nov 2026 on
+      `staging`; not yet tested on staging.
+      - Live checked first: every `public/js/*.js` and `index.html` on live
+        matched `main` (9353b3c), so Phase 9 stays ticked.
+      - Operations board: column colours black / gray · red · green (US Gov
+        the same) and the **No Quote** tick (see *Decisions*). Route
+        `POST /api/board/:id/noquote` (`{ noQuote }`, anyone who can see the
+        file; stores `noQuote: { by, at }` or removes it; history "Marked
+        No Quote" / "No Quote removed"). Rules in `board.js` (`flagsOf`,
+        `onTime`). Pentagon files are stored first (adopt), as for any change.
+        A Pentagon quote with a different number for a No Quote RFQ still
+        shows as its own file until someone types the number on the RFQ.
+      - README rewritten at the top: what's in the app, code layout, HTTPS,
+        every stack variable (names only), how changes go through staging,
+        *AI: Claude on Amazon Bedrock*; stale sections (old layout, Caddy,
+        Tools → Performance, local testing) fixed.
+      - `docker-compose.yml` now passes `IMPROVEMENTS_OWNERS` and
+        `INTERNAL_DOMAINS` (read by the code but never reachable from
+        Portainer before).
+      - Review fixes (server): SOP / quick-answer edit and remove limited to
+        that department's managers; non-managers can't add, change or
+        delete Finance "Approved to pay" rows (notes only); HR can't change
+        their own base pay or add their own pay adjustments; a Finance
+        manager can't approve or pay their own reimbursement; an RFQ /
+        quote / SO / PO mark can only be set through its own list.
+      - Dead code removed: `placeholderPage` and CSS for the old board
+        cards, mail cards, board dots and performance strikes.
+      - Found, not fixed (need a decision or a bigger change):
+        - Payroll approval: an HR manager can approve a week that includes
+          their own pay (blocking it needs a second approver per entity).
+        - Board file edits are open to anyone who can see the file (prices,
+          customer, numbers, checks, deleting lines); `POST /api/board` lets
+          a non-manager pick any assignee. Needs rules per field.
+        - Board customer files (`board_customers`) aren't split by company.
+        - IT staff (not only IT managers) can read everyone's Chat with
+          AOG chats, as decided 3 Nov 2026; Leadership chats may quote Legal
+          or margin data IT can't otherwise open.
+        - Any manager can publish an SOP or quick answer to "all
+          departments".
+        - Leave approval and HR forms aren't limited by company.
+        - IT sees and restores archived Documents in every company,
+          including Legal; `/api/users` without a company lists every login.
+        - `#strategymeeting` in a note adds a row to the Leadership-only
+          Strategy Meeting from anyone.
+        - `/api/admin/login` has no rate limit; if `users.json` can't be
+          read, sign-in trusts the token's saved roles.
+        - QBR overrides: a bad value partway through still saves the
+          values before it.

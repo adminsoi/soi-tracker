@@ -173,6 +173,7 @@ function moveBlocker(u, item, to) {
     // managers (as with Daily payments).
     const open = ["submitted", "checked"];
     if (!isManager(u) && !(open.includes(item.status) && open.includes(to))) return "Only a Finance manager can do that";
+    if (sameUser(u.username, item.by) && !(open.includes(item.status) && open.includes(to))) return "Someone else in Finance approves and pays your own claim";
     return "";
   }
   if ((to === "declined" || item.status === "declined") && !isManager(u)) return "Only a manager can decline a request or undo that";
