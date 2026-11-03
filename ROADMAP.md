@@ -489,8 +489,9 @@ Mentions of You, and files created automatically from Pentagon.
         Both count in the sidebar badges.
       - The sidebar item and page title say "Chat with AOG"; the page
         itself is unchanged until Phase 9.
-- [ ] **9. Company chat** ("Chat with AOG" in the sidebar).
-      Built 3 Nov 2026 on `staging`; not yet tested on staging.
+- [x] **9. Company chat** ("Chat with AOG" in the sidebar).
+      Tested on staging and redeployed 3 Nov 2026. ILS live search waits
+      on SOI's ILS API access.
       - Rules, prompt and tools in `chat.js`; routes in `index.js`
         (`GET /api/chat`, `GET /api/chat/:id`, `POST /api/chat`); page
         `public/js/chat.js` (replaces the placeholder in
