@@ -27,7 +27,7 @@ services:
       # (e.g. an EC2 instance profile). If it does, leave these two unset.
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
-      # Emails → Draft with AI: Claude on Amazon Bedrock in this AWS account
+      # Draft with AI and Chat with AOG: Claude on Amazon Bedrock in this AWS account
       # (same credentials as S3). Needs the model enabled under Bedrock →
       # Model access and bedrock:InvokeModel for this host's role.
       BEDROCK_MODEL_ID: ${BEDROCK_MODEL_ID:-anthropic.claude-sonnet-5-5}
@@ -42,6 +42,10 @@ services:
       IT_REQUESTS_MAILBOX: ${IT_REQUESTS_MAILBOX:-}
       # Office time zone for the "Who's in office" board (Windows or IANA name).
       OFFICE_TIMEZONE: ${OFFICE_TIMEZONE:-Pacific Standard Time}
+      # Improvements: who manages requests (usernames or login emails, comma
+      # separated; default in improvements.js). Emails: extra internal domains.
+      IMPROVEMENTS_OWNERS: ${IMPROVEMENTS_OWNERS:-}
+      INTERNAL_DOMAINS: ${INTERNAL_DOMAINS:-}
       # Pentagon query API
       PENTAGON_API_URL: ${PENTAGON_API_URL:-}
       PENTAGON_API_KEY: ${PENTAGON_API_KEY:-}

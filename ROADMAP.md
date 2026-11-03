@@ -33,9 +33,17 @@ it's merged and redeployed.
     and removes the named staff. Anything expiring within 60 days shows on
     the responsible person's Mentions of You; expired items are red.
 - **Kanban files** come in automatically from Pentagon (RFQ → Quote → SO →
-  PO), with **+ Add file** by hand too. Columns: RFQ, Quoted (blue) · Sale
-  Received, Purchased (indigo) · Item Received, Item Sent (violet).
+  PO), with **+ Add file** by hand too. Columns: RFQ, Quoted (black / gray,
+  Procurement) · Sale Received, Purchased (red, Purchasing) · Item Received,
+  Item Sent (green, Warehouse) — changed from blue · indigo · violet on
+  3 Nov 2026; the US Gov board's matching columns use the same colours.
   Departments are told apart by colour.
+  - **No Quote** (added 3 Nov 2026): a tick on every file, in any column,
+    for anyone who can see the file. Saved with the file with who and when;
+    the file is badged and greyed but stays put, moving it keeps the tick,
+    and it can be unticked. Filters: legend "No Quote" and each column's
+    No Quote only / hide. A No Quote file isn't Due / Overdue / For
+    approval, and one never quoted isn't judged on time.
   - File heading: file number, platform(s), customer, Highlighted Items
     checkbox, due date, responsible person, on-time ✓ / ✗; adds the Sales
     Order number from Sale Received on. Heading refreshes on every move.

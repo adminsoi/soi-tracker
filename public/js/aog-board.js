@@ -13,7 +13,8 @@
 // server holds the rules (hard stops, approvals, who sees cost and margin);
 // this draws the columns, the side panel (case file), the customer file and
 // the settings. Pentagon documents not yet on a file show as files too; the
-// first change to one stores it (brdReal).
+// first change to one stores it (brdReal). A file can be marked No Quote in
+// any column: it's muted and badged but stays where it is.
 //
 // The US Gov tab has its own board drawn by the same code (Solicitation →
 // Bid Submitted → Awarded → Purchased → Item Received → Delivered). Each
@@ -36,7 +37,7 @@ function brdUse(kind) {
 function brdUrl(path) { return brd.kind === "usgov" ? path + (path.indexOf("?") === -1 ? "?" : "&") + "board=usgov" : path; }
 function brdGov() { return brd.kind === "usgov"; }
 var BRD_FLAG = { overdue: ["Overdue", "bf-over"], due: ["Due", "bf-due"], approval: ["For approval", "bf-appr"], highlighted: ["Highlighted items", "bf-hi"], rejected: ["Quote rejected", "bf-rej"] };
-var BRD_DOTS = [["due", "Due", "bd-due"], ["approval", "For approval", "bd-appr"], ["highlighted", "Highlighted", "bd-hi"], ["flagged", "Flagged", "bd-flag"]];
+var BRD_DOTS = [["due", "Due", "bd-due"], ["approval", "For approval", "bd-appr"], ["highlighted", "Highlighted", "bd-hi"], ["flagged", "Flagged", "bd-flag"], ["noquote", "No Quote", "bd-nq"]];
 var BRD_DEPT_CLASS = { Procurement: "dp-proc", Purchasing: "dp-purch", Warehouse: "dp-wh" };
 function canSeeBoardUi(kind) { return me.fullAccess || me.leadership || (kind === "usgov" ? ["US Government"] : BOARD_DEPTS).some(function (d) { return me.departments.indexOf(d) !== -1; }); }
 function canAddRfq() { return me.fullAccess || me.leadership || me.departments.indexOf(brdGov() ? "US Government" : "Procurement") !== -1; }
@@ -87,9 +88,10 @@ function brdText(c) {
   (c.notes || []).forEach(function (x) { out.push(x.text, x.by, x.for); });
   (c.files || []).forEach(function (f) { out.push(f.name); });
   (c.links || []).forEach(function (l) { out.push(l.title, l.url, l.text); });
+  if (c.noQuote) out.push("no quote");
   return out.filter(Boolean).join(" \n ").toLowerCase();
 }
-function brdHas(c, f) { return c.flags.indexOf(f) !== -1 || (f === "due" && c.flags.indexOf("overdue") !== -1) || (f === "flagged" && brdFlaggedLines(c).length > 0); }
+function brdHas(c, f) { return c.flags.indexOf(f) !== -1 || (f === "due" && c.flags.indexOf("overdue") !== -1) || (f === "flagged" && brdFlaggedLines(c).length > 0) || (f === "noquote" && !!c.noQuote); }
 // Board-wide: search, the legend's flag and the person picker.
 function brdMatch(c) {
   var q = brd.q.trim().toLowerCase();
@@ -99,11 +101,12 @@ function brdMatch(c) {
   return true;
 }
 // Per column: every heading field, plus flagged / unflagged line items.
-var BCF_FIELDS = ["fileNo", "platforms", "customer", "so", "hl", "due", "person", "onTime", "lines"];
+var BCF_FIELDS = ["fileNo", "platforms", "customer", "so", "hl", "due", "person", "onTime", "nq", "lines"];
 function brdColMatch(c, f) {
   var has = function (v, q) { return !q || String(v || "").toLowerCase().indexOf(String(q).trim().toLowerCase()) !== -1; };
   if (!has([c.fileNo, c.rfqNo, c.quoteNo, c.poNo].join(" "), f.fileNo) || !has(c.platforms, f.platforms) || !has(c.customer || c.vendor, f.customer) || !has(c.orderNo, f.so)) return false;
   if (f.hl && (f.hl === "yes") !== !!c.hl) return false;
+  if (f.nq && (f.nq === "yes") !== !!c.noQuote) return false;
   if (f.person && (f.person === "-" ? !!c.assignee : !sameUser(c.assignee, f.person))) return false;
   if (f.onTime && (f.onTime === "open" ? c.onTime !== "" : c.onTime !== f.onTime)) return false;
   if (f.due) {
@@ -132,6 +135,7 @@ function brdColFilter(s) {
     sel("due", "Due", [["", "Any"], ["overdue", "Overdue"], ["2", "Within 2 days"], ["7", "Within a week"], ["none", "No due date"]]) +
     sel("person", "Responsible", [["", "Anyone"], ["-", "Nobody"]].concat(d.people.map(function (p) { return [p, p]; }))) +
     sel("onTime", "Quote on time", [["", "Any"], ["yes", "✓ On time"], ["no", "✗ Late"], ["open", "Not judged yet"]]) +
+    sel("nq", "No Quote", [["", "Any"], ["yes", "No Quote only"], ["no", "Hide No Quote"]]) +
     sel("lines", "Line items", [["", "All"], ["flagged", "Flagged only"], ["unflagged", "Unflagged only"]]) +
     (n ? '<button type="button" class="text-button" data-bcf-clear="' + s.id + '">Clear filters</button>' : "") + "</div></details>";
 }
@@ -179,9 +183,10 @@ function brdFileHtml(c, f) {
   var ot = c.onTime === "yes" ? '<span class="of-ot ot-yes" title="Quote completed on time">✓</span>' : c.onTime === "no" ? '<span class="of-ot ot-no" title="Quote late">✗</span>' : '<span class="of-ot ot-open" title="Quote on time: not judged yet">–</span>';
   var hl = '<span class="of-hl' + (c.hl ? " on" : "") + '" role="img" aria-label="Highlighted items: ' + (c.hl ? "yes" : "no") + '" title="Highlighted items (ticked when any line item is)"><span class="of-box">' + (c.hl ? "✓" : "") + "</span>HL</span>";
   var flags = c.flags.filter(function (x) { return x === "overdue" || x === "due" || x === "approval" || x === "rejected"; }).map(function (x) { var b = BRD_FLAG[x]; return '<span class="bf ' + b[1] + '">' + b[0] + "</span>"; }).join("");
-  return '<div class="of-file' + (dp ? " " + BRD_DEPT_CLASS[dp] : "") + (c.virtual ? " of-pg" : "") + (brd.open === c.id ? " open" : "") + '">' +
+  var nq = c.noQuote ? '<span class="bf bf-nq" title="No Quote — marked by ' + E(c.noQuote.by) + " on " + E(new Date(c.noQuote.at).toLocaleDateString()) + '">No Quote</span>' : "";
+  return '<div class="of-file' + (dp ? " " + BRD_DEPT_CLASS[dp] : "") + (c.virtual ? " of-pg" : "") + (c.noQuote ? " of-nq" : "") + (brd.open === c.id ? " open" : "") + '">' +
     '<button type="button" class="of-head" data-brd-open="' + E(c.id) + '" title="' + E(dp ? "Responsible person's department: " + dp : "Open the file") + '">' +
-      '<span class="of-r1"><b class="of-no">' + E(brdLabel(c)) + "</b>" + (so ? '<span class="of-so">SO ' + E(so) + "</span>" : "") + '<span class="grow"></span>' + hl + ot + "</span>" +
+      '<span class="of-r1"><b class="of-no">' + E(brdLabel(c)) + "</b>" + (so ? '<span class="of-so">SO ' + E(so) + "</span>" : "") + nq + '<span class="grow"></span>' + hl + ot + "</span>" +
       '<span class="of-r2">' + (c.platforms ? '<span class="of-plat">' + E(c.platforms) + "</span>" : "") + '<span class="of-cust">' + E(c.customer || c.vendor || "No customer yet") + (activeCompany === ALL ? " · " + E(shortCo(c.company)) : "") + "</span></span>" +
       '<span class="of-r3"><span class="co-note">' + (c.dueDate ? "Due " + E(fmtDate(c.dueDate)) : "No due date") + "</span>" + flags + '<span class="grow"></span>' +
         (c.assignee ? '<span class="av" aria-hidden="true">' + E(initialsOf(c.assignee)) + '</span><span class="of-who">' + E(c.assignee) + "</span>" : '<span class="co-note">Nobody</span>') + "</span>" +
@@ -194,7 +199,13 @@ function brdFileHtml(c, f) {
           (l.qty && l.qty !== 1 ? '<span class="co-note">×' + E(l.qty) + "</span>" : "") + (l.desc ? '<span class="of-desc">' + E(l.desc) + "</span>" : "") +
           (l.highlighted ? '<span class="bd bd-hi" title="Highlighted: not found online"></span>' : "") + "</button></div>";
     }).join("") : '<div class="of-noline">' + ((c.lines || []).length ? "" : "No line items yet") + "</div>") +
-    (hidden > 0 ? '<div class="of-noline">+' + hidden + " other line" + (hidden === 1 ? "" : "s") + "</div>" : "") + "</div></div>";
+    '<div class="of-foot">' + (hidden > 0 ? '<span class="of-noline">+' + hidden + " other line" + (hidden === 1 ? "" : "s") + "</span>" : "") + '<span class="grow"></span>' + brdNoQuoteBtn(c) + "</div></div></div>";
+}
+// The No Quote tick, on the file and in its side panel.
+function brdNoQuoteBtn(c) {
+  return '<button type="button" class="of-nqbtn" data-brd-noquote="' + E(c.id) + '" aria-pressed="' + !!c.noQuote + '" title="' +
+    (c.noQuote ? "No Quote — marked by " + E(c.noQuote.by) + " on " + E(new Date(c.noQuote.at).toLocaleString()) + ". Click to untick." : "Mark this file No Quote") + '">' +
+    '<span class="of-box">' + (c.noQuote ? "✓" : "") + "</span>No Quote</button>";
 }
 
 // + Add file (Procurement). Numbers are typed from Pentagon, never made up.
@@ -263,6 +274,7 @@ function drawCaseFile() {
       fld("platforms", "Platform(s)") +
       '<div class="nb-field"><label for="bf-dueDate">Due</label><input id="bf-dueDate" type="date" data-brd-f="dueDate" value="' + E(c.dueDate || "") + '"></div>' +
       '<div class="nb-field"><label for="bf-assignee">Responsible</label>' + (can.assign ? '<select id="bf-assignee" data-brd-f="assignee"><option value="">Nobody</option>' + d.people.map(function (p) { return '<option value="' + E(p) + '"' + (sameUser(p, c.assignee) ? " selected" : "") + ">" + E(p) + "</option>"; }).join("") + "</select>" : '<div class="static">' + E(c.assignee || "—") + "</div>") + "</div>" +
+      '<div class="nb-field"><label>No Quote</label><div class="static">' + brdNoQuoteBtn(c) + (c.noQuote ? ' <span class="small-note">' + E(c.noQuote.by) + " · " + E(new Date(c.noQuote.at).toLocaleString()) + "</span>" : "") + "</div></div>" +
       '<div class="nb-field"><label>Highlighted items</label><div class="static">' + (c.hl ? "☑ Yes" : "☐ None") + (c.highlighted ? ' <button type="button" class="text-button" data-brd-unhl>clear (whole-file mark from the old board)</button>' : "") + '</div></div>' +
     "</div>" +
     '<div class="card-label" style="margin-top:12px;">Line items' + (c.total ? " · quote total " + E(money(c.total)) : "") + "</div>" +
@@ -463,7 +475,7 @@ document.addEventListener("keydown", function (e) { if (e.key === "Escape" && $(
 document.addEventListener("click", function (e) {
   // A click outside a column's filter box closes it.
   if (e.target.closest && !e.target.closest(".bcf")) Array.prototype.forEach.call(document.querySelectorAll("details.bcf[open]"), function (b) { b.open = false; brd.colOpen = ""; });
-  var t = e.target.closest && e.target.closest("[data-brd-flag],[data-brd-refresh],[data-brd-new],[data-brd-close],[data-brd-create],[data-brd-open],[data-brd-customer],[data-brd-settings],[data-brd-savesettings],[data-brd-addline],[data-brd-rmline],[data-brd-savelines],[data-brd-approve],[data-brd-reject],[data-brd-move],[data-brd-note],[data-brd-upload],[data-brd-dl],[data-brd-cupload],[data-brd-cdl],[data-brd-archive],[data-brd-tab],[data-brd-link],[data-brd-flagline],[data-bcf-clear],[data-brd-unhl]");
+  var t = e.target.closest && e.target.closest("[data-brd-flag],[data-brd-refresh],[data-brd-new],[data-brd-close],[data-brd-create],[data-brd-open],[data-brd-customer],[data-brd-settings],[data-brd-savesettings],[data-brd-addline],[data-brd-rmline],[data-brd-savelines],[data-brd-approve],[data-brd-reject],[data-brd-move],[data-brd-note],[data-brd-upload],[data-brd-dl],[data-brd-cupload],[data-brd-cdl],[data-brd-archive],[data-brd-tab],[data-brd-link],[data-brd-flagline],[data-brd-noquote],[data-bcf-clear],[data-brd-unhl]");
   if (!t) { if (e.target.classList && e.target.classList.contains("rs-modal") && e.target.closest("#brdModal")) closeBrdModal(); return; }
   var ds = t.dataset, id = brd.open;
   if ("brdFlag" in ds) { brd.flag = ds.brdFlag; render(); return; }
@@ -473,6 +485,11 @@ document.addEventListener("click", function (e) {
     var fc = brdCard(ds.brdFlagline), fl0 = fc && (fc.lines || []).filter(function (x) { return x.id === ds.lid; })[0];
     if (!fl0) return;
     brdApi(fc.id, "/lines/" + encodeURIComponent(ds.lid) + "/flag", { flagged: !fl0.flagged }).then(function () { if (brd.lineDraft) brd.lineDraft.forEach(function (x) { if (x.id === ds.lid) x.flagged = !fl0.flagged; }); }, function () {});
+    return;
+  }
+  if ("brdNoquote" in ds) {
+    var nc = brdCard(ds.brdNoquote);
+    if (nc) brdApi(nc.id, "/noquote", { noQuote: !nc.noQuote }).then(function (card) { toast(card.noQuote ? "Marked No Quote." : "No Quote removed."); }, function () {});
     return;
   }
   if ("brdNew" in ds) { brd.adding = true; brd.draft = null; render(); var c0 = $("#bn-customer"); if (c0) c0.focus(); return; }

@@ -14,22 +14,22 @@
 // Pentagon and source documents. Nothing here generates them.
 
 const STAGES = [
-  { id: "rfq", label: "RFQ", dept: "Procurement", colour: "blue" },
-  { id: "quoted", label: "Quoted", dept: "Procurement", colour: "blue" },
-  { id: "sale", label: "Sale Received", dept: "Purchasing", colour: "indigo" },
-  { id: "purchased", label: "Purchased", dept: "Purchasing", colour: "indigo" },
-  { id: "received", label: "Item Received", dept: "Warehouse", colour: "violet" },
-  { id: "sent", label: "Item Sent", dept: "Warehouse", colour: "violet" },
+  { id: "rfq", label: "RFQ", dept: "Procurement", colour: "gray" },
+  { id: "quoted", label: "Quoted", dept: "Procurement", colour: "gray" },
+  { id: "sale", label: "Sale Received", dept: "Purchasing", colour: "red" },
+  { id: "purchased", label: "Purchased", dept: "Purchasing", colour: "red" },
+  { id: "received", label: "Item Received", dept: "Warehouse", colour: "green" },
+  { id: "sent", label: "Item Sent", dept: "Warehouse", colour: "green" },
 ];
 // The US Gov board (Phase 3): the same six steps, rules and stage ids,
 // named for solicitations and contract awards, all worked by US Government.
 const US_GOV_STAGES = [
-  { id: "rfq", label: "Solicitation", dept: "US Government", colour: "blue" },
-  { id: "quoted", label: "Bid Submitted", dept: "US Government", colour: "blue" },
-  { id: "sale", label: "Awarded", dept: "US Government", colour: "indigo" },
-  { id: "purchased", label: "Purchased", dept: "US Government", colour: "indigo" },
-  { id: "received", label: "Item Received", dept: "US Government", colour: "violet" },
-  { id: "sent", label: "Delivered", dept: "US Government", colour: "violet" },
+  { id: "rfq", label: "Solicitation", dept: "US Government", colour: "gray" },
+  { id: "quoted", label: "Bid Submitted", dept: "US Government", colour: "gray" },
+  { id: "sale", label: "Awarded", dept: "US Government", colour: "red" },
+  { id: "purchased", label: "Purchased", dept: "US Government", colour: "red" },
+  { id: "received", label: "Item Received", dept: "US Government", colour: "green" },
+  { id: "sent", label: "Delivered", dept: "US Government", colour: "green" },
 ];
 const BOARD_STAGES = { ops: STAGES, usgov: US_GOV_STAGES };
 const STAGE_IDS = STAGES.map((s) => s.id);
@@ -130,9 +130,11 @@ function quotedAt(card) {
   return h ? h.at : card.pentagonView === "quotes" ? card.createdAt || 0 : 0;
 }
 // Was the quote done by its due date? "yes", "no", or "" while it's still
-// open and not late (or there's no due date to judge by).
+// open and not late (or there's no due date to judge by). A No Quote file
+// that was never quoted isn't judged.
 function onTime(card, now) {
   if (!card.dueDate) return "";
+  if (card.noQuote && !quotedAt(card)) return "";
   const due = Date.parse(card.dueDate + "T23:59:59");
   const at = quotedAt(card);
   if (at) return at <= due ? "yes" : "no";
@@ -149,9 +151,11 @@ function migrateCard(card) {
   return card;
 }
 
-// Flags shown on files and used by the filters.
+// Flags shown on files and used by the filters. A No Quote file isn't being
+// worked, so it's never due, overdue or waiting for approval.
 function flagsOf(card, now) {
   const flags = [];
+  if (card.noQuote) return highlightedFile(card) ? ["highlighted"] : [];
   if (card.dueDate && card.stage !== "sent") {
     const days = (Date.parse(card.dueDate + "T23:59:59") - now) / 86400000;
     if (days < DUE_SOON_DAYS) flags.push(days < 0 ? "overdue" : "due");

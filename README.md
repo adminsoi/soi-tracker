@@ -1,32 +1,78 @@
-# SOI Aviation — Department Task Tracker
+# SOI Aviation — AOG Tracker
 
-A small internal Kanban tracker with real logins: each account belongs to
-one department and only sees/edits that department's tasks. An
-full-access account sees and can touch everything. Data is stored as JSON
-in an S3 bucket — no separate database container needed.
+SOI Aviation's internal dashboard: the Operations board (quotes from RFQ to
+shipped), the department pages, staff forms, documents, email replies and
+a company chat with Claude. One Node/Express container, with real logins,
+data stored as JSON in an S3 bucket (no database), Microsoft 365 (Graph)
+for mail and calendars, Pentagon (read-only) for RFQs, quotes, orders and
+finance, and Claude on Amazon Bedrock for the AI parts.
 
-## What's here
+**The repo is public.** Never commit passwords, keys, tenant ids, bucket
+names or anything else from the stack's environment variables; they live
+only in Portainer. `.env` is git-ignored for local runs.
+
+## What's in the app
+
+The sidebar, top to bottom (see *Navigation* for details):
+
+- **Operations** — the **Operations board** (Procurement + Purchasing +
+  Warehouse on one Kanban), Business Development, and US Government with its
+  own **US Gov board**. Pentagon RFQs, quotes, sales orders and POs appear on
+  the boards by themselves.
+- **Administration** — IT, Admin, HR, Finance and Legal. Each of IT, Admin,
+  HR and Finance has **Staff-Facing** (the forms anyone fills in: IT ticket,
+  admin request, HR issue, leave request, performance comment,
+  reimbursement) and **Department-Facing** (requests, projects, HR payroll
+  and performance, finance approvals and transfers). **Legal** (Leadership
+  plus named staff) lists contracts, insurance and vendor documents with
+  expiry dates.
+- **Overview** — team breakdown and the quarterly business review.
+- **Mentions of You** — everything waiting on you: assigned tasks, next
+  steps with deadlines, approvals, expiring Legal documents, Improvements
+  updates. **Emails** — your inboxes, with Reply, **Draft with AI**, Open
+  thread and Ignore.
+- **Strategy Meeting** (Leadership), **SOP** (quick answers, SOP documents
+  and change requests), **People** (Leadership: staff files and spot
+  bonuses), **Documents** (an S3 file manager), **Chat with AOG** (company
+  chat with Claude), **Improvements** (ask for a change to the tracker).
+- **Calendar** and **Global** at the bottom. `/admin.html` manages logins
+  and settings.
+
+The plan the redesign followed, and the decisions behind it, are in
+`ROADMAP.md`.
+
+## Code layout
 
 ```
-index.js        Express API and the server entry point
-*.js            Server helpers (auth, S3 storage, Microsoft Graph mail and
-                calendar, IT requests, Pentagon queries, the Operations board,
-                staff forms, People, Documents, Legal and Strategy
-                Meeting rules)
-index.html      The tracker page: its layout only
-public/         The tracker's stylesheet and scripts, one file per area
-                (core, departments, aog-board, inbox, …), loaded in the
-                order index.html lists them
-admin.html      Manage logins and settings
-Dockerfile      Builds one image that serves both the API and the frontend
-docker-compose.yml   Stack file for Portainer
-ROADMAP.md      The redesign plan, phase by phase
+index.js            Express server: every /api route, sign-in, HTTPS start-up
+auth.js             Passwords and sign-in tokens
+s3store.js          JSON documents and files in S3 (one write queue per document)
+graph.js            Microsoft Graph sign-in for the app
+mail.js, mailer.js  Reading inboxes and threads; sending replies and notifications
+calendar.js, hrcal.js   Calendars, holidays and the HR calendar
+pentagon.js, pentagonViews.js   Pentagon queries (read-only) and which views exist
+bedrock.js          Claude on Amazon Bedrock (one place for model, region, errors)
+replies.js          Email reply rules and the Draft with AI prompt
+chat.js             Chat with AOG: prompt, tools and saved chats
+board.js            Operations / US Gov board rules (stages, checks, approvals,
+                    hard stops, flags, on-time, No Quote)
+documents.js, legal.js, people.js, strategy.js, improvements.js,
+staffforms.js, itrequests.js, payrollcheck.js
+                    The rules for each of those areas (who sees and changes what)
+index.html          The tracker page's layout; lists the scripts in load order
+public/styles.css   All styles (light by default, dark with html[data-theme="dark"])
+public/js/*.js      The page's scripts, one per area: core.js first, app.js last
+admin.html          Logins and settings (behind ADMIN_PASSWORD)
+chart.umd.min.js    Chart.js, served locally
+Dockerfile, docker-compose.yml   The image and the Portainer stack
+ROADMAP.md          The redesign plan, decisions and open items
 ```
 
-The tracker's scripts share one global scope and run in the order
-`index.html` lists them, so anything a file runs while loading must be
-defined in that file or an earlier one; `app.js` (event listeners and
-start-up) loads last.
+The rules live on the server: the page hides what you can't do, but every
+route checks the signed-in login again. The page's scripts share one global
+scope and run in the order `index.html` lists them, so anything a file runs
+while loading must be defined in that file or an earlier one; `app.js`
+(event listeners and start-up) loads last.
 
 ## 1. Set up the S3 bucket
 
@@ -52,23 +98,17 @@ prefix to match `S3_PREFIX`).
 ## 2. HTTPS on an internal server
 
 This server has no public IP, so a real (Let's Encrypt) certificate isn't
-possible — Let's Encrypt has to reach your server over the public internet
-to verify you own a domain, and here it can't. Instead, the included
-`caddy` service uses Caddy's built-in **internal** CA to self-sign a
-certificate for your server's private IP. This still encrypts traffic
-between browsers and the server; the only difference from a "real" cert is
-that each person's browser shows a one-time warning to click past on first
-visit (their browser remembers the exception after that).
+possible. Instead the app makes its own **self-signed certificate** for the
+server's private IP on first start (`SERVER_IP`, with `openssl` in the
+image) and keeps it in the `soi-tracker-certs` volume, so it survives
+redeploys. Traffic is still encrypted; each person's browser shows a
+one-time warning to click past on first visit.
 
 1. In **EC2 → Instances → your instance**, find **Private IPv4 addresses**.
-2. Edit `Caddyfile` in this repo, replacing `10.0.0.0` with that exact IP.
-3. That's it — no DNS record needed. Your team reaches the app at
-   `https://<that-private-ip>`, either over VPN or directly when on the
-   office network.
-
-If you'd like a friendlier name later (e.g. `tracker.internal`) instead of
-a raw IP, that's a small follow-up using an internal/private DNS zone —
-not required to get this running today.
+2. Set `SERVER_IP` to that address in the stack's environment variables.
+3. People reach the app at `https://<that-private-ip>` (live) and
+   `https://<that-private-ip>:8443` (staging), over VPN or on the office
+   network.
 
 ## 3. AWS security group
 
@@ -85,13 +125,13 @@ On the EC2 instance's **Security** tab → click the security group →
 | HTTPS | 443 | Your VPC's CIDR block (see **VPC → Your VPCs** for the exact range) | Covers VPN and office traffic routed into the VPC |
 | SSH | 22 | My IP only | However you already access the server |
 
-Leave your existing Portainer rule as-is. You do **not** need to open port
-80 or port 4000 — 4000 is internal to the Docker network only.
+Add **8443** from the same source if people test on the staging stack.
+Leave your existing Portainer rule as-is. You do **not** need to open
+port 80.
 
 ## 4. Deploy the stack in Portainer (from GitHub)
 
-1. Push this whole folder to a GitHub repo (see the walkthrough in chat
-   for exact steps if you're doing this via GitHub Desktop).
+1. The code is on GitHub (`adminsoi/soi-tracker`).
 2. In Portainer: **Stacks → Add stack → Repository**.
 3. Paste your repo URL, branch (`main`), and Compose path
    (`docker-compose.yml`).
@@ -101,9 +141,17 @@ Leave your existing Portainer rule as-is. You do **not** need to open port
    - `S3_BUCKET`, `S3_PREFIX`, `AWS_REGION`
    - `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` only if you're not using
      an attached IAM role
+   - `SERVER_IP` — the server's private IP (for the certificate)
    - `BEDROCK_MODEL_ID` / `BEDROCK_REGION` only to change the AI model or
-     its region (Emails → Draft with AI; defaults Claude Sonnet 5.5 in
-     `AWS_REGION`)
+     its region (see *AI: Claude on Amazon Bedrock*)
+   - Microsoft 365: `MS_TENANT_ID`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET`,
+     `MS_FROM_EMAIL` (notifications, inboxes, calendars, replies; leave
+     unset to switch email off), `IT_REQUESTS_MAILBOX` (the IT form's
+     mailbox), `OFFICE_TIMEZONE`
+   - Pentagon: `PENTAGON_API_URL`, `PENTAGON_API_KEY`
+   - Optional: `IMPROVEMENTS_OWNERS` (who manages Improvements; usernames
+     or login emails, comma separated) and `INTERNAL_DOMAINS` (extra email
+     domains Emails treats as internal, comma separated)
 5. Deploy. Since this is a **public** repo, never commit real values for
    these — they only ever live in Portainer's environment variables field
    (that's exactly what `.gitignore` excluding `.env` protects against).
@@ -124,8 +172,20 @@ variables as the live stack, plus:
 
 With `SEED_FROM_PREFIX` set, the server ignores the Microsoft 365 settings,
 so staging never emails anyone and Calendar / Emails stay empty there.
-When a change looks right on staging, merge `staging` into `main` and
-redeploy the live stack.
+### How changes go live
+
+1. Every change is made on the **`staging`** branch and pushed.
+2. In Portainer, **Pull and redeploy** `soi-tracker-staging`, and test at
+   `https://<your-private-ip>:8443/`. Staging can't email anyone, and Emails
+   shows a practice email whose Send is a dry run.
+3. Once it's right, `staging` is merged into **`main`** (only with the
+   go-ahead of whoever owns the change), pushed, and the live stack
+   `soi-tracker` is pulled and redeployed.
+4. Check live serves the new `public/js/*.js` (a hard refresh in the
+   browser), and tick the item in `ROADMAP.md`.
+
+Never push straight to `main`, and don't change live data from staging:
+staging writes only under its own S3 prefix.
 
 ## 5. Create logins
 
@@ -158,25 +218,6 @@ checked against the saved logins (at most 30 seconds behind), so deleting a
 login or changing its password in `/admin.html` signs it out everywhere, and
 access changes apply without signing out. Don't tick it on shared computers.
 
-## Layout (the "Daily Edit" look)
-
-A left sidebar (see *Navigation* below), a company switcher (SOI · CAS · RedSun · Nano, plus All for
-full-access accounts) and one tab per department. Every department is an
-editable table; changes save to the server when you leave a field.
-
-- **Procurement, Purchasing, Warehouse:** Task, Part number, Platform,
-  Customer, Obsolete, Due date, Responsible, Done ✓ / ✗, Notes. Pentagon
-  RFQs / Quotes / SOs / POs appear as rows too, and each Pentagon list is
-  still there as its own view with date filters.
-- **IT, Admin, HR, Business Development, US Government:** projects with sub-tasks
-  (a sub-task is a task with `parentId`; deleting a project deletes its
-  sub-tasks).
-- **Accounting & Finance → Finance:** bank balances, daily payments
-  (Approve moves a row to Approved to pay), expected receipts — stored per
-  company in `finance.json` in the bucket. Only Accounting & Finance and
-  full-access logins see it; only managers approve or tick paid / received.
-  Nothing is connected to a bank.
-
 ## Tasks vs projects
 
 Every department has two tabs:
@@ -201,7 +242,7 @@ IT → Tasks (older ones that were are hidden). On IT, **Tasks** and
 sub-tasks under your projects and projects holding one of your sub-tasks.
 Managers can switch between **Mine** and **Everyone's**.
 
-## Performance (Tools → Performance)
+## Performance (HR → Performance)
 
 A quick-view tracker for HR's **Global Performance Management Escalation
 Process**, for the CEO and Leadership. **PerformYard stays the system of
@@ -466,14 +507,16 @@ dark ones like SOI green stay visible.
   the board is the same for all three. Business Dev and US Government have
   no Tasks or SOPs tabs (Tasks stays while older tasks are still there;
   their SOPs are on the SOP page).
-- **Administration** holds IT, Admin, HR and Finance. Each has
-  **Staff-Facing** (empty for now; the forms staff fill in come in Phase 4
-  of `ROADMAP.md`) and **Department-Facing**, which holds the department's
-  existing tabs: IT — Requests, Tasks, Projects, Resolved; HR — Tasks,
-  Projects and **Performance** (for logins with Performance ticked; anyone
-  with Performance but no HR department keeps it under Tools); Finance —
-  Finance, Tasks, Projects, Invoices; Admin — Tasks, Projects. Each sidebar
-  item reopens the department you last used there.
+- **Administration** holds IT, Admin, HR, Finance and Legal. IT, Admin, HR
+  and Finance each have **Staff-Facing** — the forms anyone fills in (IT
+  ticket; admin request; HR issue, leave request and performance comment;
+  reimbursement), rules in `staffforms.js` — and **Department-Facing**,
+  where the department works them: IT — Requests, Projects, Resolved; Admin
+  — Projects; HR — Projects, **Payroll** and **Performance** (for logins
+  with Performance ticked); Finance — Approvals, Transfers and Balances
+  (see *Finance from Pentagon*). **Legal** is
+  described below. Each sidebar item reopens the department you last used
+  there.
 - **SOP** shows each of your departments' quick answers and SOP documents,
   with a tab per department (the same SOPs as the Operations SOPs tabs), and
   a **Change requests** tab (see *SOP change requests*).
@@ -751,12 +794,16 @@ green Warehouse — the key is above the board).
 
 | Column | Colour | Department | Before the file can move on |
 |---|---|---|---|
-| RFQ | blue | Procurement | All sourcing checks ticked (ILS, PartsBase, Locatory, Pentagon) and a manager's ✓ on sourcing |
-| Quoted | blue | Procurement | A price on every line, a manager's ✓ on the quote, and the Sales Order no. from Pentagon |
-| Sale Received | indigo | Purchasing | Red-file checks (sales order, supplier PO, deeper research) and a manager's ✓ on the purchase; export licence field filled on every line |
-| Purchased | indigo | Purchasing | Warehouse location and date in on every line |
-| Item Received | violet | Warehouse | Quality sign-off on every line (warehouse manager) and the export licence field on every line |
-| Item Sent | violet | Warehouse | — |
+| RFQ | black / gray | Procurement | All sourcing checks ticked (ILS, PartsBase, Locatory, Pentagon) and a manager's ✓ on sourcing |
+| Quoted | black / gray | Procurement | A price on every line, a manager's ✓ on the quote, and the Sales Order no. from Pentagon |
+| Sale Received | red | Purchasing | Red-file checks (sales order, supplier PO, deeper research) and a manager's ✓ on the purchase; export licence field filled on every line |
+| Purchased | red | Purchasing | Warehouse location and date in on every line |
+| Item Received | green | Warehouse | Quality sign-off on every line (warehouse manager) and the export licence field on every line |
+| Item Sent | green | Warehouse | — |
+
+The colours follow the paper files: the black file (sourcing) in RFQ and
+Quoted, the red file (the order) in Sale Received and Purchased. The US Gov
+board uses the same colours for its matching columns.
 
 The stage ids stored in `aog_board.json` are unchanged (`rfq`, `quoted`,
 `sale`, `purchased`, `received`, `sent`), so files from the earlier AOG
@@ -777,11 +824,20 @@ board show up as they were; only the labels changed.
   check those sites. The heading box ticks itself when any line item is
   highlighted. (Files from the old board that were highlighted as a whole
   have the mark moved onto their line items the first time they change.)
-- **Filters:** the legend (Due, For approval, Highlighted, Flagged) and
-  person picker apply to the whole board; each column's **Filter** box
+- **No Quote:** every file has a **No Quote** tick (on the file and in its
+  side panel) that anyone who can see the file can set or clear, in any
+  column. It records who ticked it and when (and the file's history says
+  so). The file gets a **No Quote** badge and is greyed out, but stays where
+  it is, and moving it doesn't clear it. A No Quote file isn't Due, Overdue
+  or For approval, and one that was never quoted isn't judged on time
+  (no ✗). Ticking it on a Pentagon file stores the file first, like any
+  other change.
+- **Filters:** the legend (Due, For approval, Highlighted, Flagged, No
+  Quote) and person picker apply to the whole board; each column's **Filter** box
   filters that column by file no., platform, customer, Sales Order no. (from
   Sale Received on), Highlighted Items, due, responsible person and quote
-  on-time, plus **line items: flagged only / unflagged only** — handy in
+  on-time, No Quote (only / hide), plus **line items: flagged only /
+  unflagged only** — handy in
   meetings. **Search** covers the headings and everything inside the files:
   line items, notes, attachment names and links.
 - **Side panel:** click a heading or a line item. It slides in from the
@@ -847,8 +903,8 @@ append-only in the app); writing back to Pentagon (the Transmute API is
 read-only); creating files from Outlook automatically; sending
 quotes and POs from Outlook templates; Teams capture and alerts; Xero
 receivables; carrier tracking; voice-to-text notes (browser dictation sends
-audio to Google — needs a compliant alternative); the US Gov Kanban (Phase 3);
-Administration forms; the master chat (Claude on Bedrock). Until the
+audio to Google — needs a compliant alternative); live ILS search (needs
+SOI's ILS API access). Until the
 compliance lead confirms the storage, don't upload export-controlled
 technical data to case files.
 
@@ -1166,7 +1222,9 @@ These queries run only on the server, never from the browser.
   returns that department's tasks, and `PATCH`/`DELETE` reject anything
   outside it with a 403. A person can't get around this from the browser;
   it isn't just a UI filter like the earlier version.
-- Sessions are JSON Web Tokens, valid for 12 hours, then you sign in again.
+- Sessions are signed tokens (12 hours, or 30 days with Remember me),
+  checked against the saved logins on every request, so a deleted login or
+  a changed password signs out everywhere.
 
 ### Managers vs. everyone else
 
@@ -1196,24 +1254,20 @@ in `PENTAGON_VIEWS` in `index.html`.
 Pentagon is read-only from here, so Assigned to, ✓ / ✗ and notes are stored
 by the tracker (`rfq_marks.json` in the bucket) and only managers can set
 them. Whatever a manager assigns to someone shows up in that person's
-**Mentions You** tab under "Assigned to you", and they get an email if
+**Mentions of You** page under "Assigned to you", and they get an email if
 email is configured. Rows whose Pentagon user matches someone's Pentagon
-code show up in their Mentions You as before.
+code show up in their Mentions of You as before.
 
-### Pentagon rows on the board
+### Pentagon rows in the Tasks tables
 
-Every row of the RFQ, Quote, Sales Order and Purchase Order queries also
-appears as a card on its department's board (configured in
-`pentagonViews.js`, `tasks: true`). Cards aren't copied into `tasks.json`;
-the server builds them from the Pentagon rows (cached for a minute) plus
-their marks, so a card's column and the table's ✓ / ✗ are the same thing.
-A card's owner is whoever a manager assigned it to, or otherwise the login
-whose Pentagon code matches the row's Pentagon user. Regular users only see
-cards that are theirs.
-
-Above the board, **Show:** filters by source (All · Tasks · RFQs · Quotes on
-Procurement; Sales Orders · Purchase Orders on Purchasing), and managers can
-pick one person.
+Every row of the RFQ, Quote, Sales Order and Purchase Order queries
+(`pentagonViews.js`, `tasks: true`) also shows as a row in Procurement's and
+Purchasing's Tasks tables, built by the server from the Pentagon rows
+(cached for a minute) plus their marks; nothing is copied into
+`tasks.json`. Its owner is whoever a manager assigned it to, otherwise the
+login whose Pentagon code matches the row's Pentagon user; regular users
+only see rows that are theirs. On the Operations board the same documents
+appear as files (see *Operations board*).
 
 ### Team breakdown (Overview, managers only)
 
@@ -1228,7 +1282,7 @@ what each query returns (by default the last 14 days).
 
 Anyone in Procurement or Purchasing can open their own department's lists.
 The server only runs the dashboards' own Pentagon queries (listed in
-`pentagonViews.js`, plus `dashboards.mine` for Mentions you, which always
+`pentagonViews.js`, plus `dashboards.mine` for Mentions of You, which always
 uses the signed-in person's own Pentagon code); there's no free-form query
 page. Each query receives `date_from`, `date_to`, `status` and `account_no`
 (blank when not filtered) and a row limit.
@@ -1249,8 +1303,12 @@ department's tab once its link is saved under **Claude projects** in
 - **No password reset self-service.** Only the admin page can set/reset
   passwords — there's no "forgot password" email flow. Fine for a handful
   of internal accounts; add one if this grows past that.
-- **No audit log beyond `createdBy` on each task.** If you need a change
-  history (who moved what, when), that'd be a follow-up addition.
+- **History is kept by the app, not locked.** Board files, SOP requests,
+  Improvements and staff forms keep a who-and-when history, but it lives in
+  the same S3 objects, so someone with bucket access could change it. A
+  tamper-proof audit log needs S3 Object Lock.
+- **Single sign-on.** Logins are the tracker's own, not Microsoft 365 /
+  MFA.
 
 ## Dependencies
 
@@ -1260,13 +1318,62 @@ dependency can't break a redeploy. To update packages on purpose, run
 `npm install` (or `npm update`) locally, check the app still works, and
 commit the new `package-lock.json`.
 
+## AI: Claude on Amazon Bedrock
+
+Two parts of the tracker use Claude: **Emails → Draft with AI** (rules and
+prompt in `replies.js`) and **Chat with AOG** (`chat.js`). Both call Claude
+through **Amazon Bedrock in SOI's own AWS account** (`bedrock.js`), never
+Anthropic's API directly, with the same AWS credentials as S3. There is no
+separate API key.
+
+Setup (AWS admin, once per region):
+
+1. **Amazon Bedrock → Model access** in the stack's region: enable the
+   Anthropic model the tracker uses (default `anthropic.claude-sonnet-5-5`).
+2. Allow `bedrock:InvokeModel` on
+   `arn:aws:bedrock:<region>::foundation-model/<model id>` for the role the
+   tracker runs as (the EC2 instance role, e.g. `EC2S3AccessRole`).
+3. Optional stack variables: `BEDROCK_MODEL_ID` (default
+   `anthropic.claude-sonnet-5-5`) and `BEDROCK_REGION` (default
+   `AWS_REGION`). Redeploy after changing them.
+
+If something is missing, Draft with AI and the chat say in plain words what
+the AWS admin needs to enable. Staging calls Bedrock for real, so test there
+first.
+
+What Claude is sent and told:
+
+- Draft with AI sends only the conversation being replied to (plus the
+  sender's name and your optional note). The chat sends the person's
+  messages and what its tools look up, and every tool goes through the
+  tracker's own routes with that person's sign-in, so it can't see or change
+  more than they can.
+- Both prompts say: never invent or estimate certification numbers,
+  airworthiness approvals (FAA 8130-3, EASA Form 1), NSNs, prices, lead
+  times or export-controlled data (the chat adds CAGE codes and export
+  classifications) — write a `[[…]]` placeholder instead; never state that
+  anything is compliant or airworthy. Email drafts are formal and
+  consistent with FAR/DFARS correspondence. Send refuses an email that still has
+  a `[[…]]` placeholder in it.
+- Compliance signed this off on 3 Nov 2026 (`ROADMAP.md`). Final compliance
+  determinations and airworthiness certifications always go through a
+  qualified person.
+
 ## Local testing (optional, before you deploy)
 
 ```
-cd server
-npm install
-JWT_SECRET=test ADMIN_PASSWORD=test S3_BUCKET=your-bucket AWS_REGION=us-east-1 node index.js
+npm ci
+JWT_SECRET=test ADMIN_PASSWORD=test SERVER_IP=127.0.0.1 S3_BUCKET=your-bucket \
+  S3_PREFIX=soi-tracker/local SEED_FROM_PREFIX=soi-tracker AWS_REGION=us-east-1 node index.js
 ```
 
-Needs valid AWS credentials available locally (e.g. via `aws configure` or
-env vars) to reach S3. Then open `http://localhost:4000`.
+Needs Node 20, `openssl`, and AWS credentials that can read and write the
+bucket (e.g. `aws configure`). With `SEED_FROM_PREFIX` set it reads live
+data but writes only under `soi-tracker/local`, and email stays off. The
+server writes its certificate to `/app/certs`, so on a Mac run it in Docker
+(`docker compose up --build`) or create that folder first. Then open
+`https://localhost/`.
+
+Without Node, the page can be tried against a small mock server that serves
+the repo and answers `/api/*` with made-up data (what the redesign phases
+did); it tests the page, not the server's rules.
