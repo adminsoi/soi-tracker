@@ -286,28 +286,39 @@ served view-only through `sendViewOnly`. Nothing here uses AI.
 
 ## Strategy Meeting (Leadership only)
 
-**Company → Strategy Meeting** is the weekly meeting's agenda. Only logins
-with the **Leadership** tick see it (full access alone isn't enough); every
-route checks that on the server.
+**Company → Strategy Meeting** is one table of topics for the weekly
+meeting. Only logins with the **Leadership** tick see it (full access alone
+isn't enough); every route checks that on the server.
 
-- **+ New meeting** is dated a week after the latest one (any date can be
-  picked) and carries over the agenda items not ticked **Discussed** at the
-  last meeting (untick the box to start empty).
-- Each **agenda item**: topic, owner (a login), minutes, notes, decisions,
-  Discussed, and **action items** (what, who — any login — and a due
-  date). Items can be moved up and removed. **Save agenda** saves the whole
-  meeting; if someone else saved it in the meantime the page reloads it
-  instead of overwriting their change.
-- Each open action item shows on its person's **Mentions of You** (only the
-  item's topic, the action and the due date — not the rest of the
-  meeting), red once overdue, counted in the sidebar badge. They tick it
-  done there; Leadership can tick it on the agenda too. Carried-over items
-  don't copy their action items: those stay on the meeting they were set
-  in until done.
+- Each **row**: topic, owner (a login), **date to discuss**, status (Open,
+  Decided, Closed), the latest note, and **Notes (n)**, which opens the
+  row's running log. Topic, owner, date and status save as soon as they're
+  changed. **+ Add row** is dated for the next meeting (any date can be
+  picked) and can carry a first note.
+- **Filter** by date to discuss (the next meeting, all dates, no date yet,
+  or any date in the table), by status, and by searching topics and notes.
+  The next meeting is the earliest date to discuss from today on, or else
+  the last date moved on by whole weeks.
+- The **log** is like a board file's notes: notes and decisions, newest at
+  the bottom, with who and when. Adding a decision marks an open row
+  Decided. A note **for** someone (with an optional due date) becomes a
+  task for them in their first company and department, so it shows on
+  their Mentions of You and in that department's Tasks; the log shows when
+  it's done.
+- **#strategymeeting or @strategymeeting** in any note saved anywhere in the
+  tracker (any text of a successful save: board file notes, tasks,
+  Administration forms, IT requests, Legal, People, Performance, Finance…)
+  adds a row dated for the next meeting. The tagged line becomes the topic
+  (without the tag) and the first log entry, with where it came from and
+  who wrote it. Each tagged line is added once, however often the note is
+  saved again. Anyone can raise a row this way; only Leadership sees the
+  table, which then quotes that line, so think before tagging an HR or Legal
+  note.
 
-Stored in `strategy.json` (rules in `strategy.js`). Don't type government
-client details, contract terms or supplier prices into the agenda. Nothing
-here uses AI.
+Stored in `strategy.json` (`topics`, `raised`; rules in `strategy.js`). The
+first version's meeting agendas (`meetings`) stay in the file but aren't
+shown. Don't type government client details, contract terms or supplier
+prices into it. Nothing here uses AI.
 
 ## Calendar
 
@@ -463,7 +474,8 @@ dark ones like SOI green stay visible.
 - **SOP** shows each of your departments' quick answers and SOP documents,
   with a tab per department (the same SOPs as the Operations SOPs tabs), and
   a **Change requests** tab (see *SOP change requests*).
-- **Strategy Meeting** is the weekly agenda (see *Strategy Meeting*).
+- **Strategy Meeting** is the table of topics for the weekly meeting (see
+  *Strategy Meeting*).
   **Documents** is the S3 file manager (see below). **People** is for
   leadership logins only (see below).
 - **Department Chat** (was Master Chat) describes the planned company-wide

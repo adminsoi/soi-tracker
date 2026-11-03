@@ -208,6 +208,16 @@ process.on("uncaughtException", (err) => {
 
 const app = express();
 app.use(express.json());
+// Strategy Meeting: a successful save whose text has #strategymeeting or
+// @strategymeeting adds a row there (raiseFromNotes, with the routes).
+app.use("/api", (req, res, next) => {
+  if (!["POST", "PUT", "PATCH"].includes(req.method) || /^\/(strategy|login|admin)(\/|$)/.test(req.path)) return next();
+  const lines = req.body && !Buffer.isBuffer(req.body) ? strategy.taggedLines(req.body) : [];
+  if (lines.length) res.on("finish", () => {
+    if (res.statusCode < 400 && req.user) raiseFromNotes(req, lines).catch((err) => console.error("Strategy Meeting row from a note:", err.message));
+  });
+  next();
+});
 
 // Wraps an async route handler so a thrown/rejected error becomes a JSON
 // 500 response instead of a hung connection or a crashed process.
@@ -6065,113 +6075,161 @@ app.get(
 );
 
 // ---------- Strategy Meeting ----------
-// Company → Strategy Meeting (rules in strategy.js): weekly meetings, each
-// an agenda of items with an owner, minutes, notes, decisions and action
-// items. Leadership only on every route, except that the person an action
-// item is for sees it on Mentions of You and ticks it done.
+// Company → Strategy Meeting (rules in strategy.js): one table of topics,
+// each with a date to discuss it, an owner, a status and a running log of
+// notes and decisions. Leadership only on every route. A note assigned to
+// someone becomes a task for them (so it shows on their Mentions of You),
+// like a board file's next step.
 function strategyOnly(req, res, next) {
   if (req.user.leadership) return next();
   res.status(403).json({ error: "The Strategy Meeting is for Leadership logins" });
 }
 async function strategyLogins() {
-  return (await getUsers()).map(normalizeUser).map((u) => u.username).sort((a, b) => a.localeCompare(b));
+  return (await getUsers()).map(normalizeUser);
 }
-const loginFinder = (names) => (v) => names.find((n) => sameUser(n, v)) || "";
+const loginFinder = (logins) => (v) => (logins.find((u) => sameUser(u.username, v)) || {}).username || "";
+const strategyRow = (t) => Object.assign({ owner: "", discussOn: "", status: "open", log: [] }, t);
 
 app.get(
   "/api/strategy",
   authMiddleware,
   strategyOnly,
   asyncHandler(async (req, res) => {
-    const doc = strategy.shape(await getStrategy());
-    res.json({ meetings: doc.meetings.slice().sort(strategy.byDateDesc), nextDate: strategy.nextDate(doc, officeToday()), logins: await strategyLogins() });
+    const [doc, logins, tasks] = await Promise.all([getStrategy(), strategyLogins(), getTasks()]);
+    strategy.shape(doc);
+    // Assigned notes show whether their task is done yet.
+    const taskDone = Object.fromEntries(tasks.filter((t) => t.strategy).map((t) => [t.id, t.status === "done"]));
+    const topics = doc.topics.map(strategyRow).map((t) => Object.assign({}, t, { log: t.log.map((e) => (e.taskId ? Object.assign({}, e, { taskDone: !!taskDone[e.taskId], taskGone: !(e.taskId in taskDone) }) : e)) }));
+    const today = officeToday();
+    res.json({ topics, today, nextDate: strategy.nextDate(doc, today), logins: logins.map((u) => u.username).sort((a, b) => a.localeCompare(b)) });
   })
 );
-// A new meeting; agenda items not marked discussed at the last one carry over.
+// A new row, optionally with its first note.
 app.post(
-  "/api/strategy/meetings",
-  authMiddleware,
-  strategyOnly,
-  asyncHandler(async (req, res) => {
-    const b = req.body || {};
-    const date = String(b.date || "");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "Pick the meeting date" });
-    const m = await withStrategy((doc) => {
-      strategy.shape(doc);
-      const meeting = { id: newId(), date, title: forms.text(b.title, 120), items: b.carry === false ? [] : strategy.carryOver(doc, date, newId), rev: 1, createdBy: req.user.username, createdAt: Date.now() };
-      doc.meetings.push(meeting);
-      return meeting;
-    });
-    res.status(201).json(m);
-  })
-);
-// Save the whole meeting. `rev` must match, so two people editing at once
-// don't overwrite each other.
-app.put(
-  "/api/strategy/meetings/:id",
+  "/api/strategy/topics",
   authMiddleware,
   strategyOnly,
   asyncHandler(async (req, res) => {
     const b = req.body || {};
     const isLogin = loginFinder(await strategyLogins());
-    const out = await withStrategy((doc) => {
-      const m = strategy.shape(doc).meetings.find((x) => x.id === req.params.id);
-      if (!m) return { status: 404, error: "That meeting isn't here any more" };
-      if (+b.rev !== (m.rev || 1)) return { status: 409, error: "Someone else changed this meeting — it has been reloaded. Make your change again." };
-      const { meeting, error } = strategy.cleanMeeting(b, m, isLogin, newId);
-      if (error) return { status: 400, error };
-      Object.assign(m, meeting, { rev: (m.rev || 1) + 1, updatedBy: req.user.username, updatedAt: Date.now() });
-      return { meeting: m };
+    const { out, error } = strategy.cleanTopic(Object.assign({ topic: "" }, b, { status: "open" }), isLogin);
+    if (error) return res.status(400).json({ error });
+    const note = String(b.note == null ? "" : b.note).trim().slice(0, 4000);
+    const row = Object.assign({ id: newId(), owner: "", discussOn: "", raisedBy: req.user.username, at: Date.now(), log: [] }, out);
+    if (note) row.log.push({ id: newId(), kind: "note", text: note, by: req.user.username, at: Date.now() });
+    await withStrategy((doc) => { strategy.shape(doc).topics.push(row); });
+    res.status(201).json(row);
+  })
+);
+app.patch(
+  "/api/strategy/topics/:id",
+  authMiddleware,
+  strategyOnly,
+  asyncHandler(async (req, res) => {
+    const isLogin = loginFinder(await strategyLogins());
+    const { out, error } = strategy.cleanTopic(req.body || {}, isLogin);
+    if (error) return res.status(400).json({ error });
+    const row = await withStrategy((doc) => {
+      const t = strategy.shape(doc).topics.find((x) => x.id === req.params.id);
+      if (!t) return null;
+      Object.assign(t, out, { updatedBy: req.user.username, updatedAt: Date.now() });
+      return strategyRow(t);
     });
-    if (out.error) return res.status(out.status).json({ error: out.error });
-    res.json(out.meeting);
+    if (!row) return res.status(404).json({ error: "That row isn't here any more" });
+    res.json(row);
   })
 );
 app.delete(
-  "/api/strategy/meetings/:id",
+  "/api/strategy/topics/:id",
   authMiddleware,
   strategyOnly,
   asyncHandler(async (req, res) => {
     const ok = await withStrategy((doc) => {
-      const list = strategy.shape(doc).meetings;
+      const list = strategy.shape(doc).topics;
       const i = list.findIndex((x) => x.id === req.params.id);
       if (i === -1) return false;
       list.splice(i, 1);
       return true;
     });
-    if (!ok) return res.status(404).json({ error: "That meeting isn't here any more" });
+    if (!ok) return res.status(404).json({ error: "That row isn't here any more" });
     res.status(204).end();
   })
 );
-// Mentions of You: open action items for this login. Only the item's topic,
-// the action and its due date leave the meeting.
-app.get(
-  "/api/strategy/mine",
-  authMiddleware,
-  asyncHandler(async (req, res) => {
-    const doc = strategy.shape(await getStrategy());
-    res.json({ items: strategy.allActions(doc).filter((x) => !x.action.done && sameUser(x.action.person, req.user.username))
-      .map((x) => ({ id: x.action.id, text: x.action.text, due: x.action.due, topic: x.item.topic, meetingDate: x.meeting.date }))
-      .sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999")) });
-  })
-);
-// Tick an action item done (or not done): the person it's for, or Leadership.
+// Add to a row's running log: a note or a decision, optionally for someone
+// with a due date — that becomes a task for them in their first company and
+// department (Mentions of You, and that department's Tasks).
 app.post(
-  "/api/strategy/actions/:id/done",
+  "/api/strategy/topics/:id/log",
   authMiddleware,
+  strategyOnly,
   asyncHandler(async (req, res) => {
-    const done = !!(req.body || {}).done;
-    const out = await withStrategy((doc) => {
-      const x = strategy.allActions(doc).find((y) => y.action.id === req.params.id);
-      if (!x || (!req.user.leadership && !sameUser(x.action.person, req.user.username))) return null;
-      x.action.done = done;
-      if (done) { x.action.doneAt = Date.now(); x.action.doneBy = req.user.username; } else { delete x.action.doneAt; delete x.action.doneBy; }
-      return { id: x.action.id, done };
+    const logins = await strategyLogins();
+    const { out, error } = strategy.cleanEntry(req.body || {}, loginFinder(logins));
+    if (error) return res.status(400).json({ error });
+    let task = null;
+    const row = await withStrategy((doc) => {
+      const t = strategy.shape(doc).topics.find((x) => x.id === req.params.id);
+      if (!t) return null;
+      const e = Object.assign({ id: newId(), by: req.user.username, at: Date.now() }, out);
+      if (out.for) {
+        const who = logins.find((u) => u.username === out.for);
+        task = { id: newId(), title: `Strategy Meeting: ${t.topic}: ${out.text.split("\n")[0]}`.slice(0, 200), company: who.companies[0] || DEFAULT_COMPANY,
+          department: who.departments[0] || "", status: "todo", priority: out.due ? "high" : "medium", owner: who.username, dueDate: out.due || "",
+          notes: `From the Strategy Meeting (${t.topic}), by ${req.user.username}:\n${out.text}`, createdAt: Date.now(), createdBy: req.user.username, kind: "task", strategy: t.id };
+        e.taskId = task.id;
+      }
+      t.log = Array.isArray(t.log) ? t.log : [];
+      t.log.push(e);
+      if (e.kind === "decision" && (t.status || "open") === "open") t.status = "decided";
+      t.updatedBy = req.user.username; t.updatedAt = Date.now();
+      return strategyRow(t);
     });
-    if (!out) return res.status(404).json({ error: "That action item isn't yours or isn't here any more" });
-    res.json(out);
+    if (!row) return res.status(404).json({ error: "That row isn't here any more" });
+    if (task) {
+      await withTasks((tasks) => { tasks.unshift(task); });
+      notifyOwner(task).catch(() => {});
+      row.log = row.log.map((e) => (e.taskId === task.id ? Object.assign({}, e, { taskDone: false }) : e));
+    }
+    res.status(201).json(row);
   })
 );
+
+// #strategymeeting / @strategymeeting in any note saved anywhere in the
+// tracker (any text field of a successful save) adds a row dated for the
+// next meeting, quoting the line and saying where it came from. Each tagged
+// line is added once, however often the note is saved again.
+async function noteSource(req) {
+  const seg = req.path.split("/").filter(Boolean);
+  if (seg[0] === "board" && seg[1]) {
+    const cfg = boardOf(req);
+    const c = ((await getBoard(cfg.store)).cards || []).find((x) => x.id === seg[1]);
+    return `${cfg.name}${c ? " · " + cardLabel(c) : ""}`;
+  }
+  if (seg[0] === "tasks") {
+    const t = seg[1] && (await getTasks()).find((x) => x.id === seg[1]);
+    const title = t ? taskLabel(t) : (req.body || {}).title;
+    return `Task${title ? " · " + String(title).slice(0, 120) : ""}`;
+  }
+  const NAMES = { "staff-forms": "Administration form", performance: "Performance", people: "People", legal: "Legal", finance: "Finance",
+    "rfq-marks": "Pentagon list", qbr: "Quarterly review", "it-requests": "IT request", "it-notebook": "IT notebook", sops: "SOP",
+    "sop-requests": "SOP change request", documents: "Documents", payroll: "Payroll", calendar: "Calendar" };
+  return NAMES[seg[0]] || "A note";
+}
+async function raiseFromNotes(req, lines) {
+  const source = await noteSource(req).catch(() => "A note");
+  const today = officeToday();
+  await withStrategy((doc) => {
+    strategy.shape(doc);
+    const date = strategy.nextDate(doc, today);
+    for (const l of lines) {
+      const key = strategy.raisedKey(l.line);
+      if (doc.raised.includes(key)) continue;
+      strategy.remember(doc, key);
+      doc.topics.push({ id: newId(), topic: l.topic, owner: "", discussOn: date, status: "open", raisedBy: req.user.username, at: Date.now(), source,
+        log: [{ id: newId(), kind: "note", text: l.line, by: req.user.username, at: Date.now(), source }] });
+    }
+  });
+}
 
 if (itRequestsConfigured) {
   setTimeout(syncItRequests, 15 * 1000);

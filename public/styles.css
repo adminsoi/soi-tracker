@@ -822,16 +822,20 @@
   html[data-theme="dark"] .lg-expired { background: rgba(230, 90, 80, .18); color: #ff9d92; }
   html[data-theme="dark"] .lg-soon { background: rgba(230, 160, 60, .17); color: #f3c47e; }
   /* Strategy Meeting (strategy.js) and SOP change requests (sops.js) */
-  .st-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .st-num { width: 22px; font-weight: 700; color: var(--muted); }
-  .st-row input, .st-row select, .st-actions input, .st-actions select { font-size: 13px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: inherit; }
-  .st-topic { flex: 1 1 260px; min-width: 0; font-weight: 600; }
-  .st-min { width: 70px; }
-  .st-actions { width: 100%; margin-bottom: 6px; }
-  .st-actions td:nth-child(2) input { width: 100%; min-width: 160px; }
-  .st-done td { opacity: .6; }
-  .st-done td:nth-child(2) input { text-decoration: line-through; }
+  .sm-table input, .sm-table select { font-size: 12px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: inherit; }
+  .sm-table .sm-topic { width: 100%; min-width: 200px; font-weight: 600; }
+  .sm-latest { max-width: 320px; font-size: 13px; }
+  .sm-closed td { opacity: .55; }
+  .sm-log-row > td { background: rgba(0, 0, 0, .025); }
+  .sm-log { list-style: none; margin: 4px 0 12px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .sm-log li { border-left: 3px solid var(--line); padding: 4px 0 4px 12px; }
+  .sm-log li.sm-decision { border-left-color: #2f6b2a; }
+  .sm-log-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; font-size: 13px; }
+  .sm-add { display: flex; flex-direction: column; gap: 8px; max-width: 720px; }
+  .sm-add textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); color: inherit; font: inherit; }
+  .sm-add-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .sm-add-row select, .sm-add-row input { font-size: 12px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: inherit; }
+  html[data-theme="dark"] .sm-log-row > td { background: rgba(255, 255, 255, .03); }
   .sop-ok { background: #e3efe0; color: #2f6b2a; }
   html[data-theme="dark"] .sop-ok { background: rgba(110, 190, 100, .17); color: #a6dc9c; }
-  @media (max-width: 640px) { .st-actions thead { display: none; } .st-actions tr { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; padding: 6px 0; } }
   html[data-theme="dark"] .lg-row-expired td, html[data-theme="dark"] li.lg-row-expired { background: rgba(230, 90, 80, .10); }

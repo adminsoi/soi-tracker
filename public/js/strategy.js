@@ -1,195 +1,173 @@
 "use strict";
-// Company → Strategy Meeting: the weekly meeting's agenda.
+// Company → Strategy Meeting: one table of topics for the weekly meeting.
 // The dashboard's scripts share one global scope and load in the order
 // index.html lists them; functions called while a file loads must be
 // defined in that file or an earlier one.
 
 // ---- Strategy Meeting ----
-// Leadership only (the server checks every request). One meeting a week,
-// each an agenda of items: topic, owner, minutes, notes, decisions and
-// action items. A new meeting is dated a week after the last and carries
-// over the items not marked discussed. Each action item shows on its
-// person's Mentions of You until it's ticked done.
-var st = { data: null, at: 0, loading: false, error: "", sel: "", draft: null, dirty: false, adding: false, newDate: "", carry: true };
+// Leadership only (the server checks every request). Each row is a topic
+// with an owner, a date to discuss it and a status, plus a running log of
+// notes and decisions like a board file's notes. A note can be for someone
+// with a due date: it becomes a task for them (Mentions of You). Writing
+// #strategymeeting or @strategymeeting in any note in the tracker adds a
+// row here, dated for the next meeting.
+var sm = { data: null, at: 0, loading: false, error: "", date: "next", status: "active", q: "", open: {}, adding: false, form: {}, entry: {} };
 function loadStrategy() {
-  if (st.loading) return;
-  st.loading = true;
-  api("/api/strategy").then(function (d) { st.data = d; st.error = ""; stPick(st.sel); }, function (err) { st.error = err.message; })
-    .then(function () { st.loading = false; st.at = Date.now(); requestRender(); });
+  if (sm.loading) return;
+  sm.loading = true;
+  api("/api/strategy").then(function (d) { sm.data = d; sm.error = ""; }, function (err) { sm.error = err.message; })
+    .then(function () { sm.loading = false; sm.at = Date.now(); requestRender(); });
 }
-// Show a meeting (the newest when none is picked); unsaved changes are kept
-// only for the meeting being edited.
-function stPick(id) {
-  var list = st.data.meetings;
-  var m = list.filter(function (x) { return x.id === id; })[0] || list[0] || null;
-  if (st.dirty && st.draft && m && m.id === st.draft.id) return;
-  st.sel = m ? m.id : "";
-  st.draft = m ? JSON.parse(JSON.stringify(m)) : null;
-  st.dirty = false;
+function smReload() { sm.at = 0; loadStrategy(); }
+function smDateLabel(d) {
+  if (!d) return "No date yet";
+  var t = new Date(d + "T12:00:00");
+  return isNaN(t) ? d : t.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 }
-function stLoginOpts(sel, none) {
-  var l = st.data.logins;
+function smLoginOpts(sel, none) {
+  var l = sm.data.logins;
   return '<option value="">' + E(none) + "</option>" + (sel && l.indexOf(sel) === -1 ? [sel] : []).concat(l).map(function (u) {
     return '<option value="' + E(u) + '"' + (sameUser(u, sel) ? " selected" : "") + ">" + E(u) + "</option>";
   }).join("");
 }
-function stDateLabel(d) {
-  var t = new Date(d + "T12:00:00");
-  return isNaN(t) ? d : t.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
-}
+var SM_STATUS = [["open", "Open"], ["decided", "Decided"], ["closed", "Closed"]];
+var SM_SHOW = [["active", "Open + decided"], ["open", "Open"], ["decided", "Decided"], ["closed", "Closed"], ["all", "All"]];
 
 function renderStrategy() {
   setBreadcrumb(["Company", "Strategy Meeting"]);
   var head = '<div class="intro"><div><div class="eyebrow">Company</div><h1>Strategy Meeting</h1>' +
-    "<p>The weekly meeting's agenda: each item's owner, time, notes, decisions and action items. Action items show on the person's Mentions of You until they're done.</p></div></div>";
+    "<p>Every topic for the weekly meeting in one table, with a date to discuss it and a running log of notes and decisions. " +
+    "Write <b>#strategymeeting</b> or <b>@strategymeeting</b> in a note anywhere in the tracker to add it here for the next meeting.</p></div></div>";
   if (!me.leadership) return head + '<div class="empty">The Strategy Meeting is for Leadership logins.</div>';
-  if (!st.loading && (st.error ? Date.now() - st.at > 15000 : !st.data || (!st.dirty && Date.now() - st.at > 60000))) loadStrategy();
-  if (st.error && !st.data) return head + '<div class="banner">' + E(st.error) + "</div>";
-  if (!st.data) return head + '<div class="empty">Loading meetings…</div>';
-  var d = st.data, m = st.draft;
+  if (!sm.loading && (sm.error ? Date.now() - sm.at > 15000 : !sm.data || Date.now() - sm.at > 60000)) loadStrategy();
+  if (sm.error && !sm.data) return head + '<div class="banner">' + E(sm.error) + "</div>";
+  if (!sm.data) return head + '<div class="empty">Loading the Strategy Meeting…</div>';
+  var d = sm.data;
+  var dates = [];
+  d.topics.forEach(function (t) { if (t.discussOn && dates.indexOf(t.discussOn) === -1) dates.push(t.discussOn); });
+  dates.sort().reverse();
+  if (sm.date !== "next" && sm.date !== "all" && sm.date !== "none" && dates.indexOf(sm.date) === -1) sm.date = "next";
+  var want = sm.date === "next" ? d.nextDate : sm.date;
+  var q = sm.q.trim().toLowerCase();
+  var rows = d.topics.filter(function (t) {
+    if (sm.date === "none" ? t.discussOn : sm.date !== "all" && t.discussOn !== want) return false;
+    if (sm.status === "active" ? t.status === "closed" : sm.status !== "all" && t.status !== sm.status) return false;
+    return !q || [t.topic, t.owner, t.source || ""].concat(t.log.map(function (e) { return e.text; })).join(" ").toLowerCase().indexOf(q) !== -1;
+  }).sort(function (a, b) { return (a.discussOn || "9999").localeCompare(b.discussOn || "9999") || a.at - b.at; });
+  var undated = d.topics.filter(function (t) { return !t.discussOn && t.status !== "closed"; }).length;
   var bar = '<div class="table-toolbar">' +
-    (d.meetings.length ? '<label class="small-note" for="stPick">Meeting</label><select id="stPick">' + d.meetings.map(function (x) {
-      return '<option value="' + E(x.id) + '"' + (x.id === st.sel ? " selected" : "") + ">" + E(stDateLabel(x.date) + (x.title ? " · " + x.title : "")) + "</option>";
-    }).join("") + "</select>" : "") +
-    '<span class="grow" style="flex:1"></span><button type="button" class="primary" data-st-new>+ New meeting</button></div>';
-  var add = st.adding ? '<div class="card" style="padding:16px 18px;margin-bottom:14px;"><div class="card-label">New meeting</div>' +
-    '<div class="grid-2" style="gap:0 16px;"><div class="nb-field"><label for="stNewDate">Date</label><input type="date" id="stNewDate" value="' + E(st.newDate || d.nextDate) + '"></div>' +
-    '<div class="nb-field"><label><input type="checkbox" id="stCarry"' + (st.carry ? " checked" : "") + "> Carry over items not marked discussed at the last meeting</label></div></div>" +
-    '<div class="nb-foot"><button type="button" class="primary" data-st-create>Create</button><button type="button" class="text-button" data-st-cancel>Cancel</button></div></div>' : "";
-  if (!m) return head + bar + add + '<div class="empty">No meetings yet. Start one with + New meeting.</div>';
-  var total = m.items.reduce(function (s, it) { return s + (+it.minutes || 0); }, 0);
-  var open = 0;
-  m.items.forEach(function (it) { it.actions.forEach(function (a) { if (!a.done) open++; }); });
-  return head + bar + add +
-    '<div class="card" style="padding:16px 18px;margin-bottom:14px;"><div class="grid-2" style="gap:0 16px;">' +
-    '<div class="nb-field"><label for="stDate">Date</label><input type="date" id="stDate" data-st-m="date" value="' + E(m.date) + '"></div>' +
-    '<div class="nb-field"><label for="stTitle">Title (optional)</label><input id="stTitle" data-st-m="title" value="' + E(m.title || "") + '" placeholder="e.g. Q1 planning" autocomplete="off"></div></div>' +
-    '<p class="small-note" style="margin:0;">' + m.items.length + " item" + (m.items.length === 1 ? "" : "s") + " · " + total + " minutes · " + open + " open action item" + (open === 1 ? "" : "s") +
-    (m.updatedBy ? " · Last saved by " + E(m.updatedBy) + " " + E(new Date(m.updatedAt).toLocaleString()) : " · Started by " + E(m.createdBy || "")) + "</p></div>" +
-    (m.items.length ? m.items.map(stItem).join("") : '<div class="empty">No agenda items yet.</div>') +
-    '<div class="nb-foot" style="margin-top:12px;"><button type="button" data-st-additem>+ Agenda item</button><span class="grow" style="flex:1"></span>' +
-    '<span class="small-note" id="stDirty">' + (st.dirty ? "Unsaved changes" : "") + "</span>" +
-    '<button type="button" class="primary" data-st-save>Save agenda</button><button type="button" class="text-button" data-st-revert>Undo changes</button>' +
-    '<button type="button" class="text-button danger" data-st-del>Delete meeting</button></div>' +
-    '<p class="small-note">Write notes and decisions in plain words. Don\'t put government client details, contract terms or supplier prices here.</p>';
+    '<label class="small-note" for="smDate">Date to discuss</label><select id="smDate">' +
+    '<option value="next"' + (sm.date === "next" ? " selected" : "") + ">Next meeting · " + E(smDateLabel(d.nextDate)) + "</option>" +
+    '<option value="all"' + (sm.date === "all" ? " selected" : "") + ">All dates</option>" +
+    '<option value="none"' + (sm.date === "none" ? " selected" : "") + ">No date yet (" + undated + ")</option>" +
+    dates.map(function (x) { return '<option value="' + E(x) + '"' + (sm.date === x ? " selected" : "") + ">" + E(smDateLabel(x)) + "</option>"; }).join("") + "</select>" +
+    '<div class="seg" aria-label="Status">' + SM_SHOW.map(function (x) {
+      return '<button type="button" data-sm-show="' + x[0] + '" class="' + (sm.status === x[0] ? "active" : "") + '">' + E(x[1]) + "</button>";
+    }).join("") + "</div>" +
+    '<input type="search" id="smFind" placeholder="Search topics and notes" value="' + E(sm.q) + '" aria-label="Search topics and notes">' +
+    '<span class="grow" style="flex:1"></span><button type="button" class="primary" data-sm-add>+ Add row</button></div>';
+  var add = sm.adding ? '<div class="card" style="padding:16px 18px;margin-bottom:14px;"><div class="card-label">New row</div>' +
+    '<div class="nb-field"><label for="smNewTopic">Topic</label><input id="smNewTopic" data-sm-new="topic" value="' + E(sm.form.topic || "") + '" autocomplete="off"></div>' +
+    '<div class="grid-2" style="gap:0 16px;"><div class="nb-field"><label for="smNewOwner">Owner</label><select id="smNewOwner" data-sm-new="owner">' + smLoginOpts(sm.form.owner, "Nobody yet") + "</select></div>" +
+    '<div class="nb-field"><label for="smNewDate">Date to discuss</label><input type="date" id="smNewDate" data-sm-new="discussOn" value="' + E("discussOn" in sm.form ? sm.form.discussOn : d.nextDate) + '"></div></div>' +
+    '<div class="nb-field"><label for="smNewNote">First note (optional)</label><textarea id="smNewNote" rows="3" data-sm-new="note">' + E(sm.form.note || "") + "</textarea></div>" +
+    '<div class="nb-foot"><button type="button" class="primary" data-sm-create>Add row</button><button type="button" class="text-button" data-sm-cancel>Cancel</button></div></div>' : "";
+  var table = rows.length ? '<div class="table-wrap"><table class="wide sm-table"><thead><tr><th>Topic</th><th>Owner</th><th>Date to discuss</th><th>Status</th><th>Latest</th><th></th></tr></thead><tbody>' +
+    rows.map(smRow).join("") + "</tbody></table></div>"
+    : '<div class="card empty">' + (d.topics.length ? "Nothing matches. Try All dates or another status." : "No topics yet. Add a row, or write #strategymeeting in a note anywhere in the tracker.") + "</div>";
+  return head + bar + add + table +
+    '<p class="small-note">Decisions mark a row Decided. A note for someone becomes a task for them (their Mentions of You, and their department\'s Tasks). Don\'t type government client details, contract terms or supplier prices here.</p>';
 }
-function stItem(it, i) {
-  var p = "items." + i + ".";
-  return '<div class="card st-item" style="padding:14px 16px;margin-bottom:10px;">' +
-    '<div class="st-row"><span class="st-num">' + (i + 1) + "</span>" +
-    '<input class="st-topic" data-st-f="' + p + 'topic" value="' + E(it.topic) + '" placeholder="Topic" aria-label="Topic of item ' + (i + 1) + '" autocomplete="off">' +
-    '<select data-st-f="' + p + 'owner" aria-label="Owner of item ' + (i + 1) + '">' + stLoginOpts(it.owner, "Owner…") + "</select>" +
-    '<input type="number" min="0" max="600" class="st-min" data-st-f="' + p + 'minutes" value="' + E(it.minutes || "") + '" placeholder="min" aria-label="Minutes for item ' + (i + 1) + '">' +
-    '<label class="small-note"><input type="checkbox" data-st-f="' + p + 'discussed"' + (it.discussed ? " checked" : "") + "> Discussed</label>" +
-    '<button type="button" class="text-button" data-st-up="' + i + '" aria-label="Move item ' + (i + 1) + ' up"' + (i ? "" : " disabled") + ">↑</button>" +
-    '<button type="button" class="text-button danger" data-st-rmitem="' + i + '">Remove</button></div>' +
-    (it.carriedFrom ? '<p class="small-note" style="margin:4px 0 0 30px;">Carried over from ' + E(stDateLabel(it.carriedFrom)) + "</p>" : "") +
-    '<div class="grid-2" style="gap:0 16px;margin-top:8px;"><div class="nb-field"><label>Notes</label><textarea rows="3" data-st-f="' + p + 'notes">' + E(it.notes || "") + "</textarea></div>" +
-    '<div class="nb-field"><label>Decisions</label><textarea rows="3" data-st-f="' + p + 'decisions">' + E(it.decisions || "") + "</textarea></div></div>" +
-    '<div class="card-label" style="margin-top:4px;">Action items</div>' +
-    (it.actions.length ? '<table class="plain st-actions"><thead><tr><th>Done</th><th>Action</th><th>Who</th><th>Due</th><th></th></tr></thead><tbody>' + it.actions.map(function (a, j) {
-      var q = p + "actions." + j + ".";
-      return '<tr class="' + (a.done ? "st-done" : "") + '"><td>' + (a.id ? '<input type="checkbox" data-st-done="' + E(a.id) + '"' + (a.done ? " checked" : "") + ' aria-label="Done">' : '<span class="small-note" title="Save the agenda first">—</span>') + "</td>" +
-        '<td><input data-st-f="' + q + 'text" value="' + E(a.text) + '" placeholder="What needs doing" autocomplete="off"></td>' +
-        '<td><select data-st-f="' + q + 'person">' + stLoginOpts(a.person, "Who…") + "</select></td>" +
-        '<td><input type="date" data-st-f="' + q + 'due" value="' + E(a.due || "") + '"></td>' +
-        '<td><button type="button" class="text-button danger" data-st-rmact="' + i + "." + j + '">Remove</button>' + (a.done && a.doneBy ? '<span class="small-note"> ✓ ' + E(a.doneBy) + "</span>" : "") + "</td></tr>";
-    }).join("") + "</tbody></table>" : "") +
-    '<button type="button" class="text-button" data-st-addact="' + i + '">+ Action item</button></div>';
+function smRow(t) {
+  var last = t.log[t.log.length - 1], open = !!sm.open[t.id];
+  var html = '<tr class="' + (t.status === "closed" ? "sm-closed" : "") + '">' +
+    '<td><input class="sm-topic" data-sm-edit="topic" data-id="' + E(t.id) + '" value="' + E(t.topic) + '" aria-label="Topic">' +
+    (t.source ? '<span class="co-note">From ' + E(t.source) + " · " + E(t.raisedBy || "") + "</span>" : "") + "</td>" +
+    '<td><select data-sm-edit="owner" data-id="' + E(t.id) + '" aria-label="Owner of ' + E(t.topic) + '">' + smLoginOpts(t.owner, "Nobody") + "</select></td>" +
+    '<td><input type="date" data-sm-edit="discussOn" data-id="' + E(t.id) + '" value="' + E(t.discussOn || "") + '" aria-label="Date to discuss ' + E(t.topic) + '"></td>' +
+    '<td><select data-sm-edit="status" data-id="' + E(t.id) + '" aria-label="Status of ' + E(t.topic) + '">' + SM_STATUS.map(function (s) {
+      return '<option value="' + s[0] + '"' + (t.status === s[0] ? " selected" : "") + ">" + s[1] + "</option>";
+    }).join("") + "</select></td>" +
+    '<td class="sm-latest">' + (last ? (last.kind === "decision" ? '<span class="lg-pill sop-ok">Decision</span> ' : "") + E(last.text.split("\n")[0].slice(0, 120)) +
+      '<span class="co-note">' + E(last.by) + " · " + E(new Date(last.at).toLocaleDateString()) + "</span>" : '<span class="small-note">No notes yet</span>') + "</td>" +
+    '<td style="white-space:nowrap;"><button type="button" data-sm-open="' + E(t.id) + '" aria-expanded="' + open + '">' + (open ? "Close" : "Notes (" + t.log.length + ")") + "</button></td></tr>";
+  if (open) html += '<tr class="sm-log-row"><td colspan="6">' + smLog(t) + "</td></tr>";
+  return html;
 }
-function stSet(path, v) {
-  var keys = path.split("."), o = st.draft;
-  for (var i = 0; i < keys.length - 1; i++) o = o[keys[i]];
-  var k = keys[keys.length - 1];
-  o[k] = k === "discussed" ? !!v : k === "minutes" ? (+v || 0) : v;
-  st.dirty = true;
-  var el = $("#stDirty"); if (el) el.textContent = "Unsaved changes";
+// The running log and the form to add to it.
+function smLog(t) {
+  var f = sm.entry[t.id] || (sm.entry[t.id] = { kind: "note" });
+  var log = t.log.length ? '<ul class="sm-log">' + t.log.map(function (e) {
+    return '<li class="' + (e.kind === "decision" ? "sm-decision" : "") + '">' +
+      '<div class="sm-log-head">' + (e.kind === "decision" ? '<span class="lg-pill sop-ok">Decision</span>' : "") +
+      "<b>" + E(e.by) + '</b><span class="small-note">' + E(new Date(e.at).toLocaleString()) + (e.source ? " · from " + E(e.source) : "") + "</span>" +
+      (e.for ? '<span class="lg-pill ' + (e.taskDone ? "sop-ok" : "lg-soon") + '">For ' + E(e.for) + (e.due ? " · due " + E(e.due) : "") + (e.taskDone ? " · done" : e.taskGone ? " · task removed" : "") + "</span>" : "") +
+      '</div><div class="nb-read">' + nbFormat(e.text) + "</div></li>";
+  }).join("") + "</ul>" : '<p class="small-note">No notes yet.</p>';
+  return log + '<div class="sm-add">' +
+    '<div class="seg"><button type="button" data-sm-kind="note|' + E(t.id) + '" class="' + (f.kind === "note" ? "active" : "") + '">Note</button>' +
+    '<button type="button" data-sm-kind="decision|' + E(t.id) + '" class="' + (f.kind === "decision" ? "active" : "") + '">Decision</button></div>' +
+    '<textarea rows="3" data-sm-entry="text" data-id="' + E(t.id) + '" placeholder="' + (f.kind === "decision" ? "What was decided" : "Add a note") + '" aria-label="New note">' + E(f.text || "") + "</textarea>" +
+    '<div class="sm-add-row"><label class="small-note">For <select data-sm-entry="for" data-id="' + E(t.id) + '">' + smLoginOpts(f.for, "Nobody (just a note)") + "</select></label>" +
+    '<label class="small-note">Due <input type="date" data-sm-entry="due" data-id="' + E(t.id) + '" value="' + E(f.due || "") + '"></label>' +
+    '<span class="grow" style="flex:1"></span><button type="button" class="primary" data-sm-log="' + E(t.id) + '">Add ' + (f.kind === "decision" ? "decision" : "note") + "</button>" +
+    '<button type="button" class="text-button danger" data-sm-del="' + E(t.id) + '">Delete row</button></div></div>';
 }
-function stSave() {
-  var m = st.draft;
-  api("/api/strategy/meetings/" + encodeURIComponent(m.id), { method: "PUT", body: JSON.stringify(m) }).then(function (saved) {
-    st.data.meetings = st.data.meetings.map(function (x) { return x.id === saved.id ? saved : x; });
-    st.draft = JSON.parse(JSON.stringify(saved)); st.dirty = false;
-    toast("Agenda saved."); loadMineCount(); render();
-  }, function (err) {
-    toast(err.message, true);
-    if (/reloaded/.test(err.message)) { st.dirty = false; st.at = 0; render(); }
-  });
+function smPut(row) {
+  sm.data.topics = sm.data.topics.map(function (x) { return x.id === row.id ? row : x; });
 }
 document.addEventListener("click", function (e) {
-  var t = e.target.closest && e.target.closest("[data-st-new],[data-st-create],[data-st-cancel],[data-st-additem],[data-st-rmitem],[data-st-up],[data-st-addact],[data-st-rmact],[data-st-save],[data-st-revert],[data-st-del]");
+  var t = e.target.closest && e.target.closest("[data-sm-show],[data-sm-add],[data-sm-cancel],[data-sm-create],[data-sm-open],[data-sm-kind],[data-sm-log],[data-sm-del]");
   if (!t || !$("#view").contains(t)) return;
-  var ds = t.dataset, m = st.draft;
-  if ("stNew" in ds) { st.adding = true; st.newDate = ""; render(); return; }
-  if ("stCancel" in ds) { st.adding = false; render(); return; }
-  if ("stCreate" in ds) {
-    if (st.dirty && !confirm("The meeting on screen has unsaved changes. Create the new one anyway (the changes are lost)?")) return;
-    var date = ($("#stNewDate") || {}).value;
-    api("/api/strategy/meetings", { method: "POST", body: JSON.stringify({ date: date, carry: st.carry }) }).then(function (nm) {
-      st.adding = false; st.dirty = false; st.sel = nm.id; st.at = 0;
-      toast("Meeting created" + (nm.items.length ? " with " + nm.items.length + " item" + (nm.items.length === 1 ? "" : "s") + " carried over." : "."));
-      render();
+  var ds = t.dataset;
+  if (ds.smShow) { sm.status = ds.smShow; render(); return; }
+  if ("smAdd" in ds) { sm.adding = true; sm.form = {}; render(); var el = $("#smNewTopic"); if (el) el.focus(); return; }
+  if ("smCancel" in ds) { sm.adding = false; render(); return; }
+  if ("smCreate" in ds) {
+    var f = Object.assign({ discussOn: sm.data.nextDate }, sm.form);
+    if (!String(f.topic || "").trim()) { toast("Write the topic first.", true); return; }
+    api("/api/strategy/topics", { method: "POST", body: JSON.stringify(f) }).then(function (row) {
+      sm.data.topics.push(row); sm.adding = false; sm.form = {};
+      if (sm.date !== "all" && row.discussOn !== (sm.date === "next" ? sm.data.nextDate : sm.date)) sm.date = "all";
+      toast("Row added."); smReload(); render();
     }, function (err) { toast(err.message, true); });
     return;
   }
-  if ("stAdditem" in ds) { m.items.push({ topic: "", owner: "", minutes: 0, notes: "", decisions: "", discussed: false, actions: [] }); st.dirty = true; render(); var ins = document.querySelectorAll(".st-topic"); if (ins.length) ins[ins.length - 1].focus(); return; }
-  if (ds.stRmitem) { if (!confirm("Remove this agenda item and its action items?")) return; m.items.splice(+ds.stRmitem, 1); st.dirty = true; render(); return; }
-  if (ds.stUp) { var u = +ds.stUp; m.items.splice(u - 1, 0, m.items.splice(u, 1)[0]); st.dirty = true; render(); return; }
-  if (ds.stAddact) { m.items[+ds.stAddact].actions.push({ text: "", person: "", due: "", done: false }); st.dirty = true; render(); return; }
-  if (ds.stRmact) { var ij = ds.stRmact.split("."); m.items[+ij[0]].actions.splice(+ij[1], 1); st.dirty = true; render(); return; }
-  if ("stSave" in ds) { stSave(); return; }
-  if ("stRevert" in ds) { st.dirty = false; stPick(st.sel); render(); return; }
-  if ("stDel" in ds) {
-    if (!confirm("Delete the meeting on " + stDateLabel(m.date) + "? Its action items leave everyone's Mentions of You too.")) return;
-    api("/api/strategy/meetings/" + encodeURIComponent(m.id), { method: "DELETE" }).then(function () {
-      st.dirty = false; st.sel = ""; st.at = 0; toast("Meeting deleted."); loadMineCount(); render();
+  if (ds.smOpen) { sm.open[ds.smOpen] = !sm.open[ds.smOpen]; render(); return; }
+  if (ds.smKind) { var p = ds.smKind.split("|"); sm.entry[p[1]].kind = p[0]; render(); return; }
+  if (ds.smLog) {
+    var id = ds.smLog, en = sm.entry[id] || {};
+    if (!String(en.text || "").trim()) { toast("Write the note first.", true); return; }
+    if (en.due && !en.for) { toast("Pick who it's for, or clear the due date.", true); return; }
+    api("/api/strategy/topics/" + encodeURIComponent(id) + "/log", { method: "POST", body: JSON.stringify({ text: en.text, kind: en.kind, for: en.for || "", due: en.due || "" }) }).then(function (row) {
+      smPut(row); sm.entry[id] = { kind: "note" };
+      toast(en.for ? "Added, and sent to " + en.for + " as a task." : en.kind === "decision" ? "Decision added." : "Note added."); render();
+    }, function (err) { toast(err.message, true); });
+    return;
+  }
+  if (ds.smDel) {
+    var row = sm.data.topics.filter(function (x) { return x.id === ds.smDel; })[0];
+    if (!row || !confirm("Delete “" + row.topic + "” and its notes? Tasks already sent to people stay with them.")) return;
+    api("/api/strategy/topics/" + encodeURIComponent(row.id), { method: "DELETE" }).then(function () {
+      sm.data.topics = sm.data.topics.filter(function (x) { return x.id !== row.id; }); toast("Row deleted."); render();
     }, function (err) { toast(err.message, true); });
   }
 });
 document.addEventListener("input", function (e) {
-  var t = e.target;
-  if (t.dataset && (t.dataset.stF || t.dataset.stM) && t.type !== "checkbox") stSet(t.dataset.stF || t.dataset.stM, t.value);
+  var t = e.target, ds = t.dataset || {};
+  if (t.id === "smFind") { sm.q = t.value; var pos = t.selectionStart; render(); var el = $("#smFind"); if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch (x) {} } return; }
+  if (ds.smNew) { sm.form[ds.smNew] = t.value; return; }
+  if (ds.smEntry) { (sm.entry[ds.id] = sm.entry[ds.id] || { kind: "note" })[ds.smEntry] = t.value; }
 });
 document.addEventListener("change", function (e) {
   var t = e.target, ds = t.dataset || {};
-  if (t.id === "stPick") {
-    if (st.dirty && !confirm("Leave this meeting without saving your changes?")) { t.value = st.sel; return; }
-    st.dirty = false; stPick(t.value); render(); return;
+  if (t.id === "smDate") { sm.date = t.value; render(); return; }
+  if (ds.smNew) { sm.form[ds.smNew] = t.value; return; }
+  if (ds.smEntry) { (sm.entry[ds.id] = sm.entry[ds.id] || { kind: "note" })[ds.smEntry] = t.value; return; }
+  if (ds.smEdit) {
+    var ch = {}; ch[ds.smEdit] = t.value;
+    api("/api/strategy/topics/" + encodeURIComponent(ds.id), { method: "PATCH", body: JSON.stringify(ch) }).then(function (row) {
+      smPut(row); toast("Saved."); requestRender();
+    }, function (err) { toast(err.message, true); smReload(); });
   }
-  if (t.id === "stCarry") { st.carry = t.checked; return; }
-  if (t.id === "stNewDate") { st.newDate = t.value; return; }
-  if (ds.stF || ds.stM) { stSet(ds.stF || ds.stM, t.type === "checkbox" ? t.checked : t.value); return; }
-  if (ds.stDone) { stTick(ds.stDone, t.checked); }
 });
-
-// ---- Ticking an action item done (here and on Mentions of You) ----
-function stTick(id, done) {
-  api("/api/strategy/actions/" + encodeURIComponent(id) + "/done", { method: "POST", body: JSON.stringify({ done: done }) }).then(function () {
-    if (st.data) {
-      [st.data.meetings, st.draft ? [st.draft] : []].forEach(function (list) {
-        list.forEach(function (m) { m.items.forEach(function (it) { it.actions.forEach(function (a) { if (a.id === id) { a.done = done; a.doneBy = done ? me.username : ""; } }); }); });
-      });
-    }
-    stMine.items = (stMine.items || []).filter(function (x) { return x.id !== id || !done; });
-    toast(done ? "Marked done." : "Marked not done."); loadMineCount(); requestRender();
-  }, function (err) { toast(err.message, true); });
-}
-var stMine = { items: null, at: 0 };
-function loadStrategyMine() {
-  // `at` is set even on failure, so a failing request isn't retried on every redraw.
-  stMine.at = Date.now();
-  return api("/api/strategy/mine").then(function (d) { stMine.items = d.items; stMine.at = Date.now(); return d.items; }, function () { stMine.items = stMine.items || []; return stMine.items; });
-}
-// The block on Mentions of You (mentions.js); empty when there's nothing open.
-function strategyActions() {
-  if (!stMine.items || Date.now() - stMine.at > 60000) loadStrategyMine().then(function () { if (page === "mentions") requestRender(); });
-  var items = stMine.items || [], today = new Date().toISOString().slice(0, 10);
-  if (!items.length) return "";
-  return '<div class="card" style="padding:16px 18px;margin-bottom:16px;"><div class="card-label">Strategy Meeting action items for you</div><ul class="lg-due-list">' +
-    items.map(function (x) {
-      var late = x.due && x.due < today;
-      return '<li class="' + (late ? "lg-row-expired" : "") + '"><label><input type="checkbox" data-st-done="' + E(x.id) + '"> ' + E(x.text) + "</label> " +
-        '<span class="small-note">' + E(x.topic) + " · meeting " + E(stDateLabel(x.meetingDate)) + "</span> " +
-        (x.due ? '<span class="lg-pill ' + (late ? "lg-expired" : "lg-soon") + '">' + (late ? "Overdue · " : "Due ") + E(x.due) + "</span>" : "") + "</li>";
-    }).join("") + "</ul></div>";
-}

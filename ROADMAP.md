@@ -359,28 +359,41 @@ Mentions of You, and files created automatically from Pentagon.
         grant? Nothing is emailed when something is about to expire.
 - [x] **7. Strategy Meeting agenda and SOP update form.**
       Tested on staging and merged to `main` 3 Nov 2026 (live needs Pull +
-      redeploy). The user's answers: Strategy Meeting is Leadership only;
+      redeploy). The Strategy Meeting redesign below is on `staging` only,
+      waiting for the user's test. The user's first answers: Strategy Meeting is Leadership only;
       weekly; an agenda item holds topic, owner, minutes, notes, decisions
       and action items; action items go to Mentions of You. SOP changes:
       anyone proposes, Leadership approves, an approved PDF becomes a new
       version.
-      - Strategy Meeting: rules in `strategy.js`; routes `GET /api/strategy`,
-        `POST /api/strategy/meetings`, `PUT|DELETE /api/strategy/meetings/:id`
-        (Leadership, the `leadership` tick only), `GET /api/strategy/mine`,
-        `POST /api/strategy/actions/:id/done` (the assignee or Leadership).
-        Page `public/js/strategy.js` (after `legal.js`; the placeholder in
-        `company-pages.js` was removed); the sidebar item is hidden from
-        everyone else. README *Strategy Meeting*.
-      - `strategy.json`: `meetings[] = { id, date, title, rev, items: [{ id,
-        topic, owner, minutes, notes, decisions, discussed, carriedFrom?,
-        actions: [{ id, text, person, due, done, doneAt, doneBy }] }] }`.
-        A new meeting is dated a week after the latest and carries over
-        items not ticked Discussed (without their action items, which stay
-        on the meeting they were set in until done). The whole meeting is
-        saved at once; `rev` stops two people overwriting each other. Done
-        is changed only through its own route, never by a save.
-      - Mentions of You shows the assignee's open action items (topic,
-        action, due date only), red once overdue, in the sidebar badge.
+      - Strategy Meeting, redesigned 3 Nov 2026 at the user's request: one
+        table of topics instead of dated agendas. Row = topic, owner, date to
+        discuss, status (open / decided / closed), and a running log of
+        notes and decisions like a board file's notes; filters by date to
+        discuss (next meeting, all, no date, each date), status and search.
+        The user's answers: a note for someone becomes a task, like a board
+        next step (in their first company and department, so on Mentions of
+        You and that department's Tasks; the task carries `strategy: <row>`
+        and the log shows when it's done); #strategymeeting /
+        @strategymeeting in **every** note in the tracker raises a row; such
+        rows are dated for the next meeting; the first version's agendas
+        aren't carried over (`meetings` stays in `strategy.json`, unshown,
+        and its action items no longer show on Mentions of You).
+      - Rules in `strategy.js`; routes `GET /api/strategy`,
+        `POST /api/strategy/topics`, `PATCH|DELETE /api/strategy/topics/:id`,
+        `POST /api/strategy/topics/:id/log` (Leadership, the `leadership`
+        tick only). Page `public/js/strategy.js`; the sidebar item is hidden
+        from everyone else. README *Strategy Meeting*.
+      - `strategy.json`: `topics[] = { id, topic, owner, discussOn, status,
+        raisedBy, at, source?, log: [{ id, kind: note | decision, text, by,
+        at, for?, due?, taskId?, source? }] }`, `raised` (the tagged lines
+        already added, up to 2000). Next meeting = the earliest date to
+        discuss from today, else the last date moved on by whole weeks.
+      - The tag: one `app.use("/api", …)` hook right after `express.json()`
+        reads every POST / PUT / PATCH body (any text, any depth; not
+        `/strategy`, `/login`, `/admin`) and, once the response succeeds
+        (status < 400), adds a row per tagged line not added before. The
+        source label names the board file or task; otherwise the area
+        (Legal, People, …). Raw-body uploads aren't read.
       - SOP update form (`sops.js`, routes `/api/sop-requests*` in
         `index.js`): anyone proposes a change to one of their departments'
         SOPs, or a new SOP, with what / why and an optional PDF
@@ -400,8 +413,8 @@ Mentions of You, and files created automatically from Pentagon.
         when the requests changed.
       - Still open: the older SOP edit / remove routes (`PATCH|DELETE
         /api/sops/:id`) let any manager change any department's SOPs;
-        nothing is emailed when a request is decided or an action item is
-        set.
+        nothing is emailed when an SOP request is decided (a strategy note
+        for someone emails them like any new task, if mail is set up).
 - [ ] **8. Email replies** — draft, edit, send, ignore, open thread.
 - [ ] **9. Company chat.**
 - [ ] **10. README update and final review.**

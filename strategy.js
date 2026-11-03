@@ -1,92 +1,94 @@
-// Strategy Meeting (Company → Strategy Meeting): a weekly meeting with an
-// agenda. This file is the rules — what a meeting, an agenda item and an
-// action item hold, the next meeting's date and what carries over. index.js
-// has the routes; strategy.json holds { meetings: [...] }.
+// Strategy Meeting (Company → Strategy Meeting): one table of topics for the
+// weekly meeting. This file is the rules — what a row and its log hold, the
+// next meeting's date, and picking #strategymeeting / @strategymeeting out
+// of notes saved anywhere in the tracker. index.js has the routes;
+// strategy.json holds { topics: [...], raised: [...] } (the old
+// meeting-based `meetings` stay in the file but aren't shown).
 //
 // Leadership only (the `leadership` tick, not full access), checked on every
-// route. Action items can go to any login: each shows on that person's
-// Mentions of You until they (or Leadership) tick it done. Nothing here is
-// sent to AI.
+// route. A note assigned to someone becomes a task for them, like a board
+// file's next step. Nothing here is sent to AI.
 
 const { text } = require("./staffforms");
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const DAY = 24 * 60 * 60 * 1000;
 const EVERY_DAYS = 7; // weekly
-const MAX_ITEMS = 60, MAX_ACTIONS = 30;
+const STATUSES = ["open", "decided", "closed"];
+const TAG = /(^|[^\w])[#@]strategymeeting\b/i;
+const MAX_RAISED = 2000; // remembered tagged lines, so re-saving a note doesn't add the row again
 
 function shape(doc) {
-  doc.meetings = Array.isArray(doc.meetings) ? doc.meetings : [];
+  doc.topics = Array.isArray(doc.topics) ? doc.topics : [];
+  doc.raised = Array.isArray(doc.raised) ? doc.raised : [];
   return doc;
 }
-const byDateDesc = (a, b) => String(b.date).localeCompare(String(a.date)) || (b.createdAt || 0) - (a.createdAt || 0);
+const addDays = (d, n) => new Date(Date.parse(d + "T00:00:00Z") + n * DAY).toISOString().slice(0, 10);
 
-/** A week after the latest meeting, or today when there's none. */
+/**
+ * The next meeting: the earliest date to discuss from today on; else the
+ * latest past date moved on by whole weeks to today or later; else today.
+ */
 function nextDate(doc, today) {
-  const last = shape(doc).meetings.slice().sort(byDateDesc)[0];
-  if (!last || !DATE.test(last.date)) return today;
-  const d = new Date(Date.parse(last.date + "T00:00:00Z") + EVERY_DAYS * DAY).toISOString().slice(0, 10);
-  return d < today ? today : d;
+  const dates = shape(doc).topics.map((t) => t.discussOn).filter((d) => DATE.test(d || "")).sort();
+  const ahead = dates.find((d) => d >= today);
+  if (ahead) return ahead;
+  const last = dates[dates.length - 1];
+  if (!last) return today;
+  const weeks = Math.ceil((Date.parse(today + "T00:00:00Z") - Date.parse(last + "T00:00:00Z")) / (EVERY_DAYS * DAY));
+  return addDays(last, weeks * EVERY_DAYS);
 }
 
-const longText = (v, n) => String(v == null ? "" : v).trim().slice(0, n);
-const minutes = (v) => { const n = Math.round(+v); return Number.isFinite(n) && n > 0 ? Math.min(n, 600) : 0; };
-
-/**
- * A meeting from the page: { date, title, items: [{ id, topic, owner,
- * minutes, notes, decisions, discussed, actions: [{ id, text, person, due }] }] }.
- * `isLogin(name)` returns the login's username, or "" when there's none.
- * `old` is the stored meeting: action items keep their done / doneAt /
- * doneBy from it (those change only through the tick on their own route).
- * Returns { meeting } or { error }.
- */
-function cleanMeeting(b, old, isLogin, newId) {
-  if (!DATE.test(b.date || "")) return { error: "Pick the meeting date" };
-  const oldActions = {};
-  for (const it of (old && old.items) || []) for (const a of it.actions || []) oldActions[a.id] = a;
-  const items = [];
-  for (const raw of (Array.isArray(b.items) ? b.items : []).slice(0, MAX_ITEMS)) {
-    const topic = text(raw.topic, 200);
-    if (!topic) return { error: "Every agenda item needs a topic" };
-    let owner = "";
-    if (raw.owner) { owner = isLogin(raw.owner); if (!owner) return { error: `No login called ${text(raw.owner, 60)}` }; }
-    const actions = [];
-    for (const ra of (Array.isArray(raw.actions) ? raw.actions : []).slice(0, MAX_ACTIONS)) {
-      const t = text(ra.text, 300);
-      if (!t) return { error: `An action item under “${topic}” has no text` };
-      const person = isLogin(ra.person);
-      if (!person) return { error: `Pick who does “${t.slice(0, 60)}”` };
-      if (ra.due && !DATE.test(ra.due)) return { error: `Pick a due date for “${t.slice(0, 60)}”` };
-      const was = ra.id && oldActions[ra.id];
-      const a = { id: was ? was.id : newId(), text: t, person, due: ra.due || "", done: !!(was && was.done) };
-      if (a.done) { a.doneAt = was.doneAt; a.doneBy = was.doneBy; }
-      actions.push(a);
-    }
-    const item = { id: text(raw.id, 40) || newId(), topic, owner, minutes: minutes(raw.minutes), notes: longText(raw.notes, 5000), decisions: longText(raw.decisions, 5000), discussed: !!raw.discussed, actions };
-    if (raw.carriedFrom) item.carriedFrom = text(raw.carriedFrom, 10);
-    items.push(item);
+/** A row's own fields from the page: { topic, owner, discussOn, status } (each optional). */
+function cleanTopic(b, isLogin) {
+  const out = {};
+  if ("topic" in b) { out.topic = text(b.topic, 200); if (!out.topic) return { error: "Write the topic" }; }
+  if ("owner" in b) {
+    out.owner = "";
+    if (b.owner) { out.owner = isLogin(b.owner); if (!out.owner) return { error: `No login called ${text(b.owner, 60)}` }; }
   }
-  return { meeting: { date: b.date, title: text(b.title, 120), items } };
+  if ("discussOn" in b) { out.discussOn = String(b.discussOn || ""); if (out.discussOn && !DATE.test(out.discussOn)) return { error: "Pick the date to discuss it" }; }
+  if ("status" in b) { if (!STATUSES.includes(b.status)) return { error: "Pick a status" }; out.status = b.status; }
+  return { out };
+}
+
+/** A log entry from the page: { text, kind: "note" | "decision", for, due }. */
+function cleanEntry(b, isLogin) {
+  const t = String(b.text == null ? "" : b.text).trim().slice(0, 4000);
+  if (!t) return { error: "Write the note first" };
+  const out = { text: t, kind: b.kind === "decision" ? "decision" : "note" };
+  if (b.for) { out.for = isLogin(b.for); if (!out.for) return { error: `No login called ${text(b.for, 60)}` }; }
+  if (b.due) { if (!DATE.test(b.due)) return { error: "Pick a due date" }; if (!out.for) return { error: "Pick who it's for before giving it a due date" }; out.due = b.due; }
+  return { out };
 }
 
 /**
- * Agenda items for a new meeting: the ones not marked discussed in the
- * latest earlier meeting, without their action items (those stay on the
- * meeting they were set in, and on Mentions of You until done).
+ * Every line carrying #strategymeeting / @strategymeeting in a saved
+ * request's text fields (any depth). Returns [{ line, topic }].
  */
-function carryOver(doc, date, newId) {
-  const prev = shape(doc).meetings.filter((m) => m.date <= date).sort(byDateDesc)[0];
-  if (!prev) return [];
-  return prev.items.filter((it) => !it.discussed).map((it) => ({
-    id: newId(), topic: it.topic, owner: it.owner, minutes: it.minutes, notes: it.notes, decisions: "", discussed: false, actions: [], carriedFrom: prev.date,
-  }));
-}
-
-/** Every action item, with where it was set. */
-function allActions(doc) {
-  const out = [];
-  for (const m of shape(doc).meetings) for (const it of m.items || []) for (const a of it.actions || []) out.push({ meeting: m, item: it, action: a });
+function taggedLines(body) {
+  const out = [], seen = new Set();
+  const walk = (v, depth) => {
+    if (depth > 6 || v == null) return;
+    if (typeof v === "string") {
+      for (const raw of v.split(/\r?\n/)) {
+        const line = raw.trim();
+        if (!TAG.test(line) || seen.has(line.toLowerCase())) continue;
+        seen.add(line.toLowerCase());
+        const topic = line.replace(/[#@]strategymeeting\b/gi, " ").replace(/\s{2,}/g, " ").replace(/^[\s\-–:,.]+|[\s\-–:,]+$/g, "");
+        out.push({ line: line.slice(0, 4000), topic: text(topic, 200) || "Raised for the strategy meeting" });
+      }
+    } else if (Array.isArray(v)) v.slice(0, 500).forEach((x) => walk(x, depth + 1));
+    else if (typeof v === "object" && !Buffer.isBuffer(v)) Object.keys(v).slice(0, 200).forEach((k) => walk(v[k], depth + 1));
+  };
+  walk(body, 0);
   return out;
 }
+/** What a tagged line is remembered by: its text, wherever it was saved. */
+const raisedKey = (line) => line.toLowerCase().replace(/\s+/g, " ");
+function remember(doc, key) {
+  shape(doc).raised.push(key);
+  if (doc.raised.length > MAX_RAISED) doc.raised.splice(0, doc.raised.length - MAX_RAISED);
+}
 
-module.exports = { EVERY_DAYS, shape, byDateDesc, nextDate, cleanMeeting, carryOver, allActions };
+module.exports = { EVERY_DAYS, STATUSES, TAG, shape, nextDate, cleanTopic, cleanEntry, taggedLines, raisedKey, remember };
