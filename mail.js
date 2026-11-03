@@ -1,12 +1,13 @@
-// Work inbox: a person's own Outlook inbox (read and unread), read-only, through
+// Work inbox: a person's own Outlook inbox (read and unread), through
 // Microsoft Graph with the app registration in graph.js. Needs the Mail.Read
 // application permission (admin consent), ideally scoped to SOI staff
-// mailboxes. The mailbox is always the email on the signed-in person's login
-// — never one sent by the browser.
+// mailboxes, and Mail.Send for replies. The mailbox is always the email on
+// the signed-in person's login — never one sent by the browser.
 //
-// No AI: each conversation shows Outlook's own preview text, and is sorted
-// into "Needs you" / "FYI" by simple rules. Nothing is stored; results are
-// cached in memory for a minute so refreshing doesn't re-read the mailbox.
+// The list shows Outlook's own preview text, sorted into "Needs you" / "FYI"
+// by simple rules. Nothing is stored; results are cached in memory for a
+// minute so refreshing doesn't re-read the mailbox. Replies (Phase 8) are
+// only sent when the person clicks Send — see replies.js.
 
 const { graphConfigured, getAccessToken } = require("./graph");
 const { isItRequestSubject } = require("./itrequests");
@@ -204,4 +205,77 @@ async function syncFollowIndex(mailbox, idx, isCustomer) {
   return idx;
 }
 
-module.exports = { inboxThreads, syncFollowIndex, MailError };
+/**
+ * Every message in one conversation of a mailbox (any folder, drafts left
+ * out), oldest first, as plain text: { id, from, to, cc, at, subject, text,
+ * webLink }. "text" is only what's new in that message where Outlook can
+ * tell (uniqueBody), else the whole body. At most the newest 50.
+ */
+async function threadMessages(mailbox, conversationId) {
+  if (!graphConfigured) throw new MailError("not_configured", "Microsoft 365 isn't connected to the tracker.");
+  const url = new URL(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox)}/messages`);
+  url.searchParams.set("$filter", `conversationId eq '${String(conversationId).replace(/'/g, "''")}'`);
+  url.searchParams.set("$select", "id,subject,from,toRecipients,ccRecipients,receivedDateTime,sentDateTime,uniqueBody,body,isDraft,webLink");
+  url.searchParams.set("$top", "50");
+  const page = await graphGet(url.toString(), { Prefer: 'outlook.body-content-type="text"' });
+  return (page.value || [])
+    .filter((m) => !m.isDraft)
+    .map((m) => ({
+      id: m.id,
+      from: person(m.from),
+      to: (m.toRecipients || []).map(person),
+      cc: (m.ccRecipients || []).map(person),
+      at: m.receivedDateTime || m.sentDateTime || "",
+      subject: m.subject || "(No subject)",
+      text: String(((m.uniqueBody && m.uniqueBody.content) || (m.body && m.body.content) || "")).replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim(),
+      webLink: m.webLink || "",
+    }))
+    .sort((a, b) => String(a.at).localeCompare(String(b.at)));
+}
+
+// Sending as a person's mailbox needs the Mail.Send application permission
+// on the same app registration (mailer.js already uses it for
+// MS_FROM_EMAIL); an Application Access Policy may limit which mailboxes.
+async function graphSend(url, payload, mailbox) {
+  const token = await getAccessToken();
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (res.ok) return;
+  const text = await res.text();
+  console.error(`Graph reply as ${mailbox} failed (${res.status}): ${text.slice(0, 300)}`);
+  if (res.status === 401 || res.status === 403) {
+    throw new MailError("no_permission", `The tracker isn't allowed to send as ${mailbox}. Your Microsoft 365 admin needs to give the tracker's app the Mail.Send application permission (admin consent) and, if an Application Access Policy limits which mailboxes it can use, add ${mailbox} to it. Nothing was sent.`);
+  }
+  if (res.status === 404) throw new MailError("not_found", "That email isn't in the mailbox any more (moved or deleted?). Nothing was sent.");
+  if (res.status === 429) throw new MailError("error", "Microsoft is throttling email right now. Try again in a few minutes. Nothing was sent.");
+  throw new MailError("error", `Microsoft 365 didn't send the reply (${res.status}). Nothing was sent.`);
+}
+
+// A reply in the conversation, from the mailbox that holds it (Outlook keeps
+// it in the same thread and in Sent Items). html is the whole body.
+async function replyToMessage(mailbox, messageId, { to, cc, html }) {
+  const rec = (l) => l.map((address) => ({ emailAddress: { address } }));
+  await graphSend(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox)}/messages/${encodeURIComponent(messageId)}/reply`, {
+    message: { toRecipients: rec(to), ccRecipients: rec(cc), body: { contentType: "HTML", content: html } },
+  }, mailbox);
+}
+
+// A new email from the person's own mailbox (replies to shared-inbox mail).
+async function sendAs(mailbox, { to, cc, subject, html }) {
+  const rec = (l) => l.map((address) => ({ emailAddress: { address } }));
+  await graphSend(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox)}/sendMail`, {
+    message: { subject, toRecipients: rec(to), ccRecipients: rec(cc), body: { contentType: "HTML", content: html } },
+    saveToSentItems: true,
+  }, mailbox);
+}
+
+// The Emails list is cached for a minute; after a reply, read it fresh.
+function forgetInbox(email) {
+  const prefix = `${String(email || "").toLowerCase()}|`;
+  for (const k of cache.keys()) if (k.startsWith(prefix)) cache.delete(k);
+}
+
+module.exports = { inboxThreads, syncFollowIndex, MailError, threadMessages, replyToMessage, sendAs, forgetInbox };

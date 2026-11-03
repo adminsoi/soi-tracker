@@ -134,6 +134,11 @@ function getBoard(name = "aog_board") {
 function getMailIndex() {
   return readJson("mail_followups", {});
 }
+// Emails → Ignore: { users: { username: { "<mailbox>|<conv>": { at, latest } } } }.
+// See replies.js.
+function getInboxIgnored() {
+  return readJson("inbox_ignored", { users: {} });
+}
 function getQbr() {
   return readJson("qbr", {});
 }
@@ -200,6 +205,7 @@ let sopsQueue = Promise.resolve();
 let performanceQueue = Promise.resolve();
 let qbrQueue = Promise.resolve();
 let mailIndexQueue = Promise.resolve();
+let inboxIgnoredQueue = Promise.resolve();
 let boardQueue = Promise.resolve();
 let staffFormsQueue = Promise.resolve();
 let payrollQueue = Promise.resolve();
@@ -332,6 +338,16 @@ function withMailIndex(mutator) {
   return mailIndexQueue;
 }
 
+function withInboxIgnored(mutator) {
+  inboxIgnoredQueue = inboxIgnoredQueue.then(async () => {
+    const doc = await getInboxIgnored();
+    const result = await mutator(doc);
+    await writeJson("inbox_ignored", doc);
+    return result;
+  });
+  return inboxIgnoredQueue;
+}
+
 function withBoard(mutator, name = "aog_board") {
   boardQueue = boardQueue.then(async () => {
     const doc = await getBoard(name);
@@ -420,6 +436,8 @@ module.exports = {
   withBoard,
   getMailIndex,
   withMailIndex,
+  getInboxIgnored,
+  withInboxIgnored,
   getQbr,
   withQbr,
   getPerformance,

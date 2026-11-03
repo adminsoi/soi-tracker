@@ -40,7 +40,7 @@ function renderInbox() {
   setTimeout(function () { loadInbox(false); }, 0);
   var several = inboxData && inboxData.mailboxes && inboxData.mailboxes.length > 1;
   return '<div class="intro"><div><div class="eyebrow">Outlook' + (inboxData ? " · " + E(several ? inboxData.mailboxes.length + " inboxes" : inboxData.mailbox) : "") + '</div><h1>Emails</h1>' +
-    "<p>Your Outlook inbox" + (several ? " and your shared inboxes" : "") + ", newest first. Open something in Outlook and it moves to Read. Nothing here sends or changes your mail.</p>" +
+    "<p>Your Outlook inbox" + (several ? " and your shared inboxes" : "") + ", newest first. Open something in Outlook and it moves to Read. Open a row to read the whole thread, reply (Draft with AI writes a first draft for you to edit) or ignore it. Nothing is sent until you click Send.</p>" +
     '<p class="small-note" id="inbox-note"></p></div>' +
     '<div class="co-wrap"><div class="eyebrow">Received in the last</div><div class="cos">' + [[1, "Day"], [3, "3 days"], [7, "Week"]].map(function (d) {
       return '<button type="button" class="co ' + (d[0] === inboxDays ? "active" : "") + '" data-inbox-days="' + d[0] + '">' + d[1] + "</button>";
@@ -59,6 +59,7 @@ function loadInbox(quiet) {
     // While a follow-up list is being built, check back sooner.
     if (data.followStatus && data.followStatus.syncing && data.followStatus.syncing.length && page === "inbox") setTimeout(function () { if (page === "inbox") loadInbox(true); }, 30000);
     if (quiet && same) return;
+    if (quiet && ibTyping()) { ibRedrawLater = true; return; }
     drawInbox();
   }).catch(function (err) {
     if (quiet) return;
@@ -112,7 +113,9 @@ function drawInbox() {
   var kindOf = function (k) { return side.filter(function (t) { return k === "all" || (k === "needs") === !!t.needsYou; }); };
   var list = kindOf(inboxKind);
   var note = $("#inbox-note");
-  if (note) note.textContent = "Updated " + new Date().toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) + " · " + unread.length + " unread, " + read.length + " read · checks again every few minutes";
+  if (note) note.textContent = "Updated " + new Date().toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) + " · " + unread.length + " unread, " + read.length + " read" + (inboxData.ignored ? " · " + inboxData.ignored + " ignored (back when a new message arrives)" : "") + " · checks again every few minutes";
+  ibItems = {};
+  inboxData.items.concat(inboxData.followUps || []).forEach(function (t) { ibItems[ibKey(t)] = t; });
 
   var seg = function (cur, attr, opts) {
     return '<div class="seg">' + opts.map(function (o) {
@@ -155,7 +158,9 @@ function drawInbox() {
   var cappedHere = (inboxData.capped || []).filter(function (m) { return inboxBox === "all" || m === inboxBox; });
   var notes = (inboxRead === "follow" && syncing.length ? '<div class="banner">Building the follow-up list for ' + E(syncing.map(boxLabel).join(", ")) + ". The first time takes a minute or two for a busy inbox; this page checks again on its own.</div>" : "") +
     (inboxRead !== "follow" && cappedHere.length ? '<p class="small-note ib-legend">' + E(cappedHere.map(boxLabel).join(", ")) + " had more mail than fits in this window, so only the newest 1,000 are listed" + (inboxDays > 1 ? " — pick <b>Day</b> to see everything recent" : "") + ". Follow up still covers the last 14 days.</p>" : "");
-  box.innerHTML = problems.map(function (x) { return '<div class="banner">' + E(boxLabel(x.mailbox)) + " (" + E(x.mailbox) + "): " + E(x.error) + "</div>"; }).join("") + bar + notes +
+  var stagingNote = inboxData.staging ? '<div class="banner">Staging: Microsoft 365 is switched off here, so this is a made-up practice email. Draft with AI really asks Claude on Bedrock; Send is a dry run that shows what would have been sent.</div>' : "";
+  var undo = ibUndo ? '<div class="ib-undo">Ignored “' + E(ibUndo.subject) + '”. <button type="button" class="text-button" data-ib-unignore>Undo</button></div>' : "";
+  box.innerHTML = stagingNote + undo + problems.map(function (x) { return '<div class="banner">' + E(boxLabel(x.mailbox)) + " (" + E(x.mailbox) + "): " + E(x.error) + "</div>"; }).join("") + bar + notes +
     (groups.length ? groups.map(function (g) {
       return '<section class="ib-day"><h3 class="ib-day-h">' + E(g.label) + '<span class="ib-n">' + g.rows.length + "</span></h3>" + g.rows.map(mailRow).join("") + "</section>";
     }).join("") + (more ? '<button type="button" class="ib-more" data-inbox-more>Show ' + Math.min(more, 200) + " more (" + more + " left)</button>" : "") : '<div class="card empty">' + empty + "</div>");
@@ -183,10 +188,206 @@ function drawInbox() {
           : E(t.followUp.who.name || t.followUp.who.email) + " emailed " + E(fuAge(t.followUp.hours)) + " ago and nothing's been sent back yet.") + "</div>" : "") +
         '<div class="small-note">' + (t.waiting ? "Sent" : "From " + E(t.from.email || t.from.name)) + " · To: " + E(names(t.to) || "—") + (t.cc.length ? " · cc: " + E(names(t.cc)) : "") + "</div>" +
         (t.preview ? '<p class="mail-preview">' + E(t.preview) + (t.preview.length >= 400 ? "…" : "") + "</p>" : "") +
-        (link ? '<a class="mail-open" href="' + E(link) + '" target="_blank" rel="noopener noreferrer">Open in Outlook ↗</a>' : "") + "</div>" : "") +
+        mailActions(t, link) + "</div>" : "") +
       "</article>";
   }
 }
+
+// ---------- Replies (Phase 8) ----------
+// Under each open row: Open thread (every message in the conversation),
+// Reply / Draft with AI (Claude on Bedrock writes a first draft into the box
+// for you to edit; it leaves [[…]] placeholders for prices, certificates,
+// NSNs and the like, and Send refuses while any are left), Ignore (hidden
+// until a newer message arrives) and Open in Outlook. Keyed by mailbox and
+// conversation, so the same thread under Unread and Follow up shares state.
+var ibItems = {};        // key -> row, rebuilt on every draw
+var ibThread = {};       // key -> { loading, data, error }
+var ibShowThread = {};   // key -> thread shown
+var ibCompose = {};      // key -> { to, cc, notes, text, busy, error, info, preview }
+var ibUndo = null;       // last ignored row, for Undo
+var ibRedrawLater = false;
+function ibKey(t) { return String(t.mailbox || "") + "|" + String(t.conv || t.id); }
+function ibTyping() {
+  var a = document.activeElement;
+  return !!(a && a.closest && a.closest("[data-ib-compose]"));
+}
+function ibPlaceholders(text) { return String(text || "").match(/\[\[[^\]]*\]\]/g) || []; }
+function phNote(left) {
+  return left.length ? '<div class="ib-ph">Fill in or delete ' + left.length + " placeholder" + (left.length === 1 ? "" : "s") + " before sending: " + E(left.slice(0, 6).join("  ")) + "</div>" : "";
+}
+
+function mailActions(t, link) {
+  var k = ibKey(t), th = ibThread[k], c = ibCompose[k];
+  var bar = '<div class="ib-actions">' +
+    '<button type="button" class="primary" data-ib-reply="' + E(k) + '"' + (c ? " disabled" : "") + ">Reply</button>" +
+    '<button type="button" data-ib-ai="' + E(k) + '"' + (c && c.busy ? " disabled" : "") + ">✦ Draft with AI</button>" +
+    '<button type="button" data-ib-thread="' + E(k) + '">' + (ibShowThread[k] ? "Hide thread" : "Open thread") + (t.messages > 1 ? " (" + t.messages + ")" : "") + "</button>" +
+    '<button type="button" data-ib-ignore="' + E(k) + '" title="Hide this conversation until someone writes again">Ignore</button>' +
+    (link ? '<a class="mail-open" href="' + E(link) + '" target="_blank" rel="noopener noreferrer">Open in Outlook ↗</a>' : "") + "</div>";
+  var thread = "";
+  if (ibShowThread[k]) {
+    thread = !th || th.loading ? '<div class="small-note">Loading the conversation…</div>'
+      : th.error ? '<div class="banner">' + E(th.error) + "</div>"
+      : '<ol class="ib-thread">' + th.data.messages.map(function (m) {
+        var at = m.at ? new Date(m.at) : null;
+        return '<li class="ib-msg"><div class="ib-msg-h"><b>' + E(m.from.name || m.from.email) + '</b> <span class="small-note">' + E(m.from.email) + (at ? " · " + E(at.toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })) : "") + "</span></div>" +
+          '<div class="small-note">To: ' + E(m.to.map(function (p) { return p.name || p.email; }).join(", ") || "—") + (m.cc.length ? " · cc: " + E(m.cc.map(function (p) { return p.name || p.email; }).join(", ")) : "") + "</div>" +
+          '<div class="ib-msg-text">' + E(m.text || "(no text)") + "</div></li>";
+      }).join("") + "</ol>";
+  }
+  return bar + thread + (c ? composeBox(k, c, th) : "");
+}
+
+function composeBox(k, c, th) {
+  var d = th && th.data;
+  var left = ibPlaceholders(c.text);
+  if (c.preview) {
+    var p = c.preview;
+    return '<div class="ib-compose ib-sent">' +
+      '<div class="eyebrow">' + (p.dryRun ? "Dry run — nothing was sent" : "Sent") + "</div>" +
+      '<div class="small-note">From ' + E(p.from) + " · To: " + E(p.to.join(", ")) + (p.cc.length ? " · cc: " + E(p.cc.join(", ")) : "") + "<br>Subject: " + E(p.subject) + (p.inThread ? " · in the same Outlook thread" : " · new email from your mailbox") + "</div>" +
+      (p.dryRun ? '<div class="ib-msg-text">' + E(p.text) + "</div>" : "") +
+      '<div class="nb-foot"><button type="button" class="text-button" data-ib-close="' + E(k) + '">Close</button></div></div>';
+  }
+  return '<div class="ib-compose" data-ib-compose="' + E(k) + '">' +
+    (d ? '<div class="small-note">From <b>' + E(d.from) + "</b>" + (d.shared ? " (a new email from your own mailbox; " + E(d.mailbox) + " is copied)" : "") + (d.staging ? " · <b>staging: dry run</b>" : "") + "</div>" : '<div class="small-note">Loading the conversation…</div>') +
+    '<label class="ib-f"><span>To</span><input type="text" data-ib-field="to" value="' + E(c.to) + '" aria-label="To"></label>' +
+    '<label class="ib-f"><span>Cc</span><input type="text" data-ib-field="cc" value="' + E(c.cc) + '" aria-label="Cc"></label>' +
+    '<label class="ib-f"><span>For AI</span><input type="text" data-ib-field="notes" value="' + E(c.notes) + '" placeholder="Optional: what the reply should say, e.g. “quote by Thursday, ask for the delivery address”" aria-label="What the AI draft should say"></label>' +
+    '<textarea rows="10" data-ib-field="text" aria-label="Reply" placeholder="Write your reply, or click Draft with AI">' + E(c.text) + "</textarea>" +
+    '<div data-ib-ph>' + phNote(left) + "</div>" +
+    (c.info ? '<div class="small-note">' + E(c.info) + "</div>" : "") +
+    (c.error ? '<div class="banner">' + E(c.error) + "</div>" : "") +
+    '<div class="nb-foot"><button type="button" class="primary" data-ib-send="' + E(k) + '"' + (c.busy || !d ? " disabled" : "") + ">" + (c.busy === "send" ? "Sending…" : d && d.staging ? "Send (dry run)" : "Send") + "</button>" +
+    '<button type="button" data-ib-ai="' + E(k) + '"' + (c.busy || !d ? " disabled" : "") + ">" + (c.busy === "ai" ? "Drafting…" : c.text ? "✦ Redraft with AI" : "✦ Draft with AI") + "</button>" +
+    '<button type="button" class="text-button" data-ib-close="' + E(k) + '">Discard</button>' +
+    '<span class="small-note">AI drafts come from Claude on SOI\'s own AWS account, which reads only this conversation. Check every fact before sending.</span></div></div>';
+}
+
+function loadThread(k) {
+  var t = ibItems[k];
+  if (!t) return Promise.reject(new Error("That email isn't on the list any more."));
+  if (ibThread[k] && ibThread[k].data) return Promise.resolve(ibThread[k].data);
+  ibThread[k] = { loading: true };
+  return api("/api/inbox/thread?mailbox=" + encodeURIComponent(t.mailbox) + "&conv=" + encodeURIComponent(t.conv || t.id)).then(function (data) {
+    ibThread[k] = { data: data };
+    return data;
+  }, function (err) {
+    ibThread[k] = { error: err.message };
+    throw err;
+  });
+}
+
+function openCompose(k, thenDraft) {
+  if (!ibCompose[k] || ibCompose[k].preview) ibCompose[k] = { to: "", cc: "", notes: "", text: "" };
+  drawInbox();
+  loadThread(k).then(function (d) {
+    var c = ibCompose[k];
+    if (!c) return;
+    if (!c.to && !c.cc) { c.to = d.to.join(", "); c.cc = d.cc.join(", "); }
+    if (thenDraft) aiDraft(k); else { drawInbox(); focusCompose(k); }
+  }, function (err) {
+    if (ibCompose[k]) ibCompose[k].error = err.message;
+    drawInbox();
+  });
+}
+function focusCompose(k) {
+  var box = document.querySelector('[data-ib-compose="' + (window.CSS && CSS.escape ? CSS.escape(k) : k) + '"] textarea');
+  if (box) box.focus();
+}
+
+function aiDraft(k) {
+  var c = ibCompose[k], t = ibItems[k];
+  if (!c || !t || c.busy) return;
+  if (c.text && !confirm("Replace what's in the reply box with a new AI draft?")) return;
+  c.busy = "ai"; c.error = ""; c.info = "";
+  drawInbox();
+  api("/api/inbox/draft", { method: "POST", body: JSON.stringify({ mailbox: t.mailbox, conv: t.conv || t.id, notes: c.notes }) }).then(function (r) {
+    c.text = r.text;
+    c.info = "Draft from Claude (" + r.model + ")" + (r.placeholders ? " — it left " + r.placeholders + " placeholder" + (r.placeholders === 1 ? "" : "s") + " for you to fill in" : "") + (r.truncated ? " — it was cut short, so check the ending" : "") + ". Edit it before sending.";
+  }, function (err) { c.error = err.message; }).then(function () {
+    c.busy = false;
+    drawInbox();
+    focusCompose(k);
+  });
+}
+
+function sendReply(k) {
+  var c = ibCompose[k], t = ibItems[k], d = ibThread[k] && ibThread[k].data;
+  if (!c || !t || !d || c.busy) return;
+  c.error = "";
+  var left = ibPlaceholders(c.text);
+  if (!String(c.text).trim()) { c.error = "Write the reply first."; drawInbox(); return; }
+  if (left.length) { c.error = "Fill in or delete the [[…]] placeholders first. Nothing was sent."; drawInbox(); return; }
+  if (!d.staging && !confirm("Send this reply from " + d.from + " to " + c.to + (c.cc ? " (cc " + c.cc + ")" : "") + "?")) return;
+  c.busy = "send";
+  drawInbox();
+  api("/api/inbox/reply", { method: "POST", body: JSON.stringify({ mailbox: t.mailbox, conv: t.conv || t.id, to: c.to, cc: c.cc, text: c.text }) }).then(function (r) {
+    c.preview = r;
+    c.busy = false;
+    toast(r.dryRun ? "Dry run: nothing was sent (staging)." : "Reply sent.");
+    delete ibThread[k]; // the thread now has your reply
+    drawInbox();
+    if (ibShowThread[k]) loadThread(k).then(drawInbox, drawInbox);
+    if (!r.dryRun) setTimeout(function () { loadInbox(true); }, 3000);
+  }, function (err) {
+    c.busy = false;
+    c.error = err.message;
+    drawInbox();
+  });
+}
+
+function ignoreRow(k, undo) {
+  var t = undo ? ibUndo && ibUndo.t : ibItems[k];
+  if (!t) return;
+  api("/api/inbox/ignore", { method: "POST", body: JSON.stringify({ mailbox: t.mailbox, conv: t.conv || t.id, latest: t.receivedAt, undo: !!undo }) }).then(function () {
+    if (undo) { ibUndo = null; inboxSig = ""; loadInbox(false); return; }
+    ibUndo = { t: t, subject: t.subject };
+    delete ibCompose[k]; delete ibShowThread[k];
+    var gone = function (x) { return ibKey(x) !== k; };
+    inboxData.items = inboxData.items.filter(gone);
+    inboxData.followUps = (inboxData.followUps || []).filter(gone);
+    inboxData.ignored = (inboxData.ignored || 0) + 1;
+    updateInboxBadge();
+    drawInbox();
+  }, function (err) { toast(err.message, true); });
+}
+
+document.addEventListener("input", function (e) {
+  var f = e.target.closest && e.target.closest("[data-ib-field]");
+  if (!f) return;
+  var wrap = f.closest("[data-ib-compose]"), c = wrap && ibCompose[wrap.dataset.ibCompose];
+  if (!c) return;
+  c[f.dataset.ibField] = f.value;
+  var ph = f.dataset.ibField === "text" && wrap.querySelector("[data-ib-ph]");
+  if (ph) ph.innerHTML = phNote(ibPlaceholders(f.value));
+});
+// A list refresh that waited while you typed happens once you leave the box.
+document.addEventListener("focusout", function () {
+  setTimeout(function () { if (ibRedrawLater && !ibTyping() && page === "inbox") { ibRedrawLater = false; drawInbox(); } }, 0);
+});
+document.addEventListener("click", function (e) {
+  var el = e.target.closest && e.target.closest("[data-ib-reply],[data-ib-ai],[data-ib-thread],[data-ib-ignore],[data-ib-send],[data-ib-close],[data-ib-unignore]");
+  if (!el) return;
+  var d = el.dataset;
+  if (d.ibUnignore !== undefined) return ignoreRow(null, true);
+  if (d.ibReply) return openCompose(d.ibReply, false);
+  if (d.ibAi) { if (ibCompose[d.ibAi] && !ibCompose[d.ibAi].preview && ibThread[d.ibAi] && ibThread[d.ibAi].data) return aiDraft(d.ibAi); return openCompose(d.ibAi, true); }
+  if (d.ibSend) return sendReply(d.ibSend);
+  if (d.ibClose) {
+    var c = ibCompose[d.ibClose];
+    if (c && !c.preview && String(c.text || "").trim() && !confirm("Discard this reply?")) return;
+    delete ibCompose[d.ibClose];
+    return drawInbox();
+  }
+  if (d.ibIgnore) return ignoreRow(d.ibIgnore, false);
+  if (d.ibThread) {
+    var k = d.ibThread;
+    ibShowThread[k] = !ibShowThread[k];
+    drawInbox();
+    if (ibShowThread[k]) loadThread(k).then(drawInbox, drawInbox);
+  }
+});
 
 // Checks every few minutes on any page, so the sidebar count stays current.
 setInterval(function () { if (!document.hidden && me) loadInbox(true); }, 3 * 60 * 1000);

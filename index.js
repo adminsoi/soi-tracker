@@ -7,6 +7,8 @@ if (process.env.SEED_FROM_PREFIX) {
   for (const name of ["MS_TENANT_ID", "MS_CLIENT_ID", "MS_CLIENT_SECRET", "MS_FROM_EMAIL", "IT_REQUESTS_MAILBOX"]) delete process.env[name];
   console.log("Staging: Microsoft 365 email and calendars are switched off.");
 }
+// Staging shows a practice email on Emails and never sends a reply (dry run).
+const STAGING = !!process.env.SEED_FROM_PREFIX;
 
 const path = require("path");
 const fs = require("fs");
@@ -54,6 +56,8 @@ const {
   withBoard,
   getMailIndex,
   withMailIndex,
+  getInboxIgnored,
+  withInboxIgnored,
   getQbr,
   withQbr,
   getStaffForms,
@@ -73,7 +77,9 @@ const { sendMail, mailConfigured, MAIL_FROM } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError, nameFromTitle } = require("./calendar");
 const { hrEvents, cleanFeedUrl, FeedError } = require("./hrcal");
 const { itRequestsConfigured, fetchItRequests, IT_REQUESTS_MAILBOX, parseFormWorkbook, recordFromEmail, FormFileError, officeStamp } = require("./itrequests");
-const { inboxThreads, syncFollowIndex, MailError } = require("./mail");
+const { inboxThreads, syncFollowIndex, MailError, threadMessages, replyToMessage, sendAs, forgetInbox } = require("./mail");
+const replies = require("./replies");
+const { askClaude, AiError } = require("./bedrock");
 const board = require("./board");
 const forms = require("./staffforms");
 const employment = require("./people");
@@ -211,7 +217,7 @@ app.use(express.json());
 // Strategy Meeting: a successful save whose text has #strategymeeting or
 // @strategymeeting adds a row there (raiseFromNotes, with the routes).
 app.use("/api", (req, res, next) => {
-  if (!["POST", "PUT", "PATCH"].includes(req.method) || /^\/(strategy|login|admin)(\/|$)/.test(req.path)) return next();
+  if (!["POST", "PUT", "PATCH"].includes(req.method) || /^\/(strategy|login|admin|inbox)(\/|$)/.test(req.path)) return next();
   const lines = req.body && !Buffer.isBuffer(req.body) ? strategy.taggedLines(req.body) : [];
   if (lines.length) res.on("finish", () => {
     if (res.statusCode < 400 && req.user) raiseFromNotes(req, lines).catch((err) => console.error("Strategy Meeting row from a note:", err.message));
@@ -1853,6 +1859,13 @@ app.get(
     const days = Math.min(Math.max(parseInt(req.query.days, 10) || 3, 1), 14);
     const u = (await getUsers()).map(normalizeUser).find((x) => sameUser(x.username, req.user.username));
     const own = u && u.email ? u.email.toLowerCase() : "";
+    const ignoredMap = ((await getInboxIgnored()).users || {})[req.user.username.toLowerCase()] || {};
+    if (STAGING) {
+      if (!own) return res.status(409).json({ error: "Your login has no email address. Ask an admin to add it at /admin.html.", code: "no_email" });
+      const sample = replies.sampleItem(own, (u.calendarNames || [])[0] || u.username);
+      const items = [sample].filter((t) => !replies.isIgnored(ignoredMap, t));
+      return res.json({ mailbox: own, mailboxes: [own], days, since: new Date(Date.now() - days * 864e5).toISOString(), items, errors: [], capped: [], followUps: [], followStatus: { syncing: [] }, colors: calColors(await getSettings()), staging: true, ignored: 1 - items.length });
+    }
     try {
       const mine = await inboxThreads(own, days); // problems with your own mailbox stop here
       const items = mine.items.map((t) => Object.assign({}, t, { mailbox: own, conv: t.id }));
@@ -1897,11 +1910,140 @@ app.get(
       const followStatus = { syncing: loaded.filter((m) => !doc[m] || !doc[m].syncedAt || followRunning.has(m)) };
       const capped = [mine.capped ? own : null, ...extras.map((m, i) => results[i].status === "fulfilled" && results[i].value.capped ? m : null)].filter(Boolean);
       items.sort((a, b) => String(b.receivedAt).localeCompare(String(a.receivedAt)));
-      res.json({ mailbox: own, mailboxes: [own, ...extras], days, since: mine.since, items, errors, capped, followUps, followStatus, colors: calColors(await getSettings()) });
+      // Ignored conversations stay hidden until a newer message arrives.
+      const shown = items.filter((t) => !replies.isIgnored(ignoredMap, t));
+      const shownFollow = followUps.filter((t) => !replies.isIgnored(ignoredMap, t));
+      res.json({ mailbox: own, mailboxes: [own, ...extras], days, since: mine.since, items: shown, errors, capped, followUps: shownFollow, followStatus, colors: calColors(await getSettings()), ignored: items.length - shown.length });
     } catch (err) {
       if (err instanceof MailError) return res.status(409).json({ error: err.message, code: err.code });
       throw err;
     }
+  })
+);
+
+// ---------- Email replies (Phase 8) ----------
+// Open thread, Draft with AI, Send, Ignore — for the conversations on your
+// own Emails page only: your login's mailbox or an extra inbox an admin gave
+// you, never one the browser makes up. Draft with AI sends Claude on
+// Bedrock (SOI's AWS account) just that conversation; nothing is sent until
+// the person clicks Send, and Send refuses a reply that still has [[…]]
+// placeholders. Replies go out as the signed-in person (Mail.Send): in the
+// same Outlook thread for your own inbox; for a shared inbox, a new email
+// from your own mailbox with the shared inbox copied. Staging never sends
+// (dry run) and shows a practice email instead of real mail.
+async function inboxAccess(req, mailbox) {
+  const u = (await getUsers()).map(normalizeUser).find((x) => sameUser(x.username, req.user.username));
+  const own = u && u.email ? u.email.toLowerCase() : "";
+  if (!own) { const e = new Error("Your login has no email address. Ask an admin to add it at /admin.html."); e.status = 409; throw e; }
+  const box = String(mailbox || own).toLowerCase();
+  const extras = (u.extraMailboxes || []).map((m) => String(m).toLowerCase()).filter((m) => m.split("@")[1] === own.split("@")[1]);
+  if (box !== own && !extras.includes(box)) { const e = new Error("That inbox isn't one of yours."); e.status = 403; throw e; }
+  return { u, own, box, name: (u.calendarNames || [])[0] || u.username };
+}
+async function loadThread(a, conv) {
+  if (!conv || typeof conv !== "string" || conv.length > 512) { const e = new Error("Which conversation?"); e.status = 400; throw e; }
+  if (conv === replies.SAMPLE_CONV) {
+    if (!STAGING) { const e = new Error("That practice email is only on staging."); e.status = 404; throw e; }
+    return replies.sampleThread(a.own, a.name);
+  }
+  const msgs = await threadMessages(a.box, conv);
+  if (!msgs.length) { const e = new Error("That conversation isn't in the mailbox any more."); e.status = 404; throw e; }
+  return msgs;
+}
+function inboxRoute(fn) {
+  return asyncHandler(async (req, res) => {
+    try {
+      await fn(req, res);
+    } catch (err) {
+      if (err instanceof MailError || err instanceof AiError) return res.status(err instanceof AiError ? 502 : 409).json({ error: err.message, code: err.code || "ai" });
+      if (err.status) return res.status(err.status).json({ error: err.message });
+      throw err;
+    }
+  });
+}
+
+app.get(
+  "/api/inbox/thread",
+  authMiddleware,
+  inboxRoute(async (req, res) => {
+    const a = await inboxAccess(req, req.query.mailbox);
+    const messages = await loadThread(a, String(req.query.conv || ""));
+    const rec = replies.defaultRecipients(messages, a.own, a.box);
+    const shared = a.box !== a.own;
+    if (shared && !rec.cc.includes(a.box)) rec.cc.push(a.box);
+    res.json({ mailbox: a.box, from: a.own, shared, staging: STAGING, messages, to: rec.to, cc: rec.cc, subject: replies.replySubject(messages[messages.length - 1].subject) });
+  })
+);
+
+app.post(
+  "/api/inbox/draft",
+  authMiddleware,
+  inboxRoute(async (req, res) => {
+    const b = req.body || {};
+    const a = await inboxAccess(req, b.mailbox);
+    const messages = await loadThread(a, String(b.conv || ""));
+    console.log(`Draft with AI: ${req.user.username}, ${messages.length} message(s) from ${a.box}`);
+    const out = await askClaude({
+      system: replies.SYSTEM_PROMPT,
+      user: replies.draftPrompt({ sender: { name: a.name, email: a.own }, messages, notes: b.notes }),
+    });
+    res.json({ text: out.text, truncated: out.truncated, model: out.model, placeholders: (out.text.match(replies.PLACEHOLDER_RE) || []).length });
+  })
+);
+
+app.post(
+  "/api/inbox/reply",
+  authMiddleware,
+  inboxRoute(async (req, res) => {
+    const b = req.body || {};
+    const a = await inboxAccess(req, b.mailbox);
+    const text = String(b.text || "").replace(/\r\n/g, "\n").trim();
+    if (!text) return res.status(400).json({ error: "Write the reply first." });
+    if (text.length > 50000) return res.status(400).json({ error: "That reply is too long." });
+    const left = text.match(replies.PLACEHOLDER_RE);
+    if (left) return res.status(400).json({ error: `Fill in or delete the placeholders first: ${[...new Set(left)].slice(0, 5).join(", ")}. Nothing was sent.` });
+    const to = replies.parseAddresses(b.to), cc = replies.parseAddresses(b.cc);
+    const bad = [...to.bad, ...cc.bad];
+    if (bad.length) return res.status(400).json({ error: `Not an email address: ${bad.slice(0, 3).join(", ")}` });
+    if (!to.list.length) return res.status(400).json({ error: "Add at least one address in To." });
+    if (to.list.length + cc.list.length > 30) return res.status(400).json({ error: "That's more than 30 recipients." });
+    const ccList = cc.list.filter((x) => !to.list.includes(x));
+    const messages = await loadThread(a, String(b.conv || ""));
+    const last = messages[messages.length - 1];
+    const subject = replies.replySubject(last.subject);
+    const html = replies.replyHtml(text, last);
+    const shared = a.box !== a.own;
+    if (STAGING) {
+      console.log(`Reply (dry run, staging): ${req.user.username} to ${to.list.length + ccList.length} recipient(s)`);
+      return res.json({ sent: false, dryRun: true, from: a.own, to: to.list, cc: ccList, subject, text, inThread: !shared, html });
+    }
+    if (shared) await sendAs(a.own, { to: to.list, cc: ccList, subject, html });
+    else await replyToMessage(a.own, last.id, { to: to.list, cc: ccList, html });
+    forgetInbox(a.own);
+    if (shared) forgetInbox(a.box);
+    console.log(`Reply sent: ${req.user.username} as ${a.own}${shared ? ` (for ${a.box})` : ""} to ${to.list.length + ccList.length} recipient(s)`);
+    res.json({ sent: true, from: a.own, to: to.list, cc: ccList, subject, inThread: !shared });
+  })
+);
+
+app.post(
+  "/api/inbox/ignore",
+  authMiddleware,
+  inboxRoute(async (req, res) => {
+    const b = req.body || {};
+    const a = await inboxAccess(req, b.mailbox);
+    const conv = String(b.conv || "");
+    if (!conv || conv.length > 512) return res.status(400).json({ error: "Which conversation?" });
+    const latest = String(b.latest || new Date().toISOString()).slice(0, 40);
+    const me = req.user.username.toLowerCase();
+    await withInboxIgnored((doc) => {
+      doc.users = doc.users || {};
+      const map = replies.pruneIgnored(doc.users[me] || {}, Date.now());
+      if (b.undo) delete map[replies.ignoreKey(a.box, conv)];
+      else map[replies.ignoreKey(a.box, conv)] = { at: Date.now(), latest };
+      doc.users[me] = map;
+    });
+    res.json({ ok: true, ignored: !b.undo });
   })
 );
 

@@ -57,21 +57,28 @@ it's merged and redeployed.
   A spot bonus adds $100 to the person's next payroll in one click.
 - **Department Chat:** one chat for the whole company (not one per
   department), backed by Claude and reading the S3 document folders.
-  Waiting on compliance sign-off — see below.
+- **Compliance sign-off for Phases 8 and 9** (3 Nov 2026, by the compliance
+  lead; name not recorded at the user's request): Claude through **Amazon
+  Bedrock in SOI's own AWS account**, with **no extra limits** on what the AI
+  reads. Email drafting sends only the conversation being replied to.
+  Final compliance and airworthiness decisions still go through a qualified
+  person.
 
 ## Open items
 
-- **Compliance sign-off before Phases 8 and 9.** SOI policy keeps government
-  client information, contract details and supplier pricing out of AI
-  prompts; email drafting and the chat would send exactly that. Needs the
-  administrator / compliance lead's decision (e.g. Claude through SOI's own
-  AWS account via Bedrock, or limiting what the chat can read).
+- **Bedrock access** (AWS admin) before Draft with AI works: enable the
+  Anthropic model (`anthropic.claude-sonnet-5-5`) under Bedrock → Model
+  access in the stack's region, and allow `bedrock:InvokeModel` on it for
+  the role the tracker runs as (`EC2S3AccessRole`). Staging tests this too.
 - **Payroll rules from HR:** how each kind of leave reduces weekly pay, per
   entity (US, NZ, Singapore, UK). A qualified person checks the numbers
   before any real payroll is sent. Phase 4 left a "Leave rules" box per
   entity on HR → Payroll for HR to fill in; nothing applies them yet.
 - **Mail.Send** for each person's mailbox (Microsoft 365 admin) before
-  email replies can be sent as that person.
+  email replies can be sent as that person. The app already has Mail.Send
+  (it sends notifications from `MS_FROM_EMAIL`); if an Application Access
+  Policy limits it to certain mailboxes, everyone who replies must be added.
+  Only checked once Phase 8 is live (staging never sends).
 - **Staging stack** `soi-tracker-staging` (port 8443, `staging` branch,
   S3 prefix `soi-tracker/staging` reading live data through
   `SEED_FROM_PREFIX`; README §4). Every phase goes to the `staging`
@@ -415,5 +422,34 @@ Mentions of You, and files created automatically from Pentagon.
         nothing is emailed when an SOP request is decided (a strategy note
         for someone emails them like any new task, if mail is set up).
 - [ ] **8. Email replies** — draft, edit, send, ignore, open thread.
+      Built 3 Nov 2026 on `staging`; not yet tested on staging.
+      - Under each open row on Emails: **Reply**, **✦ Draft with AI**,
+        **Open thread**, **Ignore**, Open in Outlook. Rules and the AI
+        prompt in `replies.js`; Bedrock in `bedrock.js`; Graph reads and
+        sends in `mail.js` (`threadMessages`, `replyToMessage`, `sendAs`);
+        routes `GET /api/inbox/thread`, `POST /api/inbox/draft`,
+        `POST /api/inbox/reply`, `POST /api/inbox/ignore` in `index.js`
+        (only your login's mailbox or your extra inboxes); front end
+        `public/js/inbox.js`. README *Replies*.
+      - AI: Claude Sonnet 5.5 on Bedrock (`InvokeModel` on
+        `bedrock-runtime`, `@aws-sdk/client-bedrock-runtime`), same
+        credentials and region as S3; `BEDROCK_MODEL_ID` (default
+        `anthropic.claude-sonnet-5-5`), `BEDROCK_REGION` (default
+        `AWS_REGION`). Sent only the conversation being replied to. Never
+        invents certification numbers, 8130-3s, NSNs, prices, export-
+        controlled data, etc. — writes `[[…]]` placeholders; the server
+        refuses to send while any are left.
+      - Send: asks to confirm; replies as the signed-in person — in the same
+        Outlook thread for your own inbox; for a shared inbox, a new "RE:"
+        email from your mailbox with the shared inbox copied. The replied-to
+        message is quoted underneath.
+      - Ignore: per person, `inbox_ignored.json`, back when a newer message
+        arrives; Undo right after.
+      - Staging: a made-up practice email (no Microsoft 365 there); Draft
+        with AI calls Bedrock for real; Send is a dry run showing what would
+        have been sent. Real sending is only checked once live.
+      - Tested locally against a mock server (no Node on the Mac): thread,
+        draft with placeholders, Send blocked until they're filled, dry
+        run, Ignore / Undo; `replies.js` rules tested in JavaScriptCore.
 - [ ] **9. Company chat.**
 - [ ] **10. README update and final review.**
