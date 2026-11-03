@@ -55,9 +55,13 @@ it's merged and redeployed.
   (needs a login with his Pentagon code — check whether one exists).
 - **People** and **spot bonuses:** Leadership only, enforced on the server.
   A spot bonus adds $100 to the person's next payroll in one click.
-- **Chat with AOG** (renamed from "Department Chat" on 3 Nov 2026; only
-  the label so far): one chat for the whole company (not one per
-  department), backed by Claude and reading the S3 document folders.
+- **Chat with AOG** (renamed from "Department Chat" on 3 Nov 2026): one
+  chat for the whole company (not one per department), backed by Claude on
+  Bedrock. It finds quote files and documents (S3), reads documents, and
+  adds notes, documents and ILS results to a file, with the person's own
+  permissions. Each person's chats are kept; the person and IT can read
+  them (decided 3 Nov 2026). ILS is to be searched live once SOI has ILS
+  API access; until then people paste ILS results in.
 - **Improvements** (added 3 Nov 2026): a sidebar section, above Calendar
   and Global, where anyone asks for a change to the tracker — title,
   description, which part of the tracker (sidebar sections plus Other),
@@ -89,6 +93,9 @@ it's merged and redeployed.
   (it sends notifications from `MS_FROM_EMAIL`); if an Application Access
   Policy limits it to certain mailboxes, everyone who replies must be added.
   Only checked once Phase 8 is live (staging never sends).
+- **ILS API access** before Chat with AOG can search ILS itself: SOI's
+  ILS (ilsmart.com) API subscription, its documentation and credentials.
+  Until then the chat records ILS results people paste in.
 - **Staging stack** `soi-tracker-staging` (port 8443, `staging` branch,
   S3 prefix `soi-tracker/staging` reading live data through
   `SEED_FROM_PREFIX`; README §4). Every phase goes to the `staging`
@@ -483,4 +490,35 @@ Mentions of You, and files created automatically from Pentagon.
       - The sidebar item and page title say "Chat with AOG"; the page
         itself is unchanged until Phase 9.
 - [ ] **9. Company chat** ("Chat with AOG" in the sidebar).
+      Built 3 Nov 2026 on `staging`; not yet tested on staging.
+      - Rules, prompt and tools in `chat.js`; routes in `index.js`
+        (`GET /api/chat`, `GET /api/chat/:id`, `POST /api/chat`); page
+        `public/js/chat.js` (replaces the placeholder in
+        `company-pages.js`). Claude through `invoke()` in `bedrock.js`,
+        same model and region as Draft with AI.
+      - Tools: find_files (both boards, including Pentagon documents not
+        yet on the board), get_file, search_documents (Documents folders
+        the person sees + board case-file documents, by name and folder),
+        read_document (text, CSV, PDF up to 10 MB, pictures),
+        add_note_to_file, attach_document_to_file, search_ils (says ILS
+        isn't connected), add_ils_results_to_file (an "ILS results" entry
+        on the case file + ticks ILS checked).
+      - Every tool calls the tracker's own routes on this server with the
+        person's sign-in (`chatCall`), so access rules are the same as on
+        the page. Pentagon documents are put on the board first (adopt).
+        Notes and ILS entries end "— via Chat with AOG for (name)"; the
+        file history records the person as usual.
+      - Prompt: never invents cert numbers, 8130-3 / EASA Form 1, NSNs,
+        CAGE codes, export classifications, prices or lead times
+        (`[[…]]` placeholders instead); never states anything is compliant
+        or airworthy; asks which file when several match; changes a file
+        only when asked.
+      - Saved chats: `chats_<username>.json` (`{ chats: [{ id, title, at,
+        updatedAt, messages: [{ role, text, at, actions }] }] }`), newest
+        200 kept. The person sees theirs; IT and full access can open
+        anyone's read-only. Not deletable from the page.
+      - Tested locally against a mock (no Node on the Mac): `chat.js` rules
+        in JavaScriptCore; the page (send, follow-up, list, IT read-only
+        view, light and dark). The Bedrock tool loop and the real tools
+        are first exercised on staging.
 - [ ] **10. README update and final review.**

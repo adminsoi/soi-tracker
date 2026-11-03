@@ -48,33 +48,34 @@ function explainError(err) {
 }
 
 /**
- * One request to Claude: system prompt + one user message. Returns the text
- * of the answer. Throws AiError with a plain-words reason.
+ * One Messages API request on Bedrock (body without anthropic_version).
+ * Returns the parsed answer. Throws AiError with a plain-words reason.
  */
-async function askClaude({ system, user, maxTokens }) {
-  const body = {
-    anthropic_version: "bedrock-2023-05-31",
-    max_tokens: maxTokens || 8000,
-    system,
-    messages: [{ role: "user", content: user }],
-  };
-  let out;
+async function invoke(body) {
   try {
     const res = await bedrock().send(new InvokeModelCommand({
       modelId: MODEL_ID,
       contentType: "application/json",
       accept: "application/json",
-      body: JSON.stringify(body),
+      body: JSON.stringify(Object.assign({ anthropic_version: "bedrock-2023-05-31" }, body)),
     }));
-    out = JSON.parse(Buffer.from(res.body).toString("utf8"));
+    return JSON.parse(Buffer.from(res.body).toString("utf8"));
   } catch (err) {
     console.error(`Bedrock ${MODEL_ID} in ${REGION} failed:`, err.name, err.message);
     throw new AiError(explainError(err));
   }
+}
+
+/**
+ * One request to Claude: system prompt + one user message. Returns the text
+ * of the answer. Throws AiError with a plain-words reason.
+ */
+async function askClaude({ system, user, maxTokens }) {
+  const out = await invoke({ max_tokens: maxTokens || 8000, system, messages: [{ role: "user", content: user }] });
   if (out.stop_reason === "refusal") throw new AiError("Claude declined to draft this one. Write the reply yourself.");
   const text = (out.content || []).filter((b) => b.type === "text").map((b) => b.text).join("").trim();
   if (!text) throw new AiError("Claude returned an empty draft. Try again.");
   return { text, truncated: out.stop_reason === "max_tokens", model: MODEL_ID };
 }
 
-module.exports = { askClaude, AiError, BEDROCK_MODEL_ID: MODEL_ID, BEDROCK_REGION: REGION };
+module.exports = { askClaude, invoke, AiError, BEDROCK_MODEL_ID: MODEL_ID, BEDROCK_REGION: REGION };

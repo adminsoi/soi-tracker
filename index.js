@@ -74,6 +74,8 @@ const {
   withStrategy,
   getImprovements,
   withImprovements,
+  getChats,
+  withChats,
 } = require("./s3store");
 const { sendMail, mailConfigured, MAIL_FROM } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError, nameFromTitle } = require("./calendar");
@@ -81,7 +83,7 @@ const { hrEvents, cleanFeedUrl, FeedError } = require("./hrcal");
 const { itRequestsConfigured, fetchItRequests, IT_REQUESTS_MAILBOX, parseFormWorkbook, recordFromEmail, FormFileError, officeStamp } = require("./itrequests");
 const { inboxThreads, syncFollowIndex, MailError, threadMessages, replyToMessage, sendAs, forgetInbox } = require("./mail");
 const replies = require("./replies");
-const { askClaude, AiError } = require("./bedrock");
+const { askClaude, invoke, AiError } = require("./bedrock");
 const board = require("./board");
 const forms = require("./staffforms");
 const employment = require("./people");
@@ -89,6 +91,7 @@ const docs = require("./documents");
 const legal = require("./legal");
 const strategy = require("./strategy");
 const improvements = require("./improvements");
+const chat = require("./chat");
 const payCheck = require("./payrollcheck");
 const { pentagonQuery } = require("./pentagon");
 const {
@@ -220,7 +223,7 @@ app.use(express.json());
 // Strategy Meeting: a successful save whose text has #strategymeeting or
 // @strategymeeting adds a row there (raiseFromNotes, with the routes).
 app.use("/api", (req, res, next) => {
-  if (!["POST", "PUT", "PATCH"].includes(req.method) || /^\/(strategy|login|admin|inbox)(\/|$)/.test(req.path)) return next();
+  if (!["POST", "PUT", "PATCH"].includes(req.method) || /^\/(strategy|login|admin|inbox|chat)(\/|$)/.test(req.path)) return next();
   const lines = req.body && !Buffer.isBuffer(req.body) ? strategy.taggedLines(req.body) : [];
   if (lines.length) res.on("finish", () => {
     if (res.statusCode < 400 && req.user) raiseFromNotes(req, lines).catch((err) => console.error("Strategy Meeting row from a note:", err.message));
@@ -6336,6 +6339,239 @@ app.post(
       row.log = row.log.map((e) => (e.taskId === task.id ? Object.assign({}, e, { taskDone: false }) : e));
     }
     res.status(201).json(row);
+  })
+);
+
+// ---------- Chat with AOG ----------
+// One Claude chat for the company (chat.js), on Bedrock (bedrock.js). Every
+// tool runs as the signed-in person: reads and changes go through the
+// tracker's own routes on this server with their sign-in (chatCall), so the
+// chat can never see or do more than they can. Changes say "via Chat with
+// AOG" on the file. Each person's chats are kept; IT and full access can
+// open anyone's.
+function chatCall(req, method, url, body) {
+  return new Promise((resolve, reject) => {
+    const data = body === undefined ? null : Buffer.from(JSON.stringify(body));
+    const r = https.request({ host: "127.0.0.1", port: PORT, method, path: url, rejectUnauthorized: false,
+      headers: Object.assign({ Authorization: req.headers.authorization || "" }, data ? { "Content-Type": "application/json", "Content-Length": data.length } : {}) }, (res) => {
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => {
+        const buf = Buffer.concat(chunks), type = String(res.headers["content-type"] || "");
+        let json = null;
+        if (type.includes("json")) { try { json = JSON.parse(buf.toString("utf8")); } catch (e) { /* not JSON */ } }
+        resolve({ status: res.statusCode, type, buf, json });
+      });
+    });
+    r.on("error", reject);
+    r.setTimeout(60000, () => r.destroy(new Error("The tracker took too long to answer")));
+    if (data) r.write(data);
+    r.end();
+  });
+}
+const callError = (r) => (r.json && r.json.error) || `The tracker answered ${r.status}`;
+// ILS (ilsmart.com) needs SOI's ILS API subscription; there's no connection
+// yet, so search_ils says so and the chat records pasted results instead.
+const ILS_CONNECTED = false;
+
+function chatTools(req) {
+  const boards = {};
+  async function boardList(id) {
+    if (!boards[id]) {
+      if (!canSeeBoard(req.user, BOARDS[id])) boards[id] = [];
+      else {
+        const r = await chatCall(req, "GET", `/api/board?board=${id}`);
+        boards[id] = r.status === 200 && r.json ? r.json.cards || [] : [];
+      }
+    }
+    return boards[id];
+  }
+  async function findCard(b, id) {
+    if (!BOARDS[b]) return null;
+    return (await boardList(b)).find((c) => c.id === id) || null;
+  }
+  // A Pentagon document not yet on the board is stored before it's changed.
+  async function storedId(b, id) {
+    if (!String(id).startsWith("pg:")) return id;
+    const r = await chatCall(req, "POST", `/api/board/adopt?board=${b}`, { id });
+    if (r.status >= 300) throw new Error(callError(r));
+    delete boards[b];
+    return r.json.id;
+  }
+  const VIA = `\n— via Chat with AOG for ${req.user.username}`;
+  const run = {
+    async find_files({ query }) {
+      const out = [];
+      for (const b of ["ops", "usgov"]) for (const c of chat.matchCards(await boardList(b), query)) out.push(chat.cardBrief(c, b));
+      return { result: out.length ? { files: out.slice(0, 15) } : `No board file you can see matches "${query}".` };
+    },
+    async get_file({ board: b, id }) {
+      const c = await findCard(b, id);
+      if (!c) return { result: "That file isn't there, or you can't see it." };
+      return { result: chat.cardDetail(c, b, `board:${b}`) };
+    },
+    async search_documents({ query }) {
+      await freshLegal();
+      const words = String(query || "").toLowerCase().split(/\s+/).filter(Boolean);
+      if (!words.length) return { result: "Say what to look for." };
+      const hit = (s) => words.every((w) => s.toLowerCase().includes(w));
+      const spaces = docSpaces(req.user), doc = docs.shape(await getDocuments()), out = [];
+      for (const sp of spaces.filter((s) => s.kind !== "board")) {
+        for (const f of doc.files.filter((x) => x.space === sp.id && !x.archived)) {
+          const where = docs.pathLabel(doc, sp.id, f.folder || "");
+          if (hit(`${f.name} ${where}`)) out.push({ name: f.name, where, ref: { space: sp.id, folder: f.folder || "", file: f.id } });
+        }
+      }
+      for (const b of ["ops", "usgov"]) for (const c of await boardList(b)) for (const f of c.files || []) {
+        const where = `${BOARDS[b].name} › ${chat.cardLabel(c)}`;
+        if (!c.virtual && hit(`${f.name} ${where}`)) out.push({ name: f.name, where, ref: { space: `board:${b}`, folder: c.id, file: f.id } });
+      }
+      return { result: out.length ? { documents: out.slice(0, 20), more: Math.max(0, out.length - 20) } : `No document you can see matches "${query}".` };
+    },
+    async read_document({ ref }) {
+      const q = new URLSearchParams({ space: ref.space || "", folder: ref.folder || "", file: ref.file || "" });
+      const r = await chatCall(req, "GET", `/api/documents/view?${q}`);
+      if (r.status !== 200) return { result: callError(r) };
+      const type = r.type.split(";")[0].trim();
+      if (type.startsWith("text/")) return { result: r.buf.toString("utf8").slice(0, 50000) };
+      const data = r.buf.toString("base64");
+      if (type === "application/pdf") {
+        if (r.buf.length > 10 * 1024 * 1024) return { result: "That PDF is too large to read here (over 10 MB)." };
+        return { result: "The PDF follows this message.", extra: { type: "document", source: { type: "base64", media_type: type, data } } };
+      }
+      if (/^image\/(png|jpeg|gif|webp)$/.test(type)) {
+        if (r.buf.length > 3.5 * 1024 * 1024) return { result: "That picture is too large to read here (over 3.5 MB)." };
+        return { result: "The picture follows this message.", extra: { type: "image", source: { type: "base64", media_type: type, data } } };
+      }
+      return { result: "That kind of file can't be read here." };
+    },
+    async add_note_to_file({ board: b, id, text }) {
+      const t = chat.text(text, 3800);
+      if (!t) return { result: "The note is empty." };
+      const c = await findCard(b, id);
+      if (!c) return { result: "That file isn't there, or you can't see it." };
+      const sid = await storedId(b, id);
+      const r = await chatCall(req, "POST", `/api/board/${encodeURIComponent(sid)}/notes?board=${b}`, { text: t + VIA });
+      if (r.status >= 300) return { result: `Not added: ${callError(r)}` };
+      return { result: `Note added to ${chat.cardLabel(c)}.`, action: `Added a note to ${chat.cardLabel(c)}` };
+    },
+    async attach_document_to_file({ board: b, id, ref }) {
+      const c = await findCard(b, id);
+      if (!c) return { result: "That file isn't there, or you can't see it." };
+      const sid = await storedId(b, id);
+      const r = await chatCall(req, "POST", "/api/documents/add-to", { space: ref.space, folder: ref.folder || "", file: ref.file, target: "board", board: b, card: sid });
+      if (r.status >= 300) return { result: `Not attached: ${callError(r)}` };
+      return { result: `Attached to ${r.json.to}.`, action: `Attached a document to ${chat.cardLabel(c)}` };
+    },
+    async search_ils() {
+      if (!ILS_CONNECTED) return { result: "ILS isn't connected to the tracker yet (it needs SOI's ILS API access). Ask the person to search ilsmart.com and paste the results here; you can then record them on the file with add_ils_results_to_file." };
+      return { result: "ILS isn't connected." };
+    },
+    async add_ils_results_to_file({ board: b, id, part_number: pn, results }) {
+      const t = chat.text(results, 3800);
+      if (!t) return { result: "There are no ILS results to add." };
+      const c = await findCard(b, id);
+      if (!c) return { result: "That file isn't there, or you can't see it." };
+      const sid = await storedId(b, id);
+      const title = `ILS results${pn ? " for " + chat.text(pn, 60) : ""}`;
+      const r = await chatCall(req, "POST", `/api/board/${encodeURIComponent(sid)}/links?board=${b}`, { kind: "website", url: "https://www.ilsmart.com", title, text: t + VIA });
+      if (r.status >= 300) return { result: `Not added: ${callError(r)}` };
+      const k = await chatCall(req, "PATCH", `/api/board/${encodeURIComponent(sid)}?board=${b}`, { checks: { ils: true } });
+      const ticked = k.status < 300;
+      return { result: `${title} added to ${chat.cardLabel(c)}${ticked ? " and ILS checked ticked." : `, but ILS checked wasn't ticked: ${callError(k)}`}`, action: `Added ${title} to ${chat.cardLabel(c)}${ticked ? " (ILS checked ✓)" : ""}` };
+    },
+  };
+  return async (name, input) => {
+    if (!run[name]) return { result: "There's no such tool." };
+    try { return await run[name](input || {}); } catch (err) { return { result: `That didn't work: ${err.message}` }; }
+  };
+}
+
+// One question: the model calls tools until it has an answer.
+async function chatAnswer(req, history, question) {
+  const tool = chatTools(req);
+  const messages = chat.contextMessages(history).concat([{ role: "user", content: question }]);
+  if (messages.length > 1 && messages[messages.length - 2].role === "user") messages.splice(messages.length - 2, 1);
+  const actions = [], looked = [];
+  for (let round = 0; round < chat.MAX_ROUNDS; round++) {
+    const out = await invoke({ max_tokens: 4000, system: chat.SYSTEM_PROMPT, tools: chat.TOOLS, messages });
+    if (out.stop_reason === "refusal") return { text: "Claude declined to answer that one.", actions, looked };
+    messages.push({ role: "assistant", content: out.content || [] });
+    const uses = (out.content || []).filter((b) => b.type === "tool_use");
+    if (out.stop_reason !== "tool_use" || !uses.length) {
+      const text = (out.content || []).filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+      return { text: text || "(No answer.)", actions, looked, truncated: out.stop_reason === "max_tokens" };
+    }
+    const results = [], extras = [];
+    for (const u of uses) {
+      const r = await tool(u.name, u.input);
+      looked.push(u.name);
+      if (r.action) actions.push(r.action);
+      results.push({ type: "tool_result", tool_use_id: u.id, content: typeof r.result === "string" ? r.result : JSON.stringify(r.result) });
+      if (r.extra) extras.push(r.extra);
+    }
+    messages.push({ role: "user", content: results.concat(extras) });
+  }
+  return { text: "I stopped after several steps without a final answer. Try a narrower question.", actions, looked };
+}
+
+app.get(
+  "/api/chat",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const who = String(req.query.user || req.user.username);
+    if (!chat.canReadChatsOf(req.user, who)) return res.status(403).json({ error: "Only IT can open someone else's chats" });
+    const doc = chat.shape(await getChats(chat.safeName(who)));
+    const audit = chat.canReadChatsOf(req.user, "\u0000");
+    res.json({
+      user: who, mine: sameUser(who, req.user.username), audit, ils: ILS_CONNECTED,
+      logins: audit ? (await getUsers()).map((u) => u.username).sort((a, b) => a.localeCompare(b)) : [],
+      chats: doc.chats.map((c) => ({ id: c.id, title: c.title, at: c.at, updatedAt: c.updatedAt, count: (c.messages || []).length })),
+    });
+  })
+);
+app.get(
+  "/api/chat/:id",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const who = String(req.query.user || req.user.username);
+    if (!chat.canReadChatsOf(req.user, who)) return res.status(403).json({ error: "Only IT can open someone else's chats" });
+    const c = chat.shape(await getChats(chat.safeName(who))).chats.find((x) => x.id === req.params.id);
+    if (!c) return res.status(404).json({ error: "That chat isn't here" });
+    res.json(c);
+  })
+);
+// Ask: { chatId?, text }. Only in your own chats.
+app.post(
+  "/api/chat",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const question = chat.text(b.text, chat.MAX_MESSAGE);
+    if (!question) return res.status(400).json({ error: "Type a question first" });
+    const name = chat.safeName(req.user.username);
+    const existing = b.chatId ? chat.shape(await getChats(name)).chats.find((x) => x.id === b.chatId) : null;
+    if (b.chatId && !existing) return res.status(404).json({ error: "That chat isn't here any more" });
+    let answer;
+    try {
+      answer = await chatAnswer(req, existing || { messages: [] }, question);
+    } catch (err) {
+      if (err instanceof AiError) return res.status(502).json({ error: err.message });
+      throw err;
+    }
+    console.log(`Chat with AOG: ${req.user.username}, ${answer.looked.length} tool call(s), ${answer.actions.length} change(s)`);
+    const now = Date.now();
+    const saved = await withChats(name, (doc) => {
+      chat.shape(doc);
+      let c = existing && doc.chats.find((x) => x.id === existing.id);
+      if (!c) { c = { id: newId(), title: chat.chatTitle(question), at: now, messages: [] }; doc.chats.push(c); }
+      c.messages.push({ role: "user", text: question, at: now });
+      c.messages.push({ role: "assistant", text: answer.text, at: Date.now(), actions: answer.actions, truncated: !!answer.truncated });
+      c.updatedAt = Date.now();
+      chat.trim(doc);
+      return JSON.parse(JSON.stringify(c));
+    });
+    res.json(saved);
   })
 );
 

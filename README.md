@@ -481,12 +481,44 @@ dark ones like SOI green stay visible.
   *Strategy Meeting*).
   **Documents** is the S3 file manager (see below). **People** is for
   leadership logins only (see below).
-- **Chat with AOG** (was Department Chat, and before that Master Chat) describes the planned company-wide
-  Claude chat. It isn't switched on until it can run in SOI's compliant AWS
-  environment and compliance approves its access; meanwhile it opens
-  claude.ai.
+- **Chat with AOG** (was Department Chat, and before that Master Chat) is
+  the company-wide Claude chat (see *Chat with AOG*).
 - **Improvements** is where anyone asks for a change to the tracker (see
   *Improvements*).
+
+## Chat with AOG (company chat)
+
+One Claude chat for the whole company, on Amazon Bedrock in SOI's AWS
+account (the same model, region and setup as Emails → Draft with AI). Ask it
+to:
+
+- **find a file:** by file, RFQ, quote, SO or PO number, customer, vendor,
+  platform or part number, on the Operations and US Gov boards (Pentagon
+  documents not yet on the board included);
+- **find and read documents:** your departments' Documents folders and the
+  documents on board files you can open; it reads text, CSV, PDFs (up to
+  10 MB) and pictures;
+- **add to a quote file:** a note, a document from Documents, or **ILS
+  results** (added as an "ILS results" entry with the ILS link, and "ILS
+  checked" ticked).
+
+It works with your permissions, never more: every lookup and change goes
+through the tracker's own routes with your sign-in. Changes show on the file
+as made by you, with "— via Chat with AOG" on the note. It asks which file
+when several match, and it never makes up certificate numbers, 8130-3s,
+NSNs, export classifications or prices (it leaves `[[…]]` placeholders).
+
+**ILS:** the chat can't search ilsmart.com itself yet; that needs SOI's ILS
+API access. Until then, search ILS yourself, paste the results into the
+chat and ask it to add them to the file.
+
+**Saved chats:** each person's chats are kept in the bucket
+(`chats_<username>.json`, newest 200). You see your own; IT and full-access
+logins can open anyone's (read-only) from "Whose chats (IT)". Chats can't be
+deleted from the page.
+
+If Bedrock access is missing, the chat says what the AWS admin needs to
+enable (see *Emails → Replies* for the setup).
 
 ## Improvements (requests for changes to the tracker)
 

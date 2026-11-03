@@ -1,7 +1,7 @@
 "use strict";
-// Company pages: SOP and Chat with AOG (Strategy Meeting is in
-// strategy.js, People in people.js, Documents in documents.js,
-// Improvements in improvements.js).
+// Company pages: SOP (Strategy Meeting is in strategy.js, People in
+// people.js, Documents in documents.js, Improvements in improvements.js,
+// Chat with AOG in chat.js).
 // The dashboard's scripts share one global scope and load in the order
 // index.html lists them; functions called while a file loads must be
 // defined in that file or an earlier one.
@@ -39,23 +39,3 @@ document.addEventListener("click", function (e) {
   sopUi.adding = sopUi.pasting = false; sopUi.editing = ""; sopUi.form = {}; sopReq.form = null;
   render();
 });
-
-// ---------- Chat with AOG ----------
-// One Claude chat for the whole company that can read the tracker and the
-// S3 document folders, and make changes when asked. It needs Claude running
-// inside SOI's compliant AWS environment (Bedrock), which compliance still
-// has to approve, so for now this says what it will do and opens Claude.
-function renderDeptChat() {
-  setBreadcrumb(["Company", "Chat with AOG"]);
-  var row = function (a, b) { return "<tr><td><b>" + a + "</b></td><td>" + b + "</td></tr>"; };
-  return '<div class="intro"><div><div class="eyebrow">Company</div><h1>Chat with AOG</h1>' +
-    "<p>One Claude chat for the whole company (not one per department), reading the tracker and the S3 document folders. It isn't switched on yet: it has to run inside SOI's compliant AWS environment (for example Claude on Amazon Bedrock in GovCloud), and the compliance lead has to approve what it can read.</p></div></div>" +
-    '<div class="card" style="padding:18px 20px;"><div class="card-label">What it will do</div>' +
-    '<table class="plain"><tbody>' +
-    row("When asked", "Add notes; create and assign tasks; add tags and flags; search and summarise a quote, order or customer; attach emails and files to a case file; draft emails and quotes (as drafts only).") +
-    row("Shows a preview, you confirm", "Move a card to another column; send any email to a client or supplier; change prices or mark-ups; edit or delete existing records; bulk changes.") +
-    row("Never", "Give its own ✓ / ✗ approval; clear quality or export holds; enter or generate certificate numbers, NSNs, CAGE codes or export classifications.") +
-    "</tbody></table>" +
-    '<p class="small-note" style="margin-top:10px;">It will act with your permissions, never more, and every change will be logged as "by assistant for (you)" and be undoable.</p></div>' +
-    '<p style="margin-top:16px;"><a class="links-a" href="https://claude.ai/new" target="_blank" rel="noopener noreferrer">Open Claude ↗</a> <span class="small-note">Until then, the header\'s Claude button opens claude.ai. Don\'t paste government client data, contract details or supplier pricing into it.</span></p>';
-}

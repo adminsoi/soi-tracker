@@ -195,6 +195,11 @@ function getStrategy() {
 function getImprovements() {
   return readJson("improvements", { items: [] });
 }
+// Chat with AOG: one document per person, chats_<username>.json =
+// { chats: [{ id, title, at, updatedAt, messages: [...] }] }. See chat.js.
+function getChats(name) {
+  return readJson(`chats_${name}`, { chats: [] });
+}
 
 // In-process queues so concurrent requests to this same container don't
 // clobber each other's read-modify-write cycle.
@@ -435,7 +440,22 @@ function withImprovements(mutator) {
   return improvementsQueue;
 }
 
+// One queue per person's chats.
+const chatQueues = new Map();
+function withChats(name, mutator) {
+  const q = (chatQueues.get(name) || Promise.resolve()).then(async () => {
+    const doc = await getChats(name);
+    const result = await mutator(doc);
+    await writeJson(`chats_${name}`, doc);
+    return result;
+  });
+  chatQueues.set(name, q.catch(() => {}));
+  return q;
+}
+
 module.exports = {
+  getChats,
+  withChats,
   getImprovements,
   withImprovements,
   getStrategy,
