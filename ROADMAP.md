@@ -529,8 +529,8 @@ Mentions of You, and files created automatically from Pentagon.
         in JavaScriptCore; the page (send, follow-up, list, IT read-only
         view, light and dark). The Bedrock tool loop and the real tools
         are first exercised on staging.
-- [ ] **10. README update and final review.** Built 3 Nov 2026 on
-      `staging`; not yet tested on staging.
+- [x] **10. README update and final review.** Tested on staging and
+      redeployed 3 Nov 2026 (live checked against `main` 3e1eaeb).
       - Live checked first: every `public/js/*.js` and `index.html` on live
         matched `main` (9353b3c), so Phase 9 stays ticked.
       - Operations board: column colours black / gray · red · green (US Gov
