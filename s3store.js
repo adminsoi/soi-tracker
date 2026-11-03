@@ -190,6 +190,11 @@ function getLegal() {
 function getStrategy() {
   return readJson("strategy", {});
 }
+// Improvements (requests for changes to the tracker): { items: [...] } —
+// screenshots via putFile under improvement_files/<id>. See improvements.js.
+function getImprovements() {
+  return readJson("improvements", { items: [] });
+}
 
 // In-process queues so concurrent requests to this same container don't
 // clobber each other's read-modify-write cycle.
@@ -213,6 +218,7 @@ let peopleQueue = Promise.resolve();
 let documentsQueue = Promise.resolve();
 let legalQueue = Promise.resolve();
 let strategyQueue = Promise.resolve();
+let improvementsQueue = Promise.resolve();
 
 function withUsers(mutator) {
   usersQueue = usersQueue.then(async () => {
@@ -419,7 +425,19 @@ function withStrategy(mutator) {
   return strategyQueue;
 }
 
+function withImprovements(mutator) {
+  improvementsQueue = improvementsQueue.then(async () => {
+    const doc = await getImprovements();
+    const result = await mutator(doc);
+    await writeJson("improvements", doc);
+    return result;
+  });
+  return improvementsQueue;
+}
+
 module.exports = {
+  getImprovements,
+  withImprovements,
   getStrategy,
   withStrategy,
   getLegal,

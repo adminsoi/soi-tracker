@@ -455,7 +455,7 @@ dark ones like SOI green stay visible.
 - **Sidebar**, top to bottom: Work — **Operations** and **Administration**;
   **Overview**; You — **Mentions of You**, **Emails**; Company —
   **Strategy Meeting** and **People** (leadership logins only), **SOP**,
-  **Documents**, **Department Chat**; and at the bottom, Tools — **Calendar**
+  **Documents**, **Chat with AOG**, **Improvements**; and at the bottom, Tools — **Calendar**
   and **Global**. Pentagon isn't a sidebar item; its data feeds the
   Operations tabs and the board. Old `#performance` links open HR's
   Performance tab.
@@ -481,10 +481,36 @@ dark ones like SOI green stay visible.
   *Strategy Meeting*).
   **Documents** is the S3 file manager (see below). **People** is for
   leadership logins only (see below).
-- **Department Chat** (was Master Chat) describes the planned company-wide
+- **Chat with AOG** (was Department Chat, and before that Master Chat) describes the planned company-wide
   Claude chat. It isn't switched on until it can run in SOI's compliant AWS
   environment and compliance approves its access; meanwhile it opens
   claude.ai.
+- **Improvements** is where anyone asks for a change to the tracker (see
+  *Improvements*).
+
+## Improvements (requests for changes to the tracker)
+
+Anyone signed in fills in the form: a title, a description, which part of
+the tracker it's about (the sections in their own sidebar, plus Other), a
+priority (nice to have, important, blocking) and, optionally, a screenshot
+(PNG, JPG, GIF or WebP, up to 10 MB, stored in S3 under
+`improvement_files/<id>` and shown view-only like Documents).
+
+- Below the form is the list of requests, filtered Open / Done / won't do /
+  All, each with its status: **New**, **Planned**, **In progress**,
+  **Done**, **Won't do**, and a history of status changes and replies.
+- Everyone sees their own requests. **Leadership** and the tracker's
+  **owners** see everyone's and are the only ones who can change the
+  status or reply; `POST /api/improvements/:id/update` answers 403 to
+  anyone else.
+- Owners are set with `IMPROVEMENTS_OWNERS` (usernames or login emails,
+  comma separated; default `nyssa@soiaviation.com`). New requests show on
+  their **Mentions of You** until the status changes from New.
+- When someone else changes the status or replies, the request shows on
+  the requester's **Mentions of You** (and as "Updated") until they next
+  open Improvements.
+- Data: `improvements.json` in the bucket. Rules in `improvements.js`,
+  page in `public/js/improvements.js`.
 
 ## People (Leadership only)
 

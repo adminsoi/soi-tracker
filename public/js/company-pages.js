@@ -1,6 +1,7 @@
 "use strict";
-// Company pages: SOP and Department Chat (Strategy Meeting is in
-// strategy.js, People in people.js, Documents in documents.js).
+// Company pages: SOP and Chat with AOG (Strategy Meeting is in
+// strategy.js, People in people.js, Documents in documents.js,
+// Improvements in improvements.js).
 // The dashboard's scripts share one global scope and load in the order
 // index.html lists them; functions called while a file loads must be
 // defined in that file or an earlier one.
@@ -39,15 +40,15 @@ document.addEventListener("click", function (e) {
   render();
 });
 
-// ---------- Department Chat ----------
+// ---------- Chat with AOG ----------
 // One Claude chat for the whole company that can read the tracker and the
 // S3 document folders, and make changes when asked. It needs Claude running
 // inside SOI's compliant AWS environment (Bedrock), which compliance still
 // has to approve, so for now this says what it will do and opens Claude.
 function renderDeptChat() {
-  setBreadcrumb(["Company", "Department Chat"]);
+  setBreadcrumb(["Company", "Chat with AOG"]);
   var row = function (a, b) { return "<tr><td><b>" + a + "</b></td><td>" + b + "</td></tr>"; };
-  return '<div class="intro"><div><div class="eyebrow">Company</div><h1>Department Chat</h1>' +
+  return '<div class="intro"><div><div class="eyebrow">Company</div><h1>Chat with AOG</h1>' +
     "<p>One Claude chat for the whole company (not one per department), reading the tracker and the S3 document folders. It isn't switched on yet: it has to run inside SOI's compliant AWS environment (for example Claude on Amazon Bedrock in GovCloud), and the compliance lead has to approve what it can read.</p></div></div>" +
     '<div class="card" style="padding:18px 20px;"><div class="card-label">What it will do</div>' +
     '<table class="plain"><tbody>' +

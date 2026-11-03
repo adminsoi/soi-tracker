@@ -72,6 +72,8 @@ const {
   withLegal,
   getStrategy,
   withStrategy,
+  getImprovements,
+  withImprovements,
 } = require("./s3store");
 const { sendMail, mailConfigured, MAIL_FROM } = require("./mailer");
 const { eventsBetween, whosIn, CalendarError, nameFromTitle } = require("./calendar");
@@ -86,6 +88,7 @@ const employment = require("./people");
 const docs = require("./documents");
 const legal = require("./legal");
 const strategy = require("./strategy");
+const improvements = require("./improvements");
 const payCheck = require("./payrollcheck");
 const { pentagonQuery } = require("./pentagon");
 const {
@@ -6336,6 +6339,100 @@ app.post(
   })
 );
 
+// ---------- Improvements ----------
+// Requests for changes to the tracker (improvements.js). Everyone adds and
+// sees their own; Leadership and IMPROVEMENTS_OWNERS see all and are the
+// only ones who change the status or reply — checked here on every write.
+async function rawLogin(user) {
+  return (await getUsers()).find((u) => sameUser(u.username, user.username)) || null;
+}
+app.get(
+  "/api/improvements",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const [doc, raw] = await Promise.all([getImprovements(), rawLogin(req.user)]);
+    res.json(improvements.view(doc, req.user, raw));
+  })
+);
+app.post(
+  "/api/improvements",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const out = improvements.newItem(req.body, req.user.username, newId(), Date.now());
+    if (out.error) return res.status(400).json({ error: out.error });
+    await withImprovements((doc) => { improvements.shape(doc).items.push(out.item); });
+    res.status(201).json(out.item);
+  })
+);
+// The screenshot: an image, added by the person who asked while it's New.
+app.post(
+  "/api/improvements/:id/screenshot",
+  authMiddleware,
+  express.raw({ type: () => true, limit: "10mb" }),
+  asyncHandler(async (req, res) => {
+    const name = String(req.query.name || "screenshot").replace(/[\\/\r\n"]+/g, "_").slice(0, 160);
+    const ext = (name.match(/\.([a-z0-9]{2,5})$/i) || [])[1];
+    const type = ext && improvements.SCREENSHOT_TYPES[ext.toLowerCase()];
+    if (!type) return res.status(400).json({ error: "Attach the screenshot as a PNG, JPG, GIF or WebP image" });
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "No file came through" });
+    const x0 = improvements.shape(await getImprovements()).items.find((x) => x.id === req.params.id);
+    if (!x0 || !sameUser(x0.by, req.user.username)) return res.status(404).json({ error: "That request isn't yours" });
+    if (x0.status !== "new") return res.status(400).json({ error: "That request has already been picked up" });
+    await putFile(`improvement_files/${x0.id}`, req.body, type);
+    const item = await withImprovements((doc) => {
+      const x = improvements.shape(doc).items.find((y) => y.id === x0.id);
+      if (!x) return null;
+      x.screenshot = { name, type, size: req.body.length, at: Date.now() };
+      return Object.assign({}, x);
+    });
+    if (!item) return res.status(404).json({ error: "That request isn't here any more" });
+    res.json(item);
+  })
+);
+app.get(
+  "/api/improvements/:id/screenshot",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const [doc, raw] = await Promise.all([getImprovements(), rawLogin(req.user)]);
+    const x = improvements.shape(doc).items.find((y) => y.id === req.params.id);
+    if (!x || !x.screenshot || !(sameUser(x.by, req.user.username) || improvements.canManage(req.user, raw))) return res.status(404).json({ error: "That screenshot isn't here" });
+    const file = await getFile(`improvement_files/${x.id}`);
+    if (!file) return res.status(404).json({ error: "The screenshot is missing" });
+    sendViewOnly(res, x.screenshot, file);
+  })
+);
+// Status and/or a reply: Leadership and owners only.
+app.post(
+  "/api/improvements/:id/update",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!improvements.canManage(req.user, await rawLogin(req.user))) return res.status(403).json({ error: "Only Leadership changes the status of a request" });
+    const out = await withImprovements((doc) => {
+      const x = improvements.shape(doc).items.find((y) => y.id === req.params.id);
+      if (!x) return { status: 404, error: "That request isn't here any more" };
+      const r = improvements.applyUpdate(x, req.body, req.user.username, newId(), Date.now());
+      if (r.error) return { status: 400, error: r.error };
+      return { item: Object.assign({}, x) };
+    });
+    if (out.error) return res.status(out.status).json({ error: out.error });
+    res.json(out.item);
+  })
+);
+// Opening Improvements clears "updated" on your own requests.
+app.post(
+  "/api/improvements/seen",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const doc = await getImprovements();
+    if (!improvements.shape(doc).items.some((x) => sameUser(x.by, req.user.username) && improvements.unseenUpdate(x))) return res.json({ ok: true });
+    await withImprovements((d) => {
+      const now = Date.now();
+      improvements.shape(d).items.forEach((x) => { if (sameUser(x.by, req.user.username)) x.bySeenAt = now; });
+    });
+    res.json({ ok: true });
+  })
+);
+
 // #strategymeeting / @strategymeeting in any note saved anywhere in the
 // tracker (any text field of a successful save) adds a row dated for the
 // next meeting, quoting the line and saying where it came from. Each tagged
@@ -6354,7 +6451,7 @@ async function noteSource(req) {
   }
   const NAMES = { "staff-forms": "Administration form", performance: "Performance", people: "People", legal: "Legal", finance: "Finance",
     "rfq-marks": "Pentagon list", qbr: "Quarterly review", "it-requests": "IT request", "it-notebook": "IT notebook", sops: "SOP",
-    "sop-requests": "SOP change request", documents: "Documents", payroll: "Payroll", calendar: "Calendar" };
+    "sop-requests": "SOP change request", documents: "Documents", payroll: "Payroll", calendar: "Calendar", improvements: "Improvements" };
   return NAMES[seg[0]] || "A note";
 }
 async function raiseFromNotes(req, lines) {

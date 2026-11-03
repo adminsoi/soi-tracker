@@ -8,8 +8,8 @@ it's merged and redeployed.
 ## Decisions so far
 
 - **Sidebar order:** Operations, Administration · Overview · Mentions of You,
-  Emails · Strategy Meeting · SOP · People · Documents · Department Chat ·
-  then Calendar and Global at the bottom. Pentagon leaves the sidebar (its
+  Emails · Strategy Meeting · SOP · People · Documents · Chat with AOG ·
+  Improvements · then Calendar and Global at the bottom. Pentagon leaves the sidebar (its
   data still feeds the boards).
 - **Operations** (was "Departments"): the combined Kanban board
   (Procurement + Purchasing + Warehouse), Business Development, US Gov.
@@ -55,8 +55,18 @@ it's merged and redeployed.
   (needs a login with his Pentagon code — check whether one exists).
 - **People** and **spot bonuses:** Leadership only, enforced on the server.
   A spot bonus adds $100 to the person's next payroll in one click.
-- **Department Chat:** one chat for the whole company (not one per
+- **Chat with AOG** (renamed from "Department Chat" on 3 Nov 2026; only
+  the label so far): one chat for the whole company (not one per
   department), backed by Claude and reading the S3 document folders.
+- **Improvements** (added 3 Nov 2026): a sidebar section, above Calendar
+  and Global, where anyone asks for a change to the tracker — title,
+  description, which part of the tracker (sidebar sections plus Other),
+  priority (nice to have, important, blocking), optional screenshot in S3.
+  Everyone sees their own requests with a status (New, Planned, In
+  progress, Done, Won't do). Leadership and Nyssa see all of them and
+  change status or reply, enforced on the server. New requests show on
+  Nyssa's Mentions of You; the requester sees status changes and replies
+  on theirs.
 - **Compliance sign-off for Phases 8 and 9** (3 Nov 2026, by the compliance
   lead; name not recorded at the user's request): Claude through **Amazon
   Bedrock in SOI's own AWS account**, with **no extra limits** on what the AI
@@ -451,5 +461,26 @@ Mentions of You, and files created automatically from Pentagon.
       - Tested locally against a mock server (no Node on the Mac): thread,
         draft with placeholders, Send blocked until they're filled, dry
         run, Ignore / Undo; `replies.js` rules tested in JavaScriptCore.
-- [ ] **9. Company chat.**
+- [ ] **Improvements and "Chat with AOG"** (added 3 Nov 2026, outside the
+      numbered phases). Built on `staging`; not yet tested on staging.
+      - Rules in `improvements.js` (areas, priorities, statuses, who
+        manages, what each login sees); routes in `index.js`:
+        `GET|POST /api/improvements`,
+        `POST|GET /api/improvements/:id/screenshot` (image only, 10 MB,
+        the requester while it's New; viewed inline like Documents),
+        `POST /api/improvements/:id/update` (status and/or reply; 403 to
+        anyone but Leadership and the owners), `POST /api/improvements/seen`.
+        Front end `public/js/improvements.js` (after `strategy.js`).
+      - Owners = `IMPROVEMENTS_OWNERS` (usernames or emails, comma
+        separated), default `nyssa@soiaviation.com`, matched against the
+        login's username or email in `users.json`.
+      - S3: `improvements.json` (`{ items: [{ id, title, description, area,
+        priority, status, by, at, updatedAt, screenshot, log, bySeenAt }] }`),
+        screenshots under `improvement_files/<id>`.
+      - Mentions of You: owners see requests still New; the requester sees
+        ones changed by someone else since they last opened Improvements.
+        Both count in the sidebar badges.
+      - The sidebar item and page title say "Chat with AOG"; the page
+        itself is unchanged until Phase 9.
+- [ ] **9. Company chat** ("Chat with AOG" in the sidebar).
 - [ ] **10. README update and final review.**

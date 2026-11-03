@@ -313,7 +313,7 @@ function onSignedIn() {
 // ---------- Data ----------
 // Background sync: every 30 seconds, paused while the tab is hidden, and it
 // only redraws when something actually changed — and only on pages built
-// from that data. Calendar, Mentions you, Global and Pentagon load their
+// from that data. Calendar, Mentions you, Global, Improvements and Pentagon load their
 // own data once and are left alone, so (for example) the HR calendar
 // doesn't reload under you.
 var POLL_MS = 30000;
@@ -407,7 +407,9 @@ function navItems() {
   // Leadership only (the server checks every People request too).
   if (me.leadership) items.push({ id: "people", ic: "☺", label: "People" });
   items.push({ id: "documents", ic: "▢", label: "Documents" });
-  items.push({ id: "chat", ic: "✳", label: "Department Chat" });
+  items.push({ id: "chat", ic: "✳", label: "Chat with AOG" });
+  // Everyone: ask for changes to the tracker (improvements.js).
+  items.push({ id: "improvements", ic: "✚", label: "Improvements", badge: impWaiting });
   // Calendar and Global sit at the bottom of the sidebar.
   var tools = [{ id: "calendar", ic: "▦", label: "Calendar" }];
   if (canUseAll()) tools.push({ id: "global", ic: "◎", label: "Global" });
@@ -461,6 +463,7 @@ function render() {
     else if (page === "people") html = renderPeople();
     else if (page === "documents") html = renderDocuments();
     else if (page === "chat") html = renderDeptChat();
+    else if (page === "improvements") html = renderImprovements();
     else html = renderDepartment();
   } catch (e) {
     console.error(e);
