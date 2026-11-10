@@ -5,7 +5,7 @@
 // defined in that file or an earlier one.
 
 // ---- Documents ----
-// Read-only unless IT has granted you edit access to a folder (the server
+// Read-only unless you're a document editor or one granted you edit access to a folder (the server
 // checks every request). Edit = add files and folders, new versions, rename,
 // move (drag onto a folder or the path above), archive. Documents open in a
 // viewer on the page with no download link; big copies are blocked. That only
@@ -54,13 +54,13 @@ function renderDocuments() {
   var admin = dcs.meta && dcs.meta.grantsAdmin;
   if (!admin && dcs.tab === "access") dcs.tab = "browse";
   var head = '<div class="intro"><div><div class="eyebrow">Company</div><h1>Documents</h1>' +
-    "<p>Your departments' folders on SOI's S3, and the documents on each Operations and US Gov board file you can see. Everything is view-only unless IT gives you edit access to a folder: use <b>Request edit</b>.</p>" +
+    "<p>Your departments' folders on SOI's S3, and the documents on each Operations and US Gov board file you can see. Only the document editors (Ramin, Greg, Shreya and Nyssa) change files directly; everyone else uses <b>Request to edit</b> on a folder, and an editor grants it.</p>" +
     "<p>There's no download button and large copies are blocked, but that only discourages copying — anyone can still take a screenshot or photo of the screen. Treat everything here as confidential. Employment files, pay, performance and receipts are not in Documents.</p></div></div>";
   if (dcs.error && !dcs.meta) return head + '<div class="banner">' + E(dcs.error) + "</div>";
   if (!dcs.meta) return head + '<div class="empty">Loading folders…</div>';
   var tabs = admin ? '<div class="tabs" role="tablist">' +
     '<button type="button" role="tab" class="tab ' + (dcs.tab === "browse" ? "active" : "") + '" aria-selected="' + (dcs.tab === "browse") + '" data-dc-tab="browse">Folders</button>' +
-    '<button type="button" role="tab" class="tab ' + (dcs.tab === "access" ? "active" : "") + '" aria-selected="' + (dcs.tab === "access") + '" data-dc-tab="access">Edit access (IT)' + (dcs.access && dcs.access.requests.length ? " · " + dcs.access.requests.length : "") + "</button></div>" : "";
+    '<button type="button" role="tab" class="tab ' + (dcs.tab === "access" ? "active" : "") + '" aria-selected="' + (dcs.tab === "access") + '" data-dc-tab="access">Edit requests' + (dcs.access && dcs.access.requests.length ? " · " + dcs.access.requests.length : "") + "</button></div>" : "";
   if (admin && (!dcs.access || Date.now() - dcs.accessAt > 60000) && !dcs.accessLoading && !(dcs.accessError && Date.now() - dcs.accessAt < 15000)) loadDocAccess();
   if (dcs.tab === "access") return head + tabs + renderDocAccess();
   return head + tabs + (dcs.space && dcSpace(dcs.space) ? renderDocFolder() : renderDocSpaces());
@@ -103,8 +103,8 @@ function renderDocFolder() {
     '<button type="button" data-dc-newfolder>+ New folder</button><button type="button" class="primary" data-dc-upload>Upload files</button>' +
     '<input type="file" id="dcFile" multiple hidden><input type="file" id="dcVersion" hidden>';
   else bar = '<span class="dc-badge">View only</span>' + (d.request
-    ? '<span class="small-note">Edit requested — ticket ' + E(d.request.ref) + " is with IT.</span>"
-    : '<button type="button" data-dc-request>Request edit</button>');
+    ? '<span class="small-note">Edit requested — ticket ' + E(d.request.ref) + " is with the document editors and IT.</span>"
+    : '<button type="button" data-dc-request>Request to edit</button><span class="small-note">Only the document editors change files directly; ask and one of them grants you access.</span>');
   var note = sp.kind === "dept" && DC_PRIVATE_NOTE[sp.dept] ? '<p class="small-note">' + E(DC_PRIVATE_NOTE[sp.dept]) + "</p>" : "";
   var rows = d.folders.map(function (f) {
     return '<tr class="dc-row" data-dc-folder="' + E(f.id) + '" data-dc-drop="' + E(f.id) + '"' + (d.canEdit ? ' draggable="true" data-dc-drag="folder:' + E(f.id) + '"' : "") + ">" +
@@ -115,7 +115,10 @@ function renderDocFolder() {
     return '<tr class="dc-row"' + (d.canEdit ? ' draggable="true" data-dc-drag="file:' + E(f.id) + '"' : "") + ">" +
       '<td><span class="dc-ic" aria-hidden="true">' + "📄" + '</span><button type="button" class="dc-name" data-dc-view="' + E(f.id) + '">' + E(f.name) + "</button>" + (f.versions > 1 ? ' <span class="small-note">v' + f.versions + "</span>" : "") + "</td>" +
       "<td>" + E(dcKind(f.type)) + "</td><td>" + E(dcSize(f.size)) + "</td><td>" + E(dcDate(f.at)) + "</td><td>" + E(f.by || "") + "</td>" +
-      '<td class="dc-acts"><button type="button" class="text-button" data-dc-addto="' + E(f.id) + '">Add to…</button>' + (d.canEdit ? '<button type="button" class="text-button" data-dc-version="' + E(f.id) + '">New version</button><button type="button" class="text-button" data-dc-rename="' + E(f.id) + '">Rename</button><button type="button" class="text-button danger" data-dc-archive="' + E(f.id) + '">Archive</button>' : "") + "</td></tr>";
+      // Preview first and easy to spot; Edit in Word downloads it for editors.
+      '<td class="dc-acts"><button type="button" class="dc-preview" data-dc-view="' + E(f.id) + '" title="' + (f.preview ? "Open it here" : "No preview for this kind of file") + '">' + (f.preview ? "👁 Preview" : "Open") + "</button>" +
+      (d.canEdit && sp.kind === "dept" ? '<button type="button" class="dc-preview" data-dc-edit="' + E(f.id) + '" title="Download it, edit it in Word (or its own app), then upload it with New version">✎ Edit in Word</button>' : "") +
+      '<button type="button" class="text-button" data-dc-addto="' + E(f.id) + '">Add to…</button>' + (d.canEdit ? '<button type="button" class="text-button" data-dc-version="' + E(f.id) + '">New version</button><button type="button" class="text-button" data-dc-rename="' + E(f.id) + '">Rename</button><button type="button" class="text-button danger" data-dc-archive="' + E(f.id) + '">Archive</button>' : "") + "</td></tr>";
   }));
   var table = rows.length ? '<table class="plain dc-table"><thead><tr><th>Name</th><th>Kind</th><th>Size</th><th>Updated</th><th>By</th><th></th></tr></thead><tbody>' + rows.join("") + "</tbody></table>"
     : '<div class="empty">' + (d.canEdit ? "This folder is empty. Drag files here from your computer, or use Upload files." : "This folder is empty.") + "</div>";
@@ -354,7 +357,7 @@ function dcRequestEdit() {
 }
 
 document.addEventListener("click", function (e) {
-  var t = e.target.closest && e.target.closest("[data-dc-addto],[data-dc-addto-open],[data-dc-add-tab],[data-dc-add-pick],[data-dc-add-cancel],[data-dc-tab],[data-dc-space],[data-dc-home],[data-dc-crumb],[data-dc-folder-open],[data-dc-view],[data-dc-close],[data-dc-upload],[data-dc-newfolder],[data-dc-rename],[data-dc-rename-folder],[data-dc-archive],[data-dc-archive-folder],[data-dc-version],[data-dc-request],[data-dc-req-cancel],[data-dc-req-send],[data-dc-grant],[data-dc-decline],[data-dc-revoke],[data-dc-restore]");
+  var t = e.target.closest && e.target.closest("[data-dc-addto],[data-dc-addto-open],[data-dc-add-tab],[data-dc-add-pick],[data-dc-add-cancel],[data-dc-tab],[data-dc-space],[data-dc-home],[data-dc-crumb],[data-dc-folder-open],[data-dc-view],[data-dc-close],[data-dc-upload],[data-dc-newfolder],[data-dc-rename],[data-dc-rename-folder],[data-dc-archive],[data-dc-archive-folder],[data-dc-version],[data-dc-edit],[data-dc-request],[data-dc-req-cancel],[data-dc-req-send],[data-dc-grant],[data-dc-decline],[data-dc-revoke],[data-dc-restore]");
   if (!t) { if (e.target.id === "dcViewer") dcCloseViewer(); if (e.target.id === "dcReq") e.target.remove(); if (e.target.id === "dcAdd") dcAddClose(); return; }
   var ds = t.dataset;
   if ("dcAddtoOpen" in ds && dcViewing) { dcAddOpen(dcViewing.file, dcViewing.v); return; }
@@ -392,6 +395,17 @@ document.addEventListener("click", function (e) {
     return;
   }
   if (ds.dcVersion) { var vi = $("#dcVersion"); vi.dataset.file = ds.dcVersion; vi.click(); return; }
+  if (ds.dcEdit) {
+    var ef = dcFile(ds.dcEdit);
+    if (!ef) return;
+    fetch("/api/documents/download?space=" + encodeURIComponent(dcs.space) + "&folder=" + encodeURIComponent(dcs.folder || "") + "&file=" + encodeURIComponent(ef.id), { headers: { Authorization: "Bearer " + token() } })
+      .then(function (r) { if (!r.ok) return r.json().then(function (x) { throw new Error(x.error || "Couldn't download it"); }); return r.blob(); })
+      .then(function (b) {
+        var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = ef.name; document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+        toast("Downloaded " + ef.name + ". Edit and save it in Word, then click New version on this row to upload it — it becomes v" + ((ef.versions || 1) + 1) + ".");
+      }, function (err) { toast(err.message, true); });
+    return;
+  }
   if (ds.dcRename || ds.dcRenameFolder) {
     var isF = !!ds.dcRenameFolder, id = ds.dcRename || ds.dcRenameFolder;
     var cur = isF ? (dcs.list.folders.filter(function (x) { return x.id === id; })[0] || {}).name : (dcFile(id) || {}).name;
@@ -510,4 +524,36 @@ document.addEventListener("keydown", function (e) {
   if (!document.getElementById("dcViewer")) return;
   if (e.key === "Escape") { dcCloseViewer(); return; }
   if ((e.ctrlKey || e.metaKey) && /^[sp]$/i.test(e.key)) { e.preventDefault(); toast("Saving and printing are blocked for documents.", true); }
+});
+
+// ---- Mentions of You: requests to edit documents ----
+// For the document editors (and IT / full access): open "Request to edit"
+// tickets waiting for a decision.
+var dcMine = { items: null, at: 0, loading: false };
+function loadDocRequestsMine() {
+  if (!me || !me.docAdmin) return Promise.resolve([]);
+  if (dcMine.loading || (dcMine.items && Date.now() - dcMine.at < 60000)) return Promise.resolve(dcMine.items || []);
+  dcMine.loading = true;
+  return api("/api/documents/access").then(function (x) {
+    var items = (x.requests || []).filter(function (r) { return !r.gone; });
+    var changed = JSON.stringify(items) !== JSON.stringify(dcMine.items);
+    dcMine.items = items; dcMine.at = Date.now();
+    if (changed && page === "mentions") requestRender();
+    return items;
+  }, function () { dcMine.items = dcMine.items || []; return dcMine.items; }).then(function (v) { dcMine.loading = false; return v; });
+}
+function docEditNotices() {
+  loadDocRequestsMine();
+  var list = dcMine.items || [];
+  if (!list.length) return "";
+  return '<div class="card" style="padding:16px 18px;margin-bottom:16px;"><div class="card-label">Requests to edit documents</div><ul class="lg-due-list">' +
+    list.map(function (r) {
+      return '<li><button type="button" class="text-button" data-dc-req-goto>' + E(r.by) + " — " + E(r.where) + "</button> " +
+        '<span class="small-note">' + E(String(r.issue || "").replace(/^Edit access to Documents › [^:]*:\s*/, "")) + " · " + E(new Date(r.at).toLocaleDateString()) + "</span></li>";
+    }).join("") + "</ul></div>";
+}
+document.addEventListener("click", function (e) {
+  var t = e.target.closest && e.target.closest("[data-dc-req-goto]");
+  if (!t) return;
+  dcs.tab = "access"; dcs.access = null; go("documents");
 });

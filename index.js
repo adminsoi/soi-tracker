@@ -48,6 +48,9 @@ const {
   putFile,
   getFile,
   deleteFile,
+  copyFile,
+  moveFile,
+  keyPart,
   getSops,
   withSops,
   getPerformance,
@@ -276,6 +279,9 @@ app.post(
       performance: !!user.performance,
       pentagonCode: user.pentagonCode,
       pentagonMentions: getsPentagonMentions(user),
+      // The same as /api/me, so they're right straight after signing in.
+      legal: legal.hasLegal(user, await freshLegal()),
+      docAdmin: docs.grantsAdmin(user),
     });
   })
 );
@@ -294,6 +300,8 @@ app.get("/api/me", authMiddleware, asyncHandler(async (req, res) => {
     pentagonMentions: getsPentagonMentions(req.user),
     // Administration → Legal (Leadership plus the named staff; legal.js).
     legal: legal.hasLegal(req.user, await freshLegal()),
+    // Documents: decides edit requests (the editors, IT and full access).
+    docAdmin: docs.grantsAdmin(req.user),
   });
 }));
 
@@ -1272,6 +1280,97 @@ async function changeCard(req, res, fn) {
   return out.card;
 }
 
+// Each stored board file has its own folder in S3, named so people can find
+// it in the bucket: <files>/<number> - <customer>/ (e.g. "board_files/RFQ
+// 10234 - Example Airline/"), with the attachments inside under their own
+// names. An empty marker object keeps the folder visible before anything is
+// attached. Changing the number or customer renames the folder. c.folder and
+// file.key hold the names; attachments from before this kept
+// <files>/<card id>/<attachment id> until syncBoardFolder moves them (every
+// stored file, once at startup). Customer documents: <customerFiles>/<customer>/<name>.
+function boardFolderName(doc, c) {
+  const no = c.fileNo ? c.fileNo : c.rfqNo ? `RFQ ${c.rfqNo}` : c.quoteNo ? `Quote ${c.quoteNo}` : c.orderNo ? `SO ${c.orderNo}` : c.poNo ? `PO ${c.poNo}` : "";
+  const party = c.customer || c.vendor || "";
+  let name = keyPart(no ? [no, party].filter(Boolean).join(" - ") : `${party || "File"} - ${c.id.slice(-6)}`);
+  if ((doc.cards || []).some((x) => x.id !== c.id && x.folder === name)) name = `${name} (${c.id.slice(-4)})`;
+  return name;
+}
+// A file name not already used in that folder: "Quote.pdf", "Quote (2).pdf"…
+function uniqueFileName(taken, name) {
+  const clean = keyPart(name, "file");
+  const m = clean.match(/^(.*?)(\.[A-Za-z0-9]{1,6})?$/);
+  let out = clean, n = 1;
+  while (taken.has(out.toLowerCase())) out = `${m[1]} (${++n})${m[2] || ""}`;
+  return out;
+}
+const boardFileKey = (cfg, c, f) => f.key || `${cfg.files}/${c.id}/${f.id}`;
+const customerFileKey = (cfg, f) => f.key || `${cfg.customerFiles}/${f.id}`;
+const boardSyncing = new Set();
+// Move a stored file's attachments into its named folder and save the names.
+async function syncBoardFolder(cfg, cardId) {
+  const lock = `${cfg.id}:${cardId}`;
+  if (boardSyncing.has(lock)) return null;
+  boardSyncing.add(lock);
+  try {
+    const doc = await getBoard(cfg.store);
+    const c = (doc.cards || []).find((x) => x.id === cardId);
+    if (!c) return null;
+    const folder = boardFolderName(doc, c), base = `${cfg.files}/${folder}`;
+    const taken = new Set(), keys = {};
+    for (const f of c.files || []) {
+      const want = f.key && f.key.startsWith(`${base}/`) ? f.key : `${base}/${uniqueFileName(taken, f.key ? f.key.split("/").pop() : f.name)}`;
+      taken.add(want.split("/").pop().toLowerCase());
+      if (want !== boardFileKey(cfg, c, f) && !(await moveFile(boardFileKey(cfg, c, f), want))) continue;
+      keys[f.id] = want;
+    }
+    if (c.folder !== folder) {
+      await putFile(`${base}/`, Buffer.alloc(0), "application/x-directory");
+      if (c.folder) await deleteFile(`${cfg.files}/${c.folder}/`).catch(() => {});
+    }
+    await withBoard((d) => {
+      const x = (d.cards || []).find((y) => y.id === cardId);
+      if (!x) return;
+      x.folder = folder;
+      for (const f of x.files || []) if (keys[f.id]) f.key = keys[f.id];
+    }, cfg.store);
+    return folder;
+  } catch (err) {
+    console.error(`Board folder for ${cardId} failed (kept the old names):`, err.message);
+    return null;
+  } finally {
+    boardSyncing.delete(lock);
+  }
+}
+// Where a new attachment goes: the file's folder, under a free name.
+async function newBoardFileKey(cfg, cardId, name) {
+  await syncBoardFolder(cfg, cardId);
+  const c = ((await getBoard(cfg.store)).cards || []).find((x) => x.id === cardId);
+  const folder = (c && c.folder) || cardId;
+  const taken = new Set(((c && c.files) || []).map((f) => (f.key || "").split("/").pop().toLowerCase()).filter(Boolean));
+  return `${cfg.files}/${folder}/${uniqueFileName(taken, name)}`;
+}
+async function syncCustomerFiles(cfg) {
+  const doc = await getBoard(cfg.store), keys = {};
+  for (const [customer, x] of Object.entries(doc.customers || {})) {
+    const taken = new Set();
+    for (const f of x.files || []) {
+      const base = `${cfg.customerFiles}/${keyPart(customer, "Customer")}`;
+      const want = f.key && f.key.startsWith(`${base}/`) ? f.key : `${base}/${uniqueFileName(taken, f.name)}`;
+      taken.add(want.split("/").pop().toLowerCase());
+      if (want !== customerFileKey(cfg, f) && (await moveFile(customerFileKey(cfg, f), want))) keys[f.id] = want;
+    }
+  }
+  if (Object.keys(keys).length) await withBoard((d) => { for (const x of Object.values(d.customers || {})) for (const f of x.files || []) if (keys[f.id]) f.key = keys[f.id]; }, cfg.store);
+}
+setTimeout(async () => {
+  for (const cfg of Object.values(BOARDS)) {
+    try {
+      for (const c of (await getBoard(cfg.store)).cards || []) await syncBoardFolder(cfg, c.id);
+      await syncCustomerFiles(cfg);
+    } catch (err) { console.error(`${cfg.name} folders:`, err.message); }
+  }
+}, 20 * 1000);
+
 // Pentagon RFQs / Quotes / SOs / POs not yet on a stored file, grouped one
 // file per document number (one line item per row's P/N). A document drops
 // off this list as soon as its number is typed on (or stored with) a file on
@@ -1370,6 +1469,7 @@ app.post(
     };
     logCard(card, req.user.username, `Added the file for ${customer}`);
     await withBoard((doc) => { doc.cards = doc.cards || []; doc.cards.push(card); }, cfg.store);
+    card.folder = await syncBoardFolder(cfg, card.id);
     res.status(201).json(shapeCard(card, req.user, Date.now(), cfg));
   })
 );
@@ -1379,6 +1479,8 @@ app.patch(
   authMiddleware,
   asyncHandler(async (req, res) => {
     const b = req.body || {};
+    // A new number or customer renames the file's folder in S3 afterwards.
+    if (["customer", "fileNo", "rfqNo", "quoteNo", "orderNo", "poNo"].some((k) => k in b)) res.on("finish", () => { if (res.statusCode < 300) syncBoardFolder(boardOf(req), req.params.id); });
     await changeCard(req, res, (c, settings, doc, cfg) => {
       const by = req.user.username, said = [];
       for (const [k, n, label] of [["customer", 120, "customer"], ["platforms", 120, "platform(s)"], ["fileNo", 40, "file number"], ["rfqNo", 40, "RFQ number"],
@@ -1604,6 +1706,7 @@ app.post(
       stored = doc.cards.find((c) => c.pentagonKey === id || (c[field] && String(c[field]).toLowerCase() === String(src[field]).toLowerCase())) || card;
       if (stored === card) doc.cards.push(card);
     }, cfg.store);
+    if (stored === card) card.folder = await syncBoardFolder(cfg, card.id);
     res.status(stored === card ? 201 : 200).json(shapeCard(stored, req.user, Date.now(), cfg));
   })
 );
@@ -1683,7 +1786,8 @@ app.post(
     // part of the black file (RFQ / Quoted) or the red file (Sale on).
     const kind = BOARD_FILE_KINDS.includes(req.query.kind) ? req.query.kind : type.startsWith("image/") ? "picture" : type === "application/pdf" ? "pdf" : /outlook|rfc822/.test(type) ? "email" : "other";
     const file = { id: newId(), name, type, size: req.body.length, at: Date.now(), by: req.user.username, kind, stage: c0.stage };
-    await putFile(`${boardOf(req).files}/${c0.id}/${file.id}`, req.body, type);
+    file.key = await newBoardFileKey(boardOf(req), c0.id, name);
+    await putFile(file.key, req.body, type);
     await changeCard(req, res, (c) => { c.files = c.files || []; c.files.push(file); logCard(c, req.user.username, `Attached ${name}`); });
   })
 );
@@ -1694,7 +1798,7 @@ app.get(
     const c = await boardCard(req, res);
     if (!c) return;
     const meta = (c.files || []).find((f) => f.id === req.params.fid);
-    const file = meta && (await getFile(`${boardOf(req).files}/${c.id}/${meta.id}`));
+    const file = meta && (await getFile(boardFileKey(boardOf(req), c, meta)));
     if (!file) return res.status(404).json({ error: "That file isn't here" });
     sendViewOnly(res, meta, file);
   })
@@ -1714,7 +1818,9 @@ app.post(
     if (!type) return res.status(400).json({ error: "Attach a PDF, image, Word, Excel, PowerPoint, text or email file" });
     if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "No file came through" });
     const file = { id: newId(), name, type, size: req.body.length, at: Date.now(), by: req.user.username };
-    await putFile(`${cfg.customerFiles}/${file.id}`, req.body, type);
+    const have = ((await getBoard(cfg.store)).customers || {})[customer];
+    file.key = `${cfg.customerFiles}/${keyPart(customer, "Customer")}/${uniqueFileName(new Set(((have && have.files) || []).map((f) => (f.key || "").split("/").pop().toLowerCase())), name)}`;
+    await putFile(file.key, req.body, type);
     await withBoard((doc) => { doc.customers = doc.customers || {}; const x = (doc.customers[customer] = doc.customers[customer] || { files: [] }); x.files.push(file); }, cfg.store);
     res.status(201).json(file);
   })
@@ -1728,7 +1834,7 @@ app.get(
     const doc = await getBoard(cfg.store);
     let meta = null;
     for (const x of Object.values(doc.customers || {})) meta = meta || (x.files || []).find((f) => f.id === req.params.fid);
-    const file = meta && (await getFile(`${cfg.customerFiles}/${meta.id}`));
+    const file = meta && (await getFile(customerFileKey(cfg, meta)));
     if (!file) return res.status(404).json({ error: "That file isn't here" });
     sendViewOnly(res, meta, file);
   })
@@ -2989,6 +3095,53 @@ app.get(
   })
 );
 
+// SOP PDFs are stored under readable names, one folder per department:
+//   sop_files/<Department>/<Code Title>_v<N>.pdf
+// N counts the SOP's versions (1 = the first upload). A new version gets
+// the next N; changing the title, code or department renames every
+// version's file to match. sop.key / version.key hold the names; SOPs from
+// before this kept sop_files/<id> and sop_versions/<id>/<vid> until
+// syncSopKeys moves them (it runs for every SOP once at startup).
+const sopKeyOf = (x) => x.key || `sop_files/${x.id}`;
+const sopVersionKeyOf = (x, v) => v.key || `sop_versions/${x.id}/${v.id}`;
+function sopNames(doc, x) {
+  const base = keyPart(`${x.code ? x.code + " " : ""}${x.title || ""}`, "SOP");
+  const dept = keyPart(x.dept === SOP_ALL ? "All departments" : x.dept, "SOPs");
+  // Two SOPs with the same code and title in one department get the id's end.
+  const twin = sopShape(doc).sops.some((y) => y.id !== x.id && y.dept === x.dept && keyPart(`${y.code ? y.code + " " : ""}${y.title || ""}`, "SOP") === base);
+  const stem = `sop_files/${dept}/${twin ? `${base} (${x.id.slice(-4)})` : base}`;
+  const vs = Array.isArray(x.versions) ? x.versions : []; // newest first
+  return { current: `${stem}_v${vs.length + 1}.pdf`, versions: vs.map((v, i) => [v, `${stem}_v${vs.length - i}.pdf`]) };
+}
+// Move an SOP's files to the names they should have, then save the names.
+const sopSyncing = new Set();
+async function syncSopKeys(sopId) {
+  if (sopSyncing.has(sopId)) return;
+  sopSyncing.add(sopId);
+  try {
+    const doc = sopShape(await getSops());
+    const x = doc.sops.find((y) => y.id === sopId);
+    if (!x) return;
+    const want = sopNames(doc, x), moved = {};
+    if (sopKeyOf(x) !== want.current && (await moveFile(sopKeyOf(x), want.current))) moved[""] = want.current;
+    for (const [v, k] of want.versions) if (sopVersionKeyOf(x, v) !== k && (await moveFile(sopVersionKeyOf(x, v), k))) moved[v.id] = k;
+    if (!Object.keys(moved).length) return;
+    await withSops((d) => {
+      const y = sopShape(d).sops.find((z) => z.id === sopId);
+      if (!y) return;
+      if (moved[""]) y.key = moved[""];
+      for (const v of y.versions || []) if (moved[v.id]) v.key = moved[v.id];
+    });
+  } catch (err) {
+    console.error(`Naming SOP ${sopId}'s files failed (kept the old names):`, err.message);
+  } finally {
+    sopSyncing.delete(sopId);
+  }
+}
+setTimeout(async () => {
+  try { for (const x of sopShape(await getSops()).sops) await syncSopKeys(x.id); } catch (err) { console.error("SOP file naming:", err.message); }
+}, 15 * 1000);
+
 // Upload an SOP PDF (raw bytes; up to 20 MB). Details come in the query
 // string: dept, code, title, version, fileName.
 app.post(
@@ -3009,6 +3162,7 @@ app.post(
       uploadedAt: Date.now(), uploadedBy: req.user.username,
     };
     await withSops((doc) => { sopShape(doc).sops.push(sop); });
+    await syncSopKeys(id);
     res.status(201).json(sop);
   })
 );
@@ -3034,6 +3188,8 @@ app.patch(
     });
     if (!sop) return res.status(404).json({ error: "That SOP isn't here any more" });
     if (sop.forbidden) return res.status(403).json({ error: "Only that department's managers can change it" });
+    // A new title, code or department renames the files in S3 to match.
+    if ("code" in b || "title" in b || "dept" in b) await syncSopKeys(sop.id);
     res.json(sop);
   })
 );
@@ -3053,8 +3209,8 @@ app.delete(
     });
     if (!gone) return res.status(404).json({ error: "That SOP isn't here any more" });
     if (gone.forbidden) return res.status(403).json({ error: "Only that department's managers can remove it" });
-    await deleteFile(`sop_files/${gone.id}`).catch(() => {});
-    for (const v of gone.versions || []) await deleteFile(`sop_versions/${gone.id}/${v.id}`).catch(() => {});
+    await deleteFile(sopKeyOf(gone)).catch(() => {});
+    for (const v of gone.versions || []) await deleteFile(sopVersionKeyOf(gone, v)).catch(() => {});
     res.status(204).end();
   })
 );
@@ -3065,7 +3221,7 @@ app.get(
   asyncHandler(async (req, res) => {
     const sop = sopShape(await getSops()).sops.find((y) => y.id === req.params.id);
     if (!sop || !canReadSops(req.user, sop.dept)) return res.status(404).json({ error: "That SOP isn't here" });
-    const file = await getFile(`sop_files/${sop.id}`);
+    const file = await getFile(sopKeyOf(sop));
     if (!file) return res.status(404).json({ error: "The PDF is missing" });
     sendViewOnly(res, { name: sop.fileName || `${sop.code || "SOP"} ${sop.title}.pdf`, type: "application/pdf" }, file);
   })
@@ -3079,29 +3235,31 @@ app.get(
     const sop = sopShape(await getSops()).sops.find((y) => y.id === req.params.id);
     const v = sop && (sop.versions || []).find((x) => x.id === req.params.vid);
     if (!v || !canReadSops(req.user, sop.dept)) return res.status(404).json({ error: "That version isn't here" });
-    const file = await getFile(`sop_versions/${sop.id}/${v.id}`);
+    const file = await getFile(sopVersionKeyOf(sop, v));
     if (!file) return res.status(404).json({ error: "The PDF is missing" });
     sendViewOnly(res, { name: v.fileName || `${sop.code || "SOP"} ${sop.title} ${v.version || ""}.pdf`, type: "application/pdf" }, file);
   })
 );
 
-// A new version of an SOP: the current PDF moves to sop_versions/<sop>/<id>
-// (still viewable from the SOP's row) and the new one takes its place.
-// Used by a department manager's "New version" and by an approved change
-// request that came with a PDF.
+// A new version of an SOP: the current PDF stays where it is (now an older
+// version, still viewable from the SOP's row) and the new one is saved as
+// the next _v<N>. Used by a department manager's "New version" and by an
+// approved change request that came with a PDF.
 async function sopNewVersion(sopId, body, meta, by) {
-  const cur = sopShape(await getSops()).sops.find((y) => y.id === sopId);
+  await syncSopKeys(sopId); // older SOPs: give the current files their names first
+  const doc = sopShape(await getSops());
+  const cur = doc.sops.find((y) => y.id === sopId);
   if (!cur) return null;
   const vid = newId();
-  const old = await getFile(`sop_files/${sopId}`);
-  if (old) await putFile(`sop_versions/${sopId}/${vid}`, old.body, "application/pdf");
-  await putFile(`sop_files/${sopId}`, body, "application/pdf");
-  return withSops((doc) => {
-    const x = sopShape(doc).sops.find((y) => y.id === sopId);
+  const had = !!(await getFile(sopKeyOf(cur)));
+  const next = sopNames(doc, Object.assign({}, cur, { versions: had ? [{ id: vid }].concat(cur.versions || []) : cur.versions || [] })).current;
+  await putFile(next, body, "application/pdf");
+  return withSops((d) => {
+    const x = sopShape(d).sops.find((y) => y.id === sopId);
     if (!x) return null;
     x.versions = Array.isArray(x.versions) ? x.versions : [];
-    if (old) x.versions.unshift({ id: vid, fileName: x.fileName, size: x.size, version: x.version, at: x.uploadedAt, by: x.uploadedBy });
-    Object.assign(x, { fileName: sopText(meta.fileName, 200) || x.fileName, size: body.length, version: sopText(meta.version, 30), uploadedAt: Date.now(), uploadedBy: by, updatedAt: Date.now() });
+    if (had) x.versions.unshift({ id: vid, key: sopKeyOf(x), fileName: x.fileName, size: x.size, version: x.version, at: x.uploadedAt, by: x.uploadedBy });
+    Object.assign(x, { key: next, fileName: sopText(meta.fileName, 200) || x.fileName, size: body.length, version: sopText(meta.version, 30), uploadedAt: Date.now(), uploadedBy: by, updatedAt: Date.now() });
     if (meta.request) x.request = meta.request;
     return Object.assign({}, x);
   });
@@ -3258,6 +3416,7 @@ app.post(
           await putFile(`sop_files/${sopId}`, file.body, "application/pdf");
           const sop = { id: sopId, dept: r0.dept, code: r0.code || "", title: r0.title, version, fileName: r0.file.name, size: file.body.length, uploadedAt: Date.now(), uploadedBy: r0.by, request: r0.id };
           await withSops((d) => { sopShape(d).sops.push(sop); });
+          await syncSopKeys(sopId);
         }
       } catch (err) { await unclaim(); throw err; }
     }
@@ -5513,6 +5672,16 @@ async function freshLegal() {
   return legalSnap.doc;
 }
 app.use("/api/documents", (req, res, next) => { freshLegal().then(() => next(), next); });
+// docs.folderIn, plus Legal's per-section access: a Legal section folder
+// (and everything in it) is only there for people ticked for that section.
+function docIn(req, doc, space, folderId) {
+  const here = docs.folderIn(doc, space, folderId);
+  if (!here || !folderId) return here;
+  const sp = docs.parseSpace(space);
+  if (!sp || sp.kind !== "dept" || sp.dept !== legal.LEGAL) return here;
+  const section = docs.chain(doc, folderId).find((f) => f.legal);
+  return section && !legal.hasSection(req.user, legalSnap.doc, section.legal) ? null : here;
+}
 function docSpace(req, res, id) {
   const sp = docSpaces(req.user).find((s) => s.id === id);
   if (!sp) res.status(404).json({ error: "That folder isn't here" });
@@ -5568,7 +5737,7 @@ app.get(
         files: c.files.map((f) => ({ id: f.id, name: f.name, type: f.type, size: f.size, at: f.at, by: f.by, versions: 1, preview: docs.canPreview(f.type) })) });
     }
     const [doc, itList] = await Promise.all([getDocuments().then(docs.shape), getItRequests()]);
-    const here = docs.folderIn(doc, sp.id, folderId);
+    const here = docIn(req, doc, sp.id, folderId);
     if (!here) return res.status(404).json({ error: "That folder isn't here" });
     const grant = docs.liveGrant(doc, req.user, sp.id, folderId);
     const reqOpen = docOpenRequest(itList, doc, req.user, sp.id, folderId);
@@ -5578,7 +5747,7 @@ app.get(
       canEdit: docs.mayEdit(doc, req.user, sp.id, folderId, true),
       editUntil: grant ? grant.until || null : undefined,
       request: reqOpen ? { ref: ticketRef(reqOpen.id), at: reqOpen.addedAt } : null,
-      folders: doc.folders.filter((f) => f.space === sp.id && (f.parent || "") === folderId && !f.archived)
+      folders: doc.folders.filter((f) => f.space === sp.id && (f.parent || "") === folderId && !f.archived && docIn(req, doc, sp.id, f.id))
         .map((f) => ({ id: f.id, name: f.name, at: f.at, by: f.by })).sort((a, b) => a.name.localeCompare(b.name)),
       files: doc.files.filter((f) => f.space === sp.id && (f.folder || "") === folderId && !f.archived).map(docFileOut).sort((a, b) => a.name.localeCompare(b.name)),
     });
@@ -5596,11 +5765,11 @@ async function docSource(req, res, q) {
     const cfg = BOARDS[sp.board];
     const c = ((await getBoard(cfg.store)).cards || []).find((x) => x.id === String(q.folder || ""));
     meta = c && canSeeBoardCard(req.user, c, cfg) && (c.files || []).find((f) => f.id === String(q.file || ""));
-    if (meta) { key = `${cfg.files}/${c.id}/${meta.id}`; where = `${sp.label} › ${docBoardLabel(c)}`; }
+    if (meta) { key = boardFileKey(cfg, c, meta); where = `${sp.label} › ${docBoardLabel(c)}`; }
   } else {
     const doc = docs.shape(await getDocuments());
     const f = doc.files.find((x) => x.id === String(q.file || "") && x.space === sp.id && !x.archived);
-    const v = f && docs.folderIn(doc, sp.id, f.folder) && (q.v ? f.versions.find((x) => x.id === String(q.v)) : f.versions[f.versions.length - 1]);
+    const v = f && docIn(req, doc, sp.id, f.folder) && (q.v ? f.versions.find((x) => x.id === String(q.v)) : f.versions[f.versions.length - 1]);
     if (v) { meta = { name: f.name, type: v.type || f.type }; key = `documents_files/${f.id}/${v.id}`; where = docs.pathLabel(doc, sp.id, f.folder); docFile = f; }
   }
   if (!meta) { res.status(404).json({ error: "That document isn't here" }); return null; }
@@ -5630,7 +5799,7 @@ app.get(
   asyncHandler(async (req, res) => {
     const doc = docs.shape(await getDocuments());
     const f = doc.files.find((x) => x.id === req.params.id && !x.archived);
-    if (!f || !docs.parseSpace(f.space) || !docSpaces(req.user).some((s) => s.id === f.space) || !docs.folderIn(doc, f.space, f.folder)) return res.status(404).json({ error: "That document isn't here" });
+    if (!f || !docs.parseSpace(f.space) || !docSpaces(req.user).some((s) => s.id === f.space) || !docIn(req, doc, f.space, f.folder)) return res.status(404).json({ error: "That document isn't here" });
     res.json({ versions: f.versions.slice().reverse().map((v) => ({ id: v.id, at: v.at, by: v.by, size: v.size, type: v.type, name: v.name || f.name, preview: docs.canPreview(v.type) })), history: (f.history || []).slice(-50).reverse() });
   })
 );
@@ -5669,7 +5838,7 @@ app.post(
     if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "No file came through" });
     const folderId = String(req.query.folder || "");
     const pre = docs.shape(await getDocuments());
-    if (!docs.folderIn(pre, sp.id, folderId)) return res.status(404).json({ error: "That folder isn't here" });
+    if (!docIn(req, pre, sp.id, folderId)) return res.status(404).json({ error: "That folder isn't here" });
     if (!docs.mayEdit(pre, req.user, sp.id, folderId, true)) return res.status(403).json({ error: NO_EDIT });
     const same = pre.files.find((f) => f.space === sp.id && (f.folder || "") === folderId && !f.archived && docs.sameName(f.name, name));
     const fileId = same ? same.id : newId();
@@ -5677,7 +5846,7 @@ app.post(
     // Stored before it's listed, so a listed version always has its bytes.
     await putFile(`documents_files/${fileId}/${v.id}`, req.body, type);
     const out = await docChange(res, (doc) => {
-      if (!docs.folderIn(doc, sp.id, folderId)) return "That folder isn't here";
+      if (!docIn(req, doc, sp.id, folderId)) return "That folder isn't here";
       if (!docs.mayEdit(doc, req.user, sp.id, folderId, true)) return NO_EDIT;
       let f = doc.files.find((x) => x.id === fileId);
       if (!f) {
@@ -5703,14 +5872,14 @@ app.post(
     if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "No file came through" });
     const pre = docs.shape(await getDocuments());
     const f0 = pre.files.find((x) => x.id === req.params.id && !x.archived);
-    const seen = f0 && docSpaces(req.user).some((s) => s.id === f0.space) && docs.folderIn(pre, f0.space, f0.folder);
+    const seen = f0 && docSpaces(req.user).some((s) => s.id === f0.space) && docIn(req, pre, f0.space, f0.folder);
     if (!seen) return res.status(404).json({ error: "That document isn't here" });
     if (!docs.mayEdit(pre, req.user, f0.space, f0.folder, true)) return res.status(403).json({ error: NO_EDIT });
     const v = { id: newId(), at: Date.now(), by: req.user.username, size: req.body.length, type, name };
     await putFile(`documents_files/${f0.id}/${v.id}`, req.body, type);
     const out = await docChange(res, (doc) => {
       const f = doc.files.find((x) => x.id === f0.id && !x.archived);
-      if (!f || !docs.folderIn(doc, f.space, f.folder)) return "That document isn't here";
+      if (!f || !docIn(req, doc, f.space, f.folder)) return "That document isn't here";
       if (!docs.mayEdit(doc, req.user, f.space, f.folder, true)) return NO_EDIT;
       f.versions.push(v);
       f.type = type;
@@ -5730,12 +5899,12 @@ app.patch(
     const spaces = docSpaces(req.user);
     const out = await docChange(res, (doc) => {
       const f = doc.files.find((x) => x.id === req.params.id && !x.archived);
-      if (!f || !spaces.some((s) => s.id === f.space) || !docs.folderIn(doc, f.space, f.folder)) return "That document isn't here";
+      if (!f || !spaces.some((s) => s.id === f.space) || !docIn(req, doc, f.space, f.folder)) return "That document isn't here";
       if (!docs.mayEdit(doc, req.user, f.space, f.folder, true)) return NO_EDIT;
       const to = "folder" in b ? String(b.folder || "") : f.folder || "";
       const name = "name" in b ? docs.cleanName(b.name) : f.name;
       if (!name) return "Give it a name";
-      if (!docs.folderIn(doc, f.space, to)) return "That folder isn't here";
+      if (!docIn(req, doc, f.space, to)) return "That folder isn't here";
       if (!docs.mayEdit(doc, req.user, f.space, to, true)) return "You can't add to that folder. Use Request edit there first.";
       if (doc.files.some((x) => x !== f && x.space === f.space && (x.folder || "") === to && !x.archived && docs.sameName(x.name, name))) return `There's already a document called ${name} there`;
       if (to !== (f.folder || "")) docLog(f, req.user.username, `Moved from ${docs.pathLabel(doc, f.space, f.folder)} to ${docs.pathLabel(doc, f.space, to)}`);
@@ -5754,7 +5923,7 @@ app.post(
     const spaces = docSpaces(req.user);
     const out = await docChange(res, (doc) => {
       const f = doc.files.find((x) => x.id === req.params.id && !x.archived);
-      if (!f || !spaces.some((s) => s.id === f.space) || !docs.folderIn(doc, f.space, f.folder)) return "That document isn't here";
+      if (!f || !spaces.some((s) => s.id === f.space) || !docIn(req, doc, f.space, f.folder)) return "That document isn't here";
       if (!docs.mayEdit(doc, req.user, f.space, f.folder, true)) return NO_EDIT;
       Object.assign(f, { archived: true, archivedAt: Date.now(), archivedBy: req.user.username });
       docLog(f, req.user.username, "Archived");
@@ -5776,7 +5945,7 @@ app.post(
     const name = docs.cleanName(b.name);
     if (!name) return res.status(400).json({ error: "Name the folder" });
     const out = await docChange(res, (doc) => {
-      if (!docs.folderIn(doc, sp.id, parent)) return "That folder isn't here";
+      if (!docIn(req, doc, sp.id, parent)) return "That folder isn't here";
       if (!docs.mayEdit(doc, req.user, sp.id, parent, true)) return NO_EDIT;
       if (doc.folders.some((f) => f.space === sp.id && (f.parent || "") === parent && !f.archived && docs.sameName(f.name, name))) return `There's already a folder called ${name} there`;
       const f = { id: newId(), space: sp.id, parent, name, at: Date.now(), by: req.user.username };
@@ -5795,14 +5964,14 @@ app.patch(
     const spaces = docSpaces(req.user);
     const out = await docChange(res, (doc) => {
       const f = doc.folders.find((x) => x.id === req.params.id);
-      if (!f || !spaces.some((s) => s.id === f.space) || !docs.folderIn(doc, f.space, f.id)) return "That folder isn't here";
+      if (!f || !spaces.some((s) => s.id === f.space) || !docIn(req, doc, f.space, f.id)) return "That folder isn't here";
       if (f.legal) return docs.LOCKED_FOLDER;
       // Changing a folder needs edit access where it sits, not just inside it.
       if (!docs.mayEdit(doc, req.user, f.space, f.parent, true)) return NO_EDIT;
       const to = "parent" in b ? String(b.parent || "") : f.parent || "";
       const name = "name" in b ? docs.cleanName(b.name) : f.name;
       if (!name) return "Name the folder";
-      if (!docs.folderIn(doc, f.space, to) || docs.wouldLoop(doc, f, to)) return "It can't go there";
+      if (!docIn(req, doc, f.space, to) || docs.wouldLoop(doc, f, to)) return "It can't go there";
       if (!docs.mayEdit(doc, req.user, f.space, to, true)) return "You can't add to that folder. Use Request edit there first.";
       if (doc.folders.some((x) => x !== f && x.space === f.space && (x.parent || "") === to && !x.archived && docs.sameName(x.name, name))) return `There's already a folder called ${name} there`;
       f.parent = to; f.name = name;
@@ -5818,7 +5987,7 @@ app.post(
     const spaces = docSpaces(req.user);
     const out = await docChange(res, (doc) => {
       const f = doc.folders.find((x) => x.id === req.params.id);
-      if (!f || !spaces.some((s) => s.id === f.space) || !docs.folderIn(doc, f.space, f.id)) return "That folder isn't here";
+      if (!f || !spaces.some((s) => s.id === f.space) || !docIn(req, doc, f.space, f.id)) return "That folder isn't here";
       if (f.legal) return docs.LOCKED_FOLDER;
       if (!docs.mayEdit(doc, req.user, f.space, f.parent, true)) return NO_EDIT;
       Object.assign(f, { archived: true, archivedAt: Date.now(), archivedBy: req.user.username });
@@ -5853,7 +6022,8 @@ app.post(
       const pre = ((await getBoard(cfg.store)).cards || []).find((c) => c.id === String(b.card || ""));
       if (!pre || !canSeeBoardCard(req.user, pre, cfg)) return res.status(404).json({ error: "That board file isn't here" });
       const meta = { id: newId(), name, type, size: file.body.length, at: Date.now(), by, kind: type.startsWith("image/") ? "picture" : type === "application/pdf" ? "pdf" : /outlook|rfc822/.test(type) ? "email" : "other", stage: pre.stage, fromDocuments: src.where };
-      await putFile(`${cfg.files}/${pre.id}/${meta.id}`, file.body, type);
+      meta.key = await newBoardFileKey(cfg, pre.id, name);
+      await putFile(meta.key, file.body, type);
       let gone = false;
       await withBoard((doc) => {
         const c = (doc.cards || []).find((x) => x.id === pre.id);
@@ -5977,7 +6147,7 @@ app.post(
     if (sp.kind !== "dept") return res.status(400).json({ error: "Board documents are changed on the board itself" });
     const folder = String(b.folder || "");
     const doc = docs.shape(await getDocuments());
-    if (!docs.folderIn(doc, sp.id, folder)) return res.status(404).json({ error: "That folder isn't here" });
+    if (!docIn(req, doc, sp.id, folder)) return res.status(404).json({ error: "That folder isn't here" });
     if (docs.mayEdit(doc, req.user, sp.id, folder, true)) return res.status(400).json({ error: "You can already edit this folder" });
     const reason = forms.text(b.reason, 500);
     if (!reason) return res.status(400).json({ error: "Say briefly what you need to change" });
@@ -6005,7 +6175,25 @@ app.post(
 );
 
 // IT's view: open edit requests, live and recent grants, archived items.
-const docAdminOnly = (req, res, next) => (docs.grantsAdmin(req.user) ? next() : res.status(403).json({ error: "Edit access is handled by IT" }));
+const docAdminOnly = (req, res, next) => (docs.grantsAdmin(req.user) ? next() : res.status(403).json({ error: "Edit access is handled by the document editors and IT" }));
+// Edit a document in Word (or anything else): the editors and anyone with
+// edit access download the latest version, then upload it back with "New
+// version". Everyone else only views documents in the page.
+app.get(
+  "/api/documents/download",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const src = await docSource(req, res, req.query);
+    if (!src) return;
+    const doc = docs.shape(await getDocuments());
+    const f = doc.files.find((x) => x.id === String(req.query.file || ""));
+    if (!f || !docs.mayEdit(doc, req.user, f.space, f.folder || "", true)) return res.status(403).json({ error: "Ask to edit this folder first" });
+    const file = await getFile(src.key);
+    if (!file) return res.status(404).json({ error: "That document isn't here" });
+    res.set({ "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${String(f.name).replace(/[^\w .()-]+/g, "_")}"`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" });
+    res.send(file.body);
+  })
+);
 app.get(
   "/api/documents/access",
   authMiddleware,
@@ -6016,7 +6204,7 @@ app.get(
     res.json({
       requests: list.filter(docEditOpen).map((r) => ({
         id: r.id, ref: ticketRef(r.id), by: r.addedBy, at: r.addedAt, where: docs.pathLabel(doc, r.docEdit.space, r.docEdit.folder), issue: r.issue,
-        gone: !docs.folderIn(doc, r.docEdit.space, r.docEdit.folder),
+        gone: !docIn(req, doc, r.docEdit.space, r.docEdit.folder),
       })).sort((a, b) => a.at - b.at),
       grants: doc.grants.filter((g) => docs.grantLive(g, now) || (g.revokedAt || g.until || 0) > now - 30 * 24 * 3600 * 1000)
         .map((g) => ({ id: g.id, user: g.user, where: docs.pathLabel(doc, g.space, g.folder), until: g.until || null, by: g.by, at: g.at, ref: g.ticket ? ticketRef(g.ticket) : "", live: docs.grantLive(g, now), revokedAt: g.revokedAt || null, revokedBy: g.revokedBy || "" }))
@@ -6051,7 +6239,7 @@ app.post(
     if (grant) {
       if (!u || !docSpaces(normalizeUser(u)).some((s) => s.id === r0.docEdit.space)) return res.status(400).json({ error: "That login can't see this folder any more" });
       g = await docChange(res, (doc) => {
-        if (!docs.folderIn(doc, r0.docEdit.space, r0.docEdit.folder)) return "That folder isn't here";
+        if (!docIn(req, doc, r0.docEdit.space, r0.docEdit.folder)) return "That folder isn't here";
         const x = { id: newId(), user: u.username, space: r0.docEdit.space, folder: r0.docEdit.folder || "", until: until.until, by: req.user.username, at: Date.now(), ticket: r0.id };
         doc.grants.push(x);
         return Object.assign({ where: docs.pathLabel(doc, x.space, x.folder) }, x);
@@ -6100,7 +6288,7 @@ app.post(
       const x = list.find((y) => y.id === String(b.id || "") && y.archived);
       if (!x) return "That isn't here";
       const parent = b.kind === "folder" ? x.parent : x.folder;
-      if (!docs.folderIn(doc, x.space, parent)) return "Restore the folder it was in first";
+      if (!docIn(req, doc, x.space, parent)) return "Restore the folder it was in first";
       const clash = list.some((y) => y !== x && y.space === x.space && !y.archived && (b.kind === "folder" ? (y.parent || "") === (parent || "") : (y.folder || "") === (parent || "")) && docs.sameName(y.name, x.name));
       if (clash) return `Something called ${x.name} is already there — rename that first`;
       delete x.archived; delete x.archivedAt; delete x.archivedBy;
@@ -6154,7 +6342,7 @@ async function legalRows(u) {
   const today = officeToday();
   const rows = [];
   for (const sec of sections) {
-    if (!sec.folder || !(u.companies || []).includes(sec.company)) continue;
+    if (!sec.folder || !(u.companies || []).includes(sec.company) || !legal.hasSection(u, ldoc, sec.s.id)) continue;
     for (const f of doc.files) {
       if (f.space !== sec.space || f.archived || !docs.folderIn(doc, f.space, f.folder)) continue;
       const up = docs.chain(doc, f.folder);
@@ -6186,12 +6374,14 @@ app.get(
     const people = logins.filter((u) => legal.hasLegal(u, ldoc) && u.companies.some((c) => req.user.companies.includes(c))).map((u) => u.username).sort((a, b) => a.localeCompare(b));
     res.json({
       today, soonDays: legal.SOON_DAYS, rows, people,
-      sections: sections.filter((s) => s.folder && req.user.companies.includes(s.company)).map((s) => ({
+      sections: sections.filter((s) => s.folder && req.user.companies.includes(s.company) && legal.hasSection(req.user, ldoc, s.s.id)).map((s) => ({
         id: s.s.id, label: s.s.label, company: s.company, space: s.space, folder: s.folder.id,
         canEdit: docs.mayEdit(doc, req.user, s.space, s.folder.id, true),
       })),
-      // Leadership manages the named staff.
+      // Leadership manages the named staff and their sections.
       members: req.user.leadership ? ldoc.members : undefined,
+      access: req.user.leadership ? ldoc.access : undefined,
+      allSections: req.user.leadership ? legal.SECTIONS.map((x) => ({ id: x.id, label: x.label })) : undefined,
       logins: req.user.leadership ? logins.filter((u) => !u.leadership).map((u) => u.username).sort((a, b) => a.localeCompare(b)) : undefined,
     });
   })
@@ -6210,7 +6400,7 @@ app.put(
     if (out.owner) {
       const ldoc = await freshLegal();
       const who = (await getUsers()).map(normalizeUser).find((u) => sameUser(u.username, out.owner));
-      if (!who || !legal.hasLegal(who, ldoc)) return res.status(400).json({ error: "The person responsible needs Legal access" });
+      if (!who || !legal.hasSection(who, ldoc, row.section)) return res.status(400).json({ error: "The person responsible needs access to this Legal section" });
       out.owner = who.username;
     }
     const doc = await withLegal((d) => {
@@ -6239,9 +6429,34 @@ app.put(
       if (!u) return res.status(400).json({ error: `No login called ${String(m).slice(0, 60)}` });
       if (!members.includes(u.username)) members.push(u.username);
     }
-    const doc = await withLegal((d) => { legal.shape(d); d.members = members; d.membersBy = req.user.username; d.membersAt = Date.now(); return d; });
+    const doc = await withLegal((d) => {
+      legal.shape(d);
+      const next = {};
+      for (const m of members) next[m] = (Object.entries(d.access).find(([k]) => sameUser(k, m)) || [])[1] || legal.SECTION_IDS.slice();
+      d.access = next; d.members = members; d.membersBy = req.user.username; d.membersAt = Date.now();
+      return d;
+    });
     legalSnap = { at: Date.now(), doc: legal.shape(doc) };
-    res.json({ members });
+    res.json({ members, access: legalSnap.doc.access });
+  })
+);
+// Which sections each named person sees: { access: { username: [ids] } }.
+// Leadership only; anyone left with no section is off Legal.
+app.put(
+  "/api/legal/access",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!req.user.leadership) return res.status(403).json({ error: "Only Leadership changes who sees Legal" });
+    const want = legal.cleanAccess((req.body || {}).access);
+    const logins = (await getUsers()).map(normalizeUser), access = {};
+    for (const [m, ids] of Object.entries(want)) {
+      const u = logins.find((x) => sameUser(x.username, m));
+      if (!u) return res.status(400).json({ error: `No login called ${String(m).slice(0, 60)}` });
+      if (!u.leadership) access[u.username] = ids;
+    }
+    const doc = await withLegal((d) => { legal.shape(d); d.access = access; d.members = Object.keys(access); d.membersBy = req.user.username; d.membersAt = Date.now(); return d; });
+    legalSnap = { at: Date.now(), doc: legal.shape(doc) };
+    res.json({ members: legalSnap.doc.members, access: legalSnap.doc.access });
   })
 );
 // Mentions of You: Legal documents you're responsible for that expire
@@ -6285,8 +6500,22 @@ app.get(
     // Assigned notes show whether their task is done yet.
     const taskDone = Object.fromEntries(tasks.filter((t) => t.strategy).map((t) => [t.id, t.status === "done"]));
     const topics = doc.topics.map(strategyRow).map((t) => Object.assign({}, t, { log: t.log.map((e) => (e.taskId ? Object.assign({}, e, { taskDone: !!taskDone[e.taskId], taskGone: !(e.taskId in taskDone) }) : e)) }));
-    const today = officeToday();
-    res.json({ topics, today, nextDate: strategy.nextDate(doc, today), logins: logins.map((u) => u.username).sort((a, b) => a.localeCompare(b)) });
+    const today = officeToday(), settings = await getSettings();
+    const dates = strategy.meetingDates(doc, settings, today);
+    res.json({ topics, today, dates, nextDate: strategy.nextDate(doc, today, dates), people: strategy.people(settings, logins),
+      logins: logins.map((u) => u.username).sort((a, b) => a.localeCompare(b)) });
+  })
+);
+// Mentions of You: open Strategy Meeting topics you own. Any login (only
+// their own rows come back); notes assigned to you already arrive as tasks.
+app.get(
+  "/api/strategy/mine",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const doc = strategy.shape(await getStrategy());
+    res.json({ items: doc.topics.filter((t) => sameUser(t.owner, req.user.username) && t.status !== "closed")
+      .map((t) => ({ id: t.id, topic: t.topic, discussOn: t.discussOn || "", status: t.status }))
+      .sort((a, b) => (a.discussOn || "9999").localeCompare(b.discussOn || "9999")) });
   })
 );
 // A new row, optionally with its first note.
@@ -6454,7 +6683,7 @@ function chatTools(req) {
       const hit = (s) => words.every((w) => s.toLowerCase().includes(w));
       const spaces = docSpaces(req.user), doc = docs.shape(await getDocuments()), out = [];
       for (const sp of spaces.filter((s) => s.kind !== "board")) {
-        for (const f of doc.files.filter((x) => x.space === sp.id && !x.archived)) {
+        for (const f of doc.files.filter((x) => x.space === sp.id && !x.archived && docIn(req, doc, sp.id, x.folder || ""))) {
           const where = docs.pathLabel(doc, sp.id, f.folder || "");
           if (hit(`${f.name} ${where}`)) out.push({ name: f.name, where, ref: { space: sp.id, folder: f.folder || "", file: f.id } });
         }
@@ -6729,10 +6958,10 @@ async function noteSource(req) {
 }
 async function raiseFromNotes(req, lines) {
   const source = await noteSource(req).catch(() => "A note");
-  const today = officeToday();
+  const today = officeToday(), settings = await getSettings();
   await withStrategy((doc) => {
     strategy.shape(doc);
-    const date = strategy.nextDate(doc, today);
+    const date = strategy.nextDate(doc, today, strategy.meetingDates(doc, settings, today));
     for (const l of lines) {
       const key = strategy.raisedKey(l.line);
       if (doc.raised.includes(key)) continue;

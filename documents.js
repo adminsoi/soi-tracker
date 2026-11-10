@@ -36,8 +36,13 @@ const canPreview = (type) => PREVIEW_TYPES.includes(type);
 
 const top = (u) => !!(u.fullAccess || u.leadership);
 const inDept = (u, d) => !!(u.fullAccess || (u.departments || []).includes(d));
-// IT (and full access) handle edit requests and grants.
-const grantsAdmin = (u) => !!(u.fullAccess || (u.departments || []).includes("IT"));
+// The people who edit documents directly: DOC_EDITORS on the stack
+// (usernames, comma separated), else Ramin, Greg, Shreya and Nyssa.
+// Everyone else asks first ("Request to edit"); the editors and IT decide.
+const EDITORS = String(process.env.DOC_EDITORS || "ramin,greg,shreya,nyssa").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+const isEditor = (u) => !!u && EDITORS.includes(String(u.username || "").toLowerCase());
+// The editors, IT and full access handle edit requests and grants.
+const grantsAdmin = (u) => !!(u.fullAccess || isEditor(u) || (u.departments || []).includes("IT"));
 
 const BOARD_SPACES = {
   "board:ops": { board: "ops", label: "Operations board files" },
@@ -116,11 +121,12 @@ function liveGrant(doc, u, space, folderId, now = Date.now()) {
   return doc.grants.filter((g) => grantLive(g, now) && g.space === space && String(g.user).toLowerCase() === String(u.username).toLowerCase() && ids.has(g.folder || ""))
     .sort((a, b) => (b.until || Infinity) - (a.until || Infinity))[0] || null;
 }
-/** May this login change this folder of this (department) space? Board spaces: never. */
+/** May this login change this folder of this (department) space? The
+ * editors everywhere they see; anyone else with a live grant. Board spaces: never. */
 function mayEdit(doc, u, space, folderId, seen) {
   const sp = parseSpace(space);
   if (!sp || sp.kind !== "dept" || !seen) return false;
-  return !!(u.fullAccess || liveGrant(doc, u, space, folderId));
+  return !!(isEditor(u) || liveGrant(doc, u, space, folderId));
 }
 
 /** End date for a grant: a "YYYY-MM-DD" (end of that day) or "" for none; default 30 days. */
@@ -144,6 +150,6 @@ function wouldLoop(doc, f, parent) {
 
 module.exports = {
   GRANT_DAYS, PREVIEW_TYPES, BOARD_SPACES, LOCKED_FOLDER,
-  canPreview, grantsAdmin, parseSpace, deptSpaceId, spacesFor, shape, cleanName, sameName,
+  canPreview, EDITORS, isEditor, grantsAdmin, parseSpace, deptSpaceId, spacesFor, shape, cleanName, sameName,
   chain, folderIn, pathLabel, grantLive, liveGrant, mayEdit, grantUntil, wouldLoop,
 };

@@ -25,11 +25,45 @@ function shape(doc) {
 }
 const addDays = (d, n) => new Date(Date.parse(d + "T00:00:00Z") + n * DAY).toISOString().slice(0, 10);
 
+// The meetings: settings.strategyDates when someone sets a list (or a
+// calendar fills it later); until then every Monday from this week to the
+// end of the year. Dates topics already use are always included.
+function meetingDates(doc, settings, today) {
+  const set = new Set();
+  const listed = Array.isArray(settings && settings.strategyDates) ? settings.strategyDates.filter((d) => DATE.test(d || "")) : [];
+  if (listed.length) listed.forEach((d) => set.add(d));
+  else {
+    const t = new Date(today + "T00:00:00Z");
+    let d = addDays(today, -((t.getUTCDay() + 6) % 7)); // this week's Monday
+    const end = `${today.slice(0, 4)}-12-31`;
+    for (; d <= end; d = addDays(d, EVERY_DAYS)) set.add(d);
+  }
+  for (const x of shape(doc).topics) if (DATE.test(x.discussOn || "")) set.add(x.discussOn);
+  return [...set].sort();
+}
+// The people topics and notes are assigned to: settings.strategyPeople, or
+// Greg, Nyssa, Ramin, Alexis and Melissa — each matched to a login by
+// username or the start of their email.
+const PEOPLE = ["greg", "nyssa", "ramin", "alexis", "melissa"];
+function people(settings, logins) {
+  const names = Array.isArray(settings && settings.strategyPeople) && settings.strategyPeople.length ? settings.strategyPeople : PEOPLE;
+  const out = [];
+  for (const n of names) {
+    const k = String(n).toLowerCase().trim();
+    const u = logins.find((x) => x.username.toLowerCase() === k) ||
+      logins.find((x) => x.username.toLowerCase().split(/[.\s_-]/)[0] === k) ||
+      logins.find((x) => String(x.email || "").toLowerCase().split("@")[0].split(/[.\s_-]/)[0] === k);
+    if (u && !out.includes(u.username)) out.push(u.username);
+  }
+  return out;
+}
+
 /**
  * The next meeting: the earliest date to discuss from today on; else the
  * latest past date moved on by whole weeks to today or later; else today.
  */
-function nextDate(doc, today) {
+function nextDate(doc, today, meetings) {
+  if (meetings) { const ahead = meetings.find((d) => d >= today); if (ahead) return ahead; }
   const dates = shape(doc).topics.map((t) => t.discussOn).filter((d) => DATE.test(d || "")).sort();
   const ahead = dates.find((d) => d >= today);
   if (ahead) return ahead;
@@ -91,4 +125,4 @@ function remember(doc, key) {
   if (doc.raised.length > MAX_RAISED) doc.raised.splice(0, doc.raised.length - MAX_RAISED);
 }
 
-module.exports = { EVERY_DAYS, STATUSES, TAG, shape, nextDate, cleanTopic, cleanEntry, taggedLines, raisedKey, remember };
+module.exports = { EVERY_DAYS, STATUSES, TAG, PEOPLE, shape, meetingDates, people, nextDate, cleanTopic, cleanEntry, taggedLines, raisedKey, remember };

@@ -304,6 +304,12 @@ Each department has an **SOPs** tab, readable by everyone in that department
   the Documents viewer. A manager in the department can add a **New
   version**; the old PDF is kept and listed under the row (**n older**),
   view-only, for everyone who reads the SOP.
+- **In S3** the PDFs have readable names, one folder per department:
+  `sop_files/<Department>/<Code Title>_v<N>.pdf` (e.g.
+  `sop_files/Warehouse/WH-002 Receiving_v3.pdf`), N counting the SOP's
+  versions. A new version is saved as the next `_v<N>`; changing the
+  title, code or department renames every version's file to match.
+  SOPs from before this were moved to these names once, at startup.
 
 ### SOP change requests (the SOP update form)
 
@@ -334,15 +340,23 @@ served view-only through `sendViewOnly`. Nothing here uses AI.
 meeting. Only logins with the **Leadership** tick see it (full access alone
 isn't enough); every route checks that on the server.
 
-- Each **row**: topic, owner (a login), **date to discuss**, status (Open,
-  Decided, Closed), the latest note, and **Notes (n)**, which opens the
-  row's running log. Topic, owner, date and status save as soon as they're
-  changed. **+ Add row** is dated for the next meeting (any date can be
-  picked) and can carry a first note.
-- **Filter** by date to discuss (the next meeting, all dates, no date yet,
-  or any date in the table), by status, and by searching topics and notes.
-  The next meeting is the earliest date to discuss from today on, or else
-  the last date moved on by whole weeks.
+- Each **row**: topic, owner, **meeting**, status (Open, Decided, Closed),
+  the latest note, and **Notes (n)**, which opens the row's running log.
+  Topic, owner, meeting and status save as soon as they're changed. **+ Add
+  row** is set for the next meeting and can carry a first note.
+- **Meetings:** every Monday from this week to the end of the year, picked
+  from a list (plus any date a topic already uses). `settings.strategyDates`
+  (a list of dates) replaces the Mondays when it's set, so the dates can
+  later come from a calendar. The next meeting is the first one from today.
+- **People:** owner and "for" pick from Greg, Nyssa, Ramin, Alexis and
+  Melissa (matched to their logins by username or the start of their
+  email; `settings.strategyPeople` changes the list).
+- **Mentions of You:** an open topic you own shows in a "Strategy Meeting —
+  yours" box on your Mentions of You (Leadership can click through to the
+  row); notes for you arrive as tasks, as below.
+- **Filter** by meeting (the next one, all, no date yet, or any meeting,
+  with how many topics each has), by status, and by searching topics and
+  notes.
 - The **log** is like a board file's notes: notes and decisions, newest at
   the bottom, with who and when. Adding a decision marks an open row
   Decided. A note **for** someone (with an optional due date) becomes a
@@ -580,7 +594,8 @@ priority (nice to have, important, blocking) and, optionally, a screenshot
   anyone else.
 - Owners are set with `IMPROVEMENTS_OWNERS` (usernames or login emails,
   comma separated; default `nyssa@soiaviation.com`). New requests show on
-  their **Mentions of You** until the status changes from New.
+  the owners' and Leadership's **Mentions of You** until the status
+  changes from New.
 - When someone else changes the status or replies, the request shows on
   the requester's **Mentions of You** (and as "Updated") until they next
   open Improvements.
@@ -650,16 +665,26 @@ routes `/api/documents*` in `index.js`, page `public/js/documents.js`.
   has documents, labelled with its file number and customer, for exactly
   the files you can open on that board. Every request is checked on the
   server.
-- **Read-only by default.** **Request edit** (on any department folder)
-  asks what you need to change and raises an IT ticket on IT → Requests
-  (it shows under your Administration → IT → What you've sent). IT — or a
-  full-access login — decides it on Documents → **Edit access (IT)**:
+- **Who edits:** the **document editors** — Ramin, Greg, Shreya and Nyssa
+  (`DOC_EDITORS` on the stack, usernames comma separated) — edit every
+  folder they can see. Everyone else is read-only until an editor grants
+  them a folder. Full access on its own no longer means editing.
+- **Edit in Word:** for anyone who can edit, each document has **✎ Edit in
+  Word**: it downloads the latest version; edit and save it in Word (or its
+  own app), then **New version** on the same row uploads it as the next
+  version (earlier ones are kept). Nobody else can download documents.
+- **Preview:** every document row has a **👁 Preview** button (PDFs,
+  pictures and text open in the page); other kinds say **Open**.
+- **Request to edit** (on any department folder) asks what you need to
+  change and raises an IT ticket on IT → Requests (it shows under your
+  Administration → IT → What you've sent), and shows on the editors' (and
+  IT's) **Mentions of You** under "Requests to edit documents". An editor,
+  IT or a full-access login decides it on Documents → **Edit requests**:
   **Grant** covers that folder and everything in it until the end date
   (30 days unless they pick another date or "No end date"); **Decline**
   needs a reason. Either way the ticket is resolved with a note saying
   what was decided. Nobody decides their own request. Grants can be
-  revoked at any time. Full-access logins can always edit; Leadership
-  sees everything read-only.
+  revoked at any time. Leadership sees everything read-only.
 - **Edit means:** upload files (drag them from your computer onto the
   folder, or **Upload files**), new folders, **New version** (earlier
   versions are kept and can be viewed from the viewer's version list;
@@ -746,8 +771,13 @@ Rules in `legal.js`, routes in `index.js`, page `public/js/legal.js`.
   60 days or already have show in a **Legal renewals** box (and count in
   the sidebar badge); clicking one opens that Legal section.
 - **People with Legal:** Leadership adds and removes them at the bottom of
-  the Legal tab. They also see the Legal folders in Documents.
-- **S3:** `legal.json` (`{ members: [usernames], records: { <document id>:
+  the Legal tab and ticks, per person, which sections they see (US
+  Government Contracts, Business Development, Insurance, Vendors). A
+  section someone isn't ticked for is hidden from them in Legal, in the
+  Legal folders in Documents (also by direct link) and in Chat with AOG's
+  document search; someone with no sections left is off Legal. New people
+  start with every section. Leadership always sees all four.
+- **S3:** `legal.json` (`{ members: [usernames], access: { <username>: [section ids] }, records: { <document id>:
   { expiry, notes, owner, by, at } } }`); the documents are in
   `documents.json` / `documents_files/` like any other. Section folders
   carry `legal: "usgov" | "bd" | "insurance" | "vendors"`.
@@ -881,12 +911,18 @@ board show up as they were; only the labels changed.
   Purchasing and full-access / leadership; the **margin** column to
   full-access / leadership only. Files are archived, never deleted; every
   change is in the file's history.
-- **Attachments in S3:** one folder per file, `board_files/<file id>/<attachment id>`
-  — the same folders as before, so nothing was moved. The folders are named
-  by the file's internal id rather than its number because numbers get
-  typed in or changed later; `aog_board.json` maps each id to its file
-  number, customer and attachment names, which is what the Documents page
-  uses to show them by name.
+- **Attachments in S3:** every stored file has its own folder, named so
+  it can be found in the bucket: `board_files/<number> - <customer>/` (the
+  file number, else "RFQ …", "Quote …", "SO …" or "PO …"; e.g.
+  `board_files/RFQ 10234 - Example Airline/`), with each attachment inside
+  under its own name (a second `quote.pdf` becomes `quote (2).pdf`). An
+  empty marker object makes the folder show up as soon as the file is
+  stored, before anything is attached. Changing the number or customer
+  renames the folder. Customer documents: `board_customers/<customer>/`.
+  US Gov: `usgov_board_files/…` and `usgov_board_customers/…`. Pentagon
+  documents shown on the board get their folder the first time someone
+  works on them. Files from before this were moved into their folders once,
+  at startup; `aog_board.json` keeps each attachment's S3 name (`key`).
 - **When the server errors**, the board (and IT Requests) shows the error
   with **Try again** and waits before asking again (15 seconds, doubling up
   to 5 minutes) instead of re-asking on every redraw.

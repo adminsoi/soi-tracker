@@ -816,6 +816,8 @@
   .dc-row .dc-name:hover { text-decoration: underline; }
   .dc-acts { white-space: nowrap; }
   .dc-acts .text-button, .dc-acts .primary { margin-right: 8px; }
+  .dc-acts .dc-preview { font-size: 13px; font-weight: 600; padding: 6px 14px; margin-right: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--soft); color: var(--ink); cursor: pointer; }
+  .dc-acts .dc-preview:hover { border-color: #3d7fd1; }
   .dc-past td { color: var(--muted); }
   .dc-noexp { display: block; margin-top: 4px; }
   .dc-viewer { -webkit-user-select: none; user-select: none; }
