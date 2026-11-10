@@ -580,7 +580,8 @@ priority (nice to have, important, blocking) and, optionally, a screenshot
   anyone else.
 - Owners are set with `IMPROVEMENTS_OWNERS` (usernames or login emails,
   comma separated; default `nyssa@soiaviation.com`). New requests show on
-  their **Mentions of You** until the status changes from New.
+  the owners' and Leadership's **Mentions of You** until the status
+  changes from New.
 - When someone else changes the status or replies, the request shows on
   the requester's **Mentions of You** (and as "Updated") until they next
   open Improvements.

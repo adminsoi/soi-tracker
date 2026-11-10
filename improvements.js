@@ -93,8 +93,9 @@ function view(doc, user, raw) {
     .sort((a, b) => b.at - a.at);
   return {
     canManage: manage, owner, areas: AREAS, priorities: PRIORITIES, statuses: STATUSES, items,
-    // For Mentions of You: new requests (owners) and replies to yours.
-    waiting: owner ? items.filter((x) => x.status === "new").length : 0,
+    // For Mentions of You: new requests (owners and Leadership — everyone
+    // who can act on them) and replies to yours.
+    waiting: manage ? items.filter((x) => x.status === "new").length : 0,
     updates: items.filter((x) => x.unseen).length,
   };
 }

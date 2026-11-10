@@ -122,12 +122,12 @@ function impUpdate(id) {
   }, function (err) { toast(err.message, true); });
 }
 
-// Mentions of You (mentions.js): new requests for the owners, and replies
-// to your own requests.
+// Mentions of You (mentions.js): new requests for everyone who manages
+// them (owners and Leadership), and replies to your own requests.
 function impNotices() {
   impFresh();
   if (!imp.data) return "";
-  var list = imp.data.items.filter(function (x) { return (imp.data.owner && x.status === "new") || x.unseen; });
+  var list = imp.data.items.filter(function (x) { return (imp.data.canManage && x.status === "new") || x.unseen; });
   if (!list.length) return "";
   return '<div class="card" style="padding:16px 18px;margin-bottom:16px;"><div class="card-label">Improvements</div><ul class="lg-due-list">' +
     list.map(function (x) {
