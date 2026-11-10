@@ -48,6 +48,9 @@ const {
   putFile,
   getFile,
   deleteFile,
+  copyFile,
+  moveFile,
+  keyPart,
   getSops,
   withSops,
   getPerformance,
@@ -2989,6 +2992,53 @@ app.get(
   })
 );
 
+// SOP PDFs are stored under readable names, one folder per department:
+//   sop_files/<Department>/<Code Title>_v<N>.pdf
+// N counts the SOP's versions (1 = the first upload). A new version gets
+// the next N; changing the title, code or department renames every
+// version's file to match. sop.key / version.key hold the names; SOPs from
+// before this kept sop_files/<id> and sop_versions/<id>/<vid> until
+// syncSopKeys moves them (it runs for every SOP once at startup).
+const sopKeyOf = (x) => x.key || `sop_files/${x.id}`;
+const sopVersionKeyOf = (x, v) => v.key || `sop_versions/${x.id}/${v.id}`;
+function sopNames(doc, x) {
+  const base = keyPart(`${x.code ? x.code + " " : ""}${x.title || ""}`, "SOP");
+  const dept = keyPart(x.dept === SOP_ALL ? "All departments" : x.dept, "SOPs");
+  // Two SOPs with the same code and title in one department get the id's end.
+  const twin = sopShape(doc).sops.some((y) => y.id !== x.id && y.dept === x.dept && keyPart(`${y.code ? y.code + " " : ""}${y.title || ""}`, "SOP") === base);
+  const stem = `sop_files/${dept}/${twin ? `${base} (${x.id.slice(-4)})` : base}`;
+  const vs = Array.isArray(x.versions) ? x.versions : []; // newest first
+  return { current: `${stem}_v${vs.length + 1}.pdf`, versions: vs.map((v, i) => [v, `${stem}_v${vs.length - i}.pdf`]) };
+}
+// Move an SOP's files to the names they should have, then save the names.
+const sopSyncing = new Set();
+async function syncSopKeys(sopId) {
+  if (sopSyncing.has(sopId)) return;
+  sopSyncing.add(sopId);
+  try {
+    const doc = sopShape(await getSops());
+    const x = doc.sops.find((y) => y.id === sopId);
+    if (!x) return;
+    const want = sopNames(doc, x), moved = {};
+    if (sopKeyOf(x) !== want.current && (await moveFile(sopKeyOf(x), want.current))) moved[""] = want.current;
+    for (const [v, k] of want.versions) if (sopVersionKeyOf(x, v) !== k && (await moveFile(sopVersionKeyOf(x, v), k))) moved[v.id] = k;
+    if (!Object.keys(moved).length) return;
+    await withSops((d) => {
+      const y = sopShape(d).sops.find((z) => z.id === sopId);
+      if (!y) return;
+      if (moved[""]) y.key = moved[""];
+      for (const v of y.versions || []) if (moved[v.id]) v.key = moved[v.id];
+    });
+  } catch (err) {
+    console.error(`Naming SOP ${sopId}'s files failed (kept the old names):`, err.message);
+  } finally {
+    sopSyncing.delete(sopId);
+  }
+}
+setTimeout(async () => {
+  try { for (const x of sopShape(await getSops()).sops) await syncSopKeys(x.id); } catch (err) { console.error("SOP file naming:", err.message); }
+}, 15 * 1000);
+
 // Upload an SOP PDF (raw bytes; up to 20 MB). Details come in the query
 // string: dept, code, title, version, fileName.
 app.post(
@@ -3009,6 +3059,7 @@ app.post(
       uploadedAt: Date.now(), uploadedBy: req.user.username,
     };
     await withSops((doc) => { sopShape(doc).sops.push(sop); });
+    await syncSopKeys(id);
     res.status(201).json(sop);
   })
 );
@@ -3034,6 +3085,8 @@ app.patch(
     });
     if (!sop) return res.status(404).json({ error: "That SOP isn't here any more" });
     if (sop.forbidden) return res.status(403).json({ error: "Only that department's managers can change it" });
+    // A new title, code or department renames the files in S3 to match.
+    if ("code" in b || "title" in b || "dept" in b) await syncSopKeys(sop.id);
     res.json(sop);
   })
 );
@@ -3053,8 +3106,8 @@ app.delete(
     });
     if (!gone) return res.status(404).json({ error: "That SOP isn't here any more" });
     if (gone.forbidden) return res.status(403).json({ error: "Only that department's managers can remove it" });
-    await deleteFile(`sop_files/${gone.id}`).catch(() => {});
-    for (const v of gone.versions || []) await deleteFile(`sop_versions/${gone.id}/${v.id}`).catch(() => {});
+    await deleteFile(sopKeyOf(gone)).catch(() => {});
+    for (const v of gone.versions || []) await deleteFile(sopVersionKeyOf(gone, v)).catch(() => {});
     res.status(204).end();
   })
 );
@@ -3065,7 +3118,7 @@ app.get(
   asyncHandler(async (req, res) => {
     const sop = sopShape(await getSops()).sops.find((y) => y.id === req.params.id);
     if (!sop || !canReadSops(req.user, sop.dept)) return res.status(404).json({ error: "That SOP isn't here" });
-    const file = await getFile(`sop_files/${sop.id}`);
+    const file = await getFile(sopKeyOf(sop));
     if (!file) return res.status(404).json({ error: "The PDF is missing" });
     sendViewOnly(res, { name: sop.fileName || `${sop.code || "SOP"} ${sop.title}.pdf`, type: "application/pdf" }, file);
   })
@@ -3079,29 +3132,31 @@ app.get(
     const sop = sopShape(await getSops()).sops.find((y) => y.id === req.params.id);
     const v = sop && (sop.versions || []).find((x) => x.id === req.params.vid);
     if (!v || !canReadSops(req.user, sop.dept)) return res.status(404).json({ error: "That version isn't here" });
-    const file = await getFile(`sop_versions/${sop.id}/${v.id}`);
+    const file = await getFile(sopVersionKeyOf(sop, v));
     if (!file) return res.status(404).json({ error: "The PDF is missing" });
     sendViewOnly(res, { name: v.fileName || `${sop.code || "SOP"} ${sop.title} ${v.version || ""}.pdf`, type: "application/pdf" }, file);
   })
 );
 
-// A new version of an SOP: the current PDF moves to sop_versions/<sop>/<id>
-// (still viewable from the SOP's row) and the new one takes its place.
-// Used by a department manager's "New version" and by an approved change
-// request that came with a PDF.
+// A new version of an SOP: the current PDF stays where it is (now an older
+// version, still viewable from the SOP's row) and the new one is saved as
+// the next _v<N>. Used by a department manager's "New version" and by an
+// approved change request that came with a PDF.
 async function sopNewVersion(sopId, body, meta, by) {
-  const cur = sopShape(await getSops()).sops.find((y) => y.id === sopId);
+  await syncSopKeys(sopId); // older SOPs: give the current files their names first
+  const doc = sopShape(await getSops());
+  const cur = doc.sops.find((y) => y.id === sopId);
   if (!cur) return null;
   const vid = newId();
-  const old = await getFile(`sop_files/${sopId}`);
-  if (old) await putFile(`sop_versions/${sopId}/${vid}`, old.body, "application/pdf");
-  await putFile(`sop_files/${sopId}`, body, "application/pdf");
-  return withSops((doc) => {
-    const x = sopShape(doc).sops.find((y) => y.id === sopId);
+  const had = !!(await getFile(sopKeyOf(cur)));
+  const next = sopNames(doc, Object.assign({}, cur, { versions: had ? [{ id: vid }].concat(cur.versions || []) : cur.versions || [] })).current;
+  await putFile(next, body, "application/pdf");
+  return withSops((d) => {
+    const x = sopShape(d).sops.find((y) => y.id === sopId);
     if (!x) return null;
     x.versions = Array.isArray(x.versions) ? x.versions : [];
-    if (old) x.versions.unshift({ id: vid, fileName: x.fileName, size: x.size, version: x.version, at: x.uploadedAt, by: x.uploadedBy });
-    Object.assign(x, { fileName: sopText(meta.fileName, 200) || x.fileName, size: body.length, version: sopText(meta.version, 30), uploadedAt: Date.now(), uploadedBy: by, updatedAt: Date.now() });
+    if (had) x.versions.unshift({ id: vid, key: sopKeyOf(x), fileName: x.fileName, size: x.size, version: x.version, at: x.uploadedAt, by: x.uploadedBy });
+    Object.assign(x, { key: next, fileName: sopText(meta.fileName, 200) || x.fileName, size: body.length, version: sopText(meta.version, 30), uploadedAt: Date.now(), uploadedBy: by, updatedAt: Date.now() });
     if (meta.request) x.request = meta.request;
     return Object.assign({}, x);
   });
@@ -3258,6 +3313,7 @@ app.post(
           await putFile(`sop_files/${sopId}`, file.body, "application/pdf");
           const sop = { id: sopId, dept: r0.dept, code: r0.code || "", title: r0.title, version, fileName: r0.file.name, size: file.body.length, uploadedAt: Date.now(), uploadedBy: r0.by, request: r0.id };
           await withSops((d) => { sopShape(d).sops.push(sop); });
+          await syncSopKeys(sopId);
         }
       } catch (err) { await unclaim(); throw err; }
     }

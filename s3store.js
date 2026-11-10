@@ -10,6 +10,7 @@ const {
   GetObjectCommand,
   PutObjectCommand,
   DeleteObjectCommand,
+  CopyObjectCommand,
 } = require("@aws-sdk/client-s3");
 
 const REGION = process.env.AWS_REGION || "us-east-1";
@@ -95,6 +96,34 @@ async function getFile(name) {
 }
 async function deleteFile(name) {
   await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: `${PREFIX}/${name}` }));
+}
+// Copy a file to a new name (S3 copies it server-side). On staging the
+// source may still be live data: it's copied from there into staging.
+// Returns false when the source doesn't exist.
+async function copyFile(from, to) {
+  if (from === to) return true;
+  const src = (prefix) => `${BUCKET}/${`${prefix}/${from}`.split("/").map(encodeURIComponent).join("/")}`;
+  for (const prefix of SEED_PREFIX ? [PREFIX, SEED_PREFIX] : [PREFIX]) {
+    try {
+      await s3.send(new CopyObjectCommand({ Bucket: BUCKET, Key: `${PREFIX}/${to}`, CopySource: src(prefix) }));
+      return true;
+    } catch (err) {
+      if (!isMissing(err)) throw err;
+    }
+  }
+  return false;
+}
+// Rename = copy, then delete the old name (in this copy's own data only).
+async function moveFile(from, to) {
+  if (from === to) return true;
+  if (!(await copyFile(from, to))) return false;
+  await deleteFile(from).catch(() => {});
+  return true;
+}
+// One part of a readable S3 name: no slashes or control characters, trimmed.
+function keyPart(s, fallback) {
+  const t = String(s == null ? "" : s).replace(/[\/\\\u0000-\u001f\u007f]+/g, "-").replace(/\s+/g, " ").replace(/^[.\s-]+|[.\s]+$/g, "").trim().slice(0, 100);
+  return t || fallback || "Untitled";
 }
 
 function getUsers() {
@@ -454,6 +483,9 @@ function withChats(name, mutator) {
 }
 
 module.exports = {
+  copyFile,
+  moveFile,
+  keyPart,
   getChats,
   withChats,
   getImprovements,
