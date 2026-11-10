@@ -279,6 +279,9 @@ app.post(
       performance: !!user.performance,
       pentagonCode: user.pentagonCode,
       pentagonMentions: getsPentagonMentions(user),
+      // The same as /api/me, so they're right straight after signing in.
+      legal: legal.hasLegal(user, await freshLegal()),
+      docAdmin: docs.grantsAdmin(user),
     });
   })
 );
@@ -297,6 +300,8 @@ app.get("/api/me", authMiddleware, asyncHandler(async (req, res) => {
     pentagonMentions: getsPentagonMentions(req.user),
     // Administration → Legal (Leadership plus the named staff; legal.js).
     legal: legal.hasLegal(req.user, await freshLegal()),
+    // Documents: decides edit requests (the editors, IT and full access).
+    docAdmin: docs.grantsAdmin(req.user),
   });
 }));
 
@@ -6170,7 +6175,25 @@ app.post(
 );
 
 // IT's view: open edit requests, live and recent grants, archived items.
-const docAdminOnly = (req, res, next) => (docs.grantsAdmin(req.user) ? next() : res.status(403).json({ error: "Edit access is handled by IT" }));
+const docAdminOnly = (req, res, next) => (docs.grantsAdmin(req.user) ? next() : res.status(403).json({ error: "Edit access is handled by the document editors and IT" }));
+// Edit a document in Word (or anything else): the editors and anyone with
+// edit access download the latest version, then upload it back with "New
+// version". Everyone else only views documents in the page.
+app.get(
+  "/api/documents/download",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const src = await docSource(req, res, req.query);
+    if (!src) return;
+    const doc = docs.shape(await getDocuments());
+    const f = doc.files.find((x) => x.id === String(req.query.file || ""));
+    if (!f || !docs.mayEdit(doc, req.user, f.space, f.folder || "", true)) return res.status(403).json({ error: "Ask to edit this folder first" });
+    const file = await getFile(src.key);
+    if (!file) return res.status(404).json({ error: "That document isn't here" });
+    res.set({ "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${String(f.name).replace(/[^\w .()-]+/g, "_")}"`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" });
+    res.send(file.body);
+  })
+);
 app.get(
   "/api/documents/access",
   authMiddleware,
@@ -6477,8 +6500,22 @@ app.get(
     // Assigned notes show whether their task is done yet.
     const taskDone = Object.fromEntries(tasks.filter((t) => t.strategy).map((t) => [t.id, t.status === "done"]));
     const topics = doc.topics.map(strategyRow).map((t) => Object.assign({}, t, { log: t.log.map((e) => (e.taskId ? Object.assign({}, e, { taskDone: !!taskDone[e.taskId], taskGone: !(e.taskId in taskDone) }) : e)) }));
-    const today = officeToday();
-    res.json({ topics, today, nextDate: strategy.nextDate(doc, today), logins: logins.map((u) => u.username).sort((a, b) => a.localeCompare(b)) });
+    const today = officeToday(), settings = await getSettings();
+    const dates = strategy.meetingDates(doc, settings, today);
+    res.json({ topics, today, dates, nextDate: strategy.nextDate(doc, today, dates), people: strategy.people(settings, logins),
+      logins: logins.map((u) => u.username).sort((a, b) => a.localeCompare(b)) });
+  })
+);
+// Mentions of You: open Strategy Meeting topics you own. Any login (only
+// their own rows come back); notes assigned to you already arrive as tasks.
+app.get(
+  "/api/strategy/mine",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const doc = strategy.shape(await getStrategy());
+    res.json({ items: doc.topics.filter((t) => sameUser(t.owner, req.user.username) && t.status !== "closed")
+      .map((t) => ({ id: t.id, topic: t.topic, discussOn: t.discussOn || "", status: t.status }))
+      .sort((a, b) => (a.discussOn || "9999").localeCompare(b.discussOn || "9999")) });
   })
 );
 // A new row, optionally with its first note.
@@ -6921,10 +6958,10 @@ async function noteSource(req) {
 }
 async function raiseFromNotes(req, lines) {
   const source = await noteSource(req).catch(() => "A note");
-  const today = officeToday();
+  const today = officeToday(), settings = await getSettings();
   await withStrategy((doc) => {
     strategy.shape(doc);
-    const date = strategy.nextDate(doc, today);
+    const date = strategy.nextDate(doc, today, strategy.meetingDates(doc, settings, today));
     for (const l of lines) {
       const key = strategy.raisedKey(l.line);
       if (doc.raised.includes(key)) continue;

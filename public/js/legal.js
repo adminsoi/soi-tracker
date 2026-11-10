@@ -79,7 +79,7 @@ function renderLegal(head) {
     }).join("") + "</div>" +
     here.map(function (s) { return '<button type="button" data-lg-open="' + E(s.space + "|" + s.folder) + '">' + (multi ? E(shortCo(s.company)) + ": " : "") + (s.canEdit ? "Add documents in Documents" : "Open folder in Documents") + "</button>"; }).join("") + "</div>" +
     table +
-    '<p class="small-note">Documents are added, versioned and archived in Documents (Legal folders, read-only until IT grants edit access) and open view-only here. Type expiry dates and notes by hand from the signed documents; don\'t enter contract prices here. Anything expiring within ' + d.soonDays + " days shows on the person responsible's Mentions of You.</p>" +
+    '<p class="small-note">Documents are added, versioned and archived in Documents (Legal folders, read-only except for the document editors and anyone they grant access) and open view-only here. Type expiry dates and notes by hand from the signed documents; don\'t enter contract prices here. Anything expiring within ' + d.soonDays + " days shows on the person responsible's Mentions of You.</p>" +
     (d.members ? renderLegalMembers(d) : "");
 }
 // Leadership: who else has Legal, and which sections each person sees.
