@@ -24,10 +24,20 @@ function smDateLabel(d) {
   var t = new Date(d + "T12:00:00");
   return isNaN(t) ? d : t.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 }
+// Owner and "for" pick from the Strategy Meeting's people (Greg, Nyssa,
+// Ramin, Alexis, Melissa); someone already picked stays in the list.
 function smLoginOpts(sel, none) {
-  var l = sm.data.logins;
+  var l = (sm.data.people && sm.data.people.length) ? sm.data.people : sm.data.logins;
   return '<option value="">' + E(none) + "</option>" + (sel && l.indexOf(sel) === -1 ? [sel] : []).concat(l).map(function (u) {
     return '<option value="' + E(u) + '"' + (sameUser(u, sel) ? " selected" : "") + ">" + E(u) + "</option>";
+  }).join("");
+}
+// A topic's meeting: one of the meeting dates (every Monday until the end of
+// the year, for now), or none yet.
+function smDateOpts(sel) {
+  var l = sm.data.dates || [];
+  return '<option value="">No date yet</option>' + (sel && l.indexOf(sel) === -1 ? [sel] : []).concat(l).map(function (x) {
+    return '<option value="' + E(x) + '"' + (x === sel ? " selected" : "") + ">" + E(smDateLabel(x)) + (x === sm.data.nextDate ? " · next" : "") + "</option>";
   }).join("");
 }
 var SM_STATUS = [["open", "Open"], ["decided", "Decided"], ["closed", "Closed"]];
@@ -43,9 +53,11 @@ function renderStrategy() {
   if (sm.error && !sm.data) return head + '<div class="banner">' + E(sm.error) + "</div>";
   if (!sm.data) return head + '<div class="empty">Loading the Strategy Meeting…</div>';
   var d = sm.data;
-  var dates = [];
-  d.topics.forEach(function (t) { if (t.discussOn && dates.indexOf(t.discussOn) === -1) dates.push(t.discussOn); });
-  dates.sort().reverse();
+  // Every meeting (each Monday to the end of the year, plus any date a topic
+  // uses), with how many topics are on it.
+  var dates = (d.dates || []).slice(), per = {};
+  d.topics.forEach(function (t) { if (t.discussOn) { per[t.discussOn] = (per[t.discussOn] || 0) + 1; if (dates.indexOf(t.discussOn) === -1) dates.push(t.discussOn); } });
+  dates.sort();
   if (sm.date !== "next" && sm.date !== "all" && sm.date !== "none" && dates.indexOf(sm.date) === -1) sm.date = "next";
   var want = sm.date === "next" ? d.nextDate : sm.date;
   var q = sm.q.trim().toLowerCase();
@@ -60,7 +72,7 @@ function renderStrategy() {
     '<option value="next"' + (sm.date === "next" ? " selected" : "") + ">Next meeting · " + E(smDateLabel(d.nextDate)) + "</option>" +
     '<option value="all"' + (sm.date === "all" ? " selected" : "") + ">All dates</option>" +
     '<option value="none"' + (sm.date === "none" ? " selected" : "") + ">No date yet (" + undated + ")</option>" +
-    dates.map(function (x) { return '<option value="' + E(x) + '"' + (sm.date === x ? " selected" : "") + ">" + E(smDateLabel(x)) + "</option>"; }).join("") + "</select>" +
+    dates.map(function (x) { return '<option value="' + E(x) + '"' + (sm.date === x ? " selected" : "") + ">" + E(smDateLabel(x)) + (per[x] ? " (" + per[x] + ")" : "") + "</option>"; }).join("") + "</select>" +
     '<div class="seg" aria-label="Status">' + SM_SHOW.map(function (x) {
       return '<button type="button" data-sm-show="' + x[0] + '" class="' + (sm.status === x[0] ? "active" : "") + '">' + E(x[1]) + "</button>";
     }).join("") + "</div>" +
@@ -69,7 +81,7 @@ function renderStrategy() {
   var add = sm.adding ? '<div class="card" style="padding:16px 18px;margin-bottom:14px;"><div class="card-label">New row</div>' +
     '<div class="nb-field"><label for="smNewTopic">Topic</label><input id="smNewTopic" data-sm-new="topic" value="' + E(sm.form.topic || "") + '" autocomplete="off"></div>' +
     '<div class="grid-2" style="gap:0 16px;"><div class="nb-field"><label for="smNewOwner">Owner</label><select id="smNewOwner" data-sm-new="owner">' + smLoginOpts(sm.form.owner, "Nobody yet") + "</select></div>" +
-    '<div class="nb-field"><label for="smNewDate">Date to discuss</label><input type="date" id="smNewDate" data-sm-new="discussOn" value="' + E("discussOn" in sm.form ? sm.form.discussOn : d.nextDate) + '"></div></div>' +
+    '<div class="nb-field"><label for="smNewDate">Meeting</label><select id="smNewDate" data-sm-new="discussOn">' + smDateOpts("discussOn" in sm.form ? sm.form.discussOn : d.nextDate) + "</select></div></div>" +
     '<div class="nb-field"><label for="smNewNote">First note (optional)</label><textarea id="smNewNote" rows="3" data-sm-new="note">' + E(sm.form.note || "") + "</textarea></div>" +
     '<div class="nb-foot"><button type="button" class="primary" data-sm-create>Add row</button><button type="button" class="text-button" data-sm-cancel>Cancel</button></div></div>' : "";
   var table = rows.length ? '<div class="table-wrap"><table class="wide sm-table"><thead><tr><th>Topic</th><th>Owner</th><th>Date to discuss</th><th>Status</th><th>Latest</th><th></th></tr></thead><tbody>' +
@@ -84,7 +96,7 @@ function smRow(t) {
     '<td><input class="sm-topic" data-sm-edit="topic" data-id="' + E(t.id) + '" value="' + E(t.topic) + '" aria-label="Topic">' +
     (t.source ? '<span class="co-note">From ' + E(t.source) + " · " + E(t.raisedBy || "") + "</span>" : "") + "</td>" +
     '<td><select data-sm-edit="owner" data-id="' + E(t.id) + '" aria-label="Owner of ' + E(t.topic) + '">' + smLoginOpts(t.owner, "Nobody") + "</select></td>" +
-    '<td><input type="date" data-sm-edit="discussOn" data-id="' + E(t.id) + '" value="' + E(t.discussOn || "") + '" aria-label="Date to discuss ' + E(t.topic) + '"></td>' +
+    '<td><select data-sm-edit="discussOn" data-id="' + E(t.id) + '" aria-label="Meeting for ' + E(t.topic) + '">' + smDateOpts(t.discussOn || "") + "</select></td>" +
     '<td><select data-sm-edit="status" data-id="' + E(t.id) + '" aria-label="Status of ' + E(t.topic) + '">' + SM_STATUS.map(function (s) {
       return '<option value="' + s[0] + '"' + (t.status === s[0] ? " selected" : "") + ">" + s[1] + "</option>";
     }).join("") + "</select></td>" +
@@ -170,4 +182,35 @@ document.addEventListener("change", function (e) {
       smPut(row); toast("Saved."); requestRender();
     }, function (err) { toast(err.message, true); smReload(); });
   }
+});
+
+// ---- Mentions of You: Strategy Meeting topics you own ----
+// Open topics whose owner is you (notes assigned to you arrive as tasks).
+var smMine = { items: null, at: 0, loading: false };
+function loadStrategyMine() {
+  if (smMine.loading || (smMine.items && Date.now() - smMine.at < 60000)) return Promise.resolve(smMine.items || []);
+  smMine.loading = true;
+  return api("/api/strategy/mine").then(function (x) {
+    var changed = JSON.stringify(x.items) !== JSON.stringify(smMine.items);
+    smMine.items = x.items || []; smMine.at = Date.now();
+    if (changed && page === "mentions") requestRender();
+    return smMine.items;
+  }, function () { smMine.items = smMine.items || []; return smMine.items; }).then(function (v) { smMine.loading = false; return v; });
+}
+function strategyNotices() {
+  loadStrategyMine();
+  var list = smMine.items || [];
+  if (!list.length) return "";
+  return '<div class="card" style="padding:16px 18px;margin-bottom:16px;"><div class="card-label">Strategy Meeting — yours</div><ul class="lg-due-list">' +
+    list.map(function (x) {
+      return "<li>" + (me.leadership ? '<button type="button" class="text-button" data-sm-goto="' + E(x.id) + '|' + E(x.discussOn) + '">' + E(x.topic) + "</button>" : "<b>" + E(x.topic) + "</b>") +
+        ' <span class="small-note">' + E(x.discussOn ? smDateLabel(x.discussOn) : "No meeting date yet") + " · " + E(x.status === "decided" ? "Decided" : "Open") + "</span></li>";
+    }).join("") + "</ul></div>";
+}
+document.addEventListener("click", function (e) {
+  var t = e.target.closest && e.target.closest("[data-sm-goto]");
+  if (!t) return;
+  var p = t.dataset.smGoto.split("|");
+  sm.date = p[1] || "all"; sm.status = "all"; sm.open[p[0]] = true; sm.at = 0;
+  go("strategy");
 });
