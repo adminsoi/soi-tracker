@@ -5667,6 +5667,16 @@ async function freshLegal() {
   return legalSnap.doc;
 }
 app.use("/api/documents", (req, res, next) => { freshLegal().then(() => next(), next); });
+// docs.folderIn, plus Legal's per-section access: a Legal section folder
+// (and everything in it) is only there for people ticked for that section.
+function docIn(req, doc, space, folderId) {
+  const here = docs.folderIn(doc, space, folderId);
+  if (!here || !folderId) return here;
+  const sp = docs.parseSpace(space);
+  if (!sp || sp.kind !== "dept" || sp.dept !== legal.LEGAL) return here;
+  const section = docs.chain(doc, folderId).find((f) => f.legal);
+  return section && !legal.hasSection(req.user, legalSnap.doc, section.legal) ? null : here;
+}
 function docSpace(req, res, id) {
   const sp = docSpaces(req.user).find((s) => s.id === id);
   if (!sp) res.status(404).json({ error: "That folder isn't here" });
@@ -5722,7 +5732,7 @@ app.get(
         files: c.files.map((f) => ({ id: f.id, name: f.name, type: f.type, size: f.size, at: f.at, by: f.by, versions: 1, preview: docs.canPreview(f.type) })) });
     }
     const [doc, itList] = await Promise.all([getDocuments().then(docs.shape), getItRequests()]);
-    const here = docs.folderIn(doc, sp.id, folderId);
+    const here = docIn(req, doc, sp.id, folderId);
     if (!here) return res.status(404).json({ error: "That folder isn't here" });
     const grant = docs.liveGrant(doc, req.user, sp.id, folderId);
     const reqOpen = docOpenRequest(itList, doc, req.user, sp.id, folderId);
@@ -5732,7 +5742,7 @@ app.get(
       canEdit: docs.mayEdit(doc, req.user, sp.id, folderId, true),
       editUntil: grant ? grant.until || null : undefined,
       request: reqOpen ? { ref: ticketRef(reqOpen.id), at: reqOpen.addedAt } : null,
-      folders: doc.folders.filter((f) => f.space === sp.id && (f.parent || "") === folderId && !f.archived)
+      folders: doc.folders.filter((f) => f.space === sp.id && (f.parent || "") === folderId && !f.archived && docIn(req, doc, sp.id, f.id))
         .map((f) => ({ id: f.id, name: f.name, at: f.at, by: f.by })).sort((a, b) => a.name.localeCompare(b.name)),
       files: doc.files.filter((f) => f.space === sp.id && (f.folder || "") === folderId && !f.archived).map(docFileOut).sort((a, b) => a.name.localeCompare(b.name)),
     });
@@ -5754,7 +5764,7 @@ async function docSource(req, res, q) {
   } else {
     const doc = docs.shape(await getDocuments());
     const f = doc.files.find((x) => x.id === String(q.file || "") && x.space === sp.id && !x.archived);
-    const v = f && docs.folderIn(doc, sp.id, f.folder) && (q.v ? f.versions.find((x) => x.id === String(q.v)) : f.versions[f.versions.length - 1]);
+    const v = f && docIn(req, doc, sp.id, f.folder) && (q.v ? f.versions.find((x) => x.id === String(q.v)) : f.versions[f.versions.length - 1]);
     if (v) { meta = { name: f.name, type: v.type || f.type }; key = `documents_files/${f.id}/${v.id}`; where = docs.pathLabel(doc, sp.id, f.folder); docFile = f; }
   }
   if (!meta) { res.status(404).json({ error: "That document isn't here" }); return null; }
@@ -5784,7 +5794,7 @@ app.get(
   asyncHandler(async (req, res) => {
     const doc = docs.shape(await getDocuments());
     const f = doc.files.find((x) => x.id === req.params.id && !x.archived);
-    if (!f || !docs.parseSpace(f.space) || !docSpaces(req.user).some((s) => s.id === f.space) || !docs.folderIn(doc, f.space, f.folder)) return res.status(404).json({ error: "That document isn't here" });
+    if (!f || !docs.parseSpace(f.space) || !docSpaces(req.user).some((s) => s.id === f.space) || !docIn(req, doc, f.space, f.folder)) return res.status(404).json({ error: "That document isn't here" });
     res.json({ versions: f.versions.slice().reverse().map((v) => ({ id: v.id, at: v.at, by: v.by, size: v.size, type: v.type, name: v.name || f.name, preview: docs.canPreview(v.type) })), history: (f.history || []).slice(-50).reverse() });
   })
 );
@@ -5823,7 +5833,7 @@ app.post(
     if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "No file came through" });
     const folderId = String(req.query.folder || "");
     const pre = docs.shape(await getDocuments());
-    if (!docs.folderIn(pre, sp.id, folderId)) return res.status(404).json({ error: "That folder isn't here" });
+    if (!docIn(req, pre, sp.id, folderId)) return res.status(404).json({ error: "That folder isn't here" });
     if (!docs.mayEdit(pre, req.user, sp.id, folderId, true)) return res.status(403).json({ error: NO_EDIT });
     const same = pre.files.find((f) => f.space === sp.id && (f.folder || "") === folderId && !f.archived && docs.sameName(f.name, name));
     const fileId = same ? same.id : newId();
@@ -5831,7 +5841,7 @@ app.post(
     // Stored before it's listed, so a listed version always has its bytes.
     await putFile(`documents_files/${fileId}/${v.id}`, req.body, type);
     const out = await docChange(res, (doc) => {
-      if (!docs.folderIn(doc, sp.id, folderId)) return "That folder isn't here";
+      if (!docIn(req, doc, sp.id, folderId)) return "That folder isn't here";
       if (!docs.mayEdit(doc, req.user, sp.id, folderId, true)) return NO_EDIT;
       let f = doc.files.find((x) => x.id === fileId);
       if (!f) {
@@ -5857,14 +5867,14 @@ app.post(
     if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "No file came through" });
     const pre = docs.shape(await getDocuments());
     const f0 = pre.files.find((x) => x.id === req.params.id && !x.archived);
-    const seen = f0 && docSpaces(req.user).some((s) => s.id === f0.space) && docs.folderIn(pre, f0.space, f0.folder);
+    const seen = f0 && docSpaces(req.user).some((s) => s.id === f0.space) && docIn(req, pre, f0.space, f0.folder);
     if (!seen) return res.status(404).json({ error: "That document isn't here" });
     if (!docs.mayEdit(pre, req.user, f0.space, f0.folder, true)) return res.status(403).json({ error: NO_EDIT });
     const v = { id: newId(), at: Date.now(), by: req.user.username, size: req.body.length, type, name };
     await putFile(`documents_files/${f0.id}/${v.id}`, req.body, type);
     const out = await docChange(res, (doc) => {
       const f = doc.files.find((x) => x.id === f0.id && !x.archived);
-      if (!f || !docs.folderIn(doc, f.space, f.folder)) return "That document isn't here";
+      if (!f || !docIn(req, doc, f.space, f.folder)) return "That document isn't here";
       if (!docs.mayEdit(doc, req.user, f.space, f.folder, true)) return NO_EDIT;
       f.versions.push(v);
       f.type = type;
@@ -5884,12 +5894,12 @@ app.patch(
     const spaces = docSpaces(req.user);
     const out = await docChange(res, (doc) => {
       const f = doc.files.find((x) => x.id === req.params.id && !x.archived);
-      if (!f || !spaces.some((s) => s.id === f.space) || !docs.folderIn(doc, f.space, f.folder)) return "That document isn't here";
+      if (!f || !spaces.some((s) => s.id === f.space) || !docIn(req, doc, f.space, f.folder)) return "That document isn't here";
       if (!docs.mayEdit(doc, req.user, f.space, f.folder, true)) return NO_EDIT;
       const to = "folder" in b ? String(b.folder || "") : f.folder || "";
       const name = "name" in b ? docs.cleanName(b.name) : f.name;
       if (!name) return "Give it a name";
-      if (!docs.folderIn(doc, f.space, to)) return "That folder isn't here";
+      if (!docIn(req, doc, f.space, to)) return "That folder isn't here";
       if (!docs.mayEdit(doc, req.user, f.space, to, true)) return "You can't add to that folder. Use Request edit there first.";
       if (doc.files.some((x) => x !== f && x.space === f.space && (x.folder || "") === to && !x.archived && docs.sameName(x.name, name))) return `There's already a document called ${name} there`;
       if (to !== (f.folder || "")) docLog(f, req.user.username, `Moved from ${docs.pathLabel(doc, f.space, f.folder)} to ${docs.pathLabel(doc, f.space, to)}`);
@@ -5908,7 +5918,7 @@ app.post(
     const spaces = docSpaces(req.user);
     const out = await docChange(res, (doc) => {
       const f = doc.files.find((x) => x.id === req.params.id && !x.archived);
-      if (!f || !spaces.some((s) => s.id === f.space) || !docs.folderIn(doc, f.space, f.folder)) return "That document isn't here";
+      if (!f || !spaces.some((s) => s.id === f.space) || !docIn(req, doc, f.space, f.folder)) return "That document isn't here";
       if (!docs.mayEdit(doc, req.user, f.space, f.folder, true)) return NO_EDIT;
       Object.assign(f, { archived: true, archivedAt: Date.now(), archivedBy: req.user.username });
       docLog(f, req.user.username, "Archived");
@@ -5930,7 +5940,7 @@ app.post(
     const name = docs.cleanName(b.name);
     if (!name) return res.status(400).json({ error: "Name the folder" });
     const out = await docChange(res, (doc) => {
-      if (!docs.folderIn(doc, sp.id, parent)) return "That folder isn't here";
+      if (!docIn(req, doc, sp.id, parent)) return "That folder isn't here";
       if (!docs.mayEdit(doc, req.user, sp.id, parent, true)) return NO_EDIT;
       if (doc.folders.some((f) => f.space === sp.id && (f.parent || "") === parent && !f.archived && docs.sameName(f.name, name))) return `There's already a folder called ${name} there`;
       const f = { id: newId(), space: sp.id, parent, name, at: Date.now(), by: req.user.username };
@@ -5949,14 +5959,14 @@ app.patch(
     const spaces = docSpaces(req.user);
     const out = await docChange(res, (doc) => {
       const f = doc.folders.find((x) => x.id === req.params.id);
-      if (!f || !spaces.some((s) => s.id === f.space) || !docs.folderIn(doc, f.space, f.id)) return "That folder isn't here";
+      if (!f || !spaces.some((s) => s.id === f.space) || !docIn(req, doc, f.space, f.id)) return "That folder isn't here";
       if (f.legal) return docs.LOCKED_FOLDER;
       // Changing a folder needs edit access where it sits, not just inside it.
       if (!docs.mayEdit(doc, req.user, f.space, f.parent, true)) return NO_EDIT;
       const to = "parent" in b ? String(b.parent || "") : f.parent || "";
       const name = "name" in b ? docs.cleanName(b.name) : f.name;
       if (!name) return "Name the folder";
-      if (!docs.folderIn(doc, f.space, to) || docs.wouldLoop(doc, f, to)) return "It can't go there";
+      if (!docIn(req, doc, f.space, to) || docs.wouldLoop(doc, f, to)) return "It can't go there";
       if (!docs.mayEdit(doc, req.user, f.space, to, true)) return "You can't add to that folder. Use Request edit there first.";
       if (doc.folders.some((x) => x !== f && x.space === f.space && (x.parent || "") === to && !x.archived && docs.sameName(x.name, name))) return `There's already a folder called ${name} there`;
       f.parent = to; f.name = name;
@@ -5972,7 +5982,7 @@ app.post(
     const spaces = docSpaces(req.user);
     const out = await docChange(res, (doc) => {
       const f = doc.folders.find((x) => x.id === req.params.id);
-      if (!f || !spaces.some((s) => s.id === f.space) || !docs.folderIn(doc, f.space, f.id)) return "That folder isn't here";
+      if (!f || !spaces.some((s) => s.id === f.space) || !docIn(req, doc, f.space, f.id)) return "That folder isn't here";
       if (f.legal) return docs.LOCKED_FOLDER;
       if (!docs.mayEdit(doc, req.user, f.space, f.parent, true)) return NO_EDIT;
       Object.assign(f, { archived: true, archivedAt: Date.now(), archivedBy: req.user.username });
@@ -6132,7 +6142,7 @@ app.post(
     if (sp.kind !== "dept") return res.status(400).json({ error: "Board documents are changed on the board itself" });
     const folder = String(b.folder || "");
     const doc = docs.shape(await getDocuments());
-    if (!docs.folderIn(doc, sp.id, folder)) return res.status(404).json({ error: "That folder isn't here" });
+    if (!docIn(req, doc, sp.id, folder)) return res.status(404).json({ error: "That folder isn't here" });
     if (docs.mayEdit(doc, req.user, sp.id, folder, true)) return res.status(400).json({ error: "You can already edit this folder" });
     const reason = forms.text(b.reason, 500);
     if (!reason) return res.status(400).json({ error: "Say briefly what you need to change" });
@@ -6171,7 +6181,7 @@ app.get(
     res.json({
       requests: list.filter(docEditOpen).map((r) => ({
         id: r.id, ref: ticketRef(r.id), by: r.addedBy, at: r.addedAt, where: docs.pathLabel(doc, r.docEdit.space, r.docEdit.folder), issue: r.issue,
-        gone: !docs.folderIn(doc, r.docEdit.space, r.docEdit.folder),
+        gone: !docIn(req, doc, r.docEdit.space, r.docEdit.folder),
       })).sort((a, b) => a.at - b.at),
       grants: doc.grants.filter((g) => docs.grantLive(g, now) || (g.revokedAt || g.until || 0) > now - 30 * 24 * 3600 * 1000)
         .map((g) => ({ id: g.id, user: g.user, where: docs.pathLabel(doc, g.space, g.folder), until: g.until || null, by: g.by, at: g.at, ref: g.ticket ? ticketRef(g.ticket) : "", live: docs.grantLive(g, now), revokedAt: g.revokedAt || null, revokedBy: g.revokedBy || "" }))
@@ -6206,7 +6216,7 @@ app.post(
     if (grant) {
       if (!u || !docSpaces(normalizeUser(u)).some((s) => s.id === r0.docEdit.space)) return res.status(400).json({ error: "That login can't see this folder any more" });
       g = await docChange(res, (doc) => {
-        if (!docs.folderIn(doc, r0.docEdit.space, r0.docEdit.folder)) return "That folder isn't here";
+        if (!docIn(req, doc, r0.docEdit.space, r0.docEdit.folder)) return "That folder isn't here";
         const x = { id: newId(), user: u.username, space: r0.docEdit.space, folder: r0.docEdit.folder || "", until: until.until, by: req.user.username, at: Date.now(), ticket: r0.id };
         doc.grants.push(x);
         return Object.assign({ where: docs.pathLabel(doc, x.space, x.folder) }, x);
@@ -6255,7 +6265,7 @@ app.post(
       const x = list.find((y) => y.id === String(b.id || "") && y.archived);
       if (!x) return "That isn't here";
       const parent = b.kind === "folder" ? x.parent : x.folder;
-      if (!docs.folderIn(doc, x.space, parent)) return "Restore the folder it was in first";
+      if (!docIn(req, doc, x.space, parent)) return "Restore the folder it was in first";
       const clash = list.some((y) => y !== x && y.space === x.space && !y.archived && (b.kind === "folder" ? (y.parent || "") === (parent || "") : (y.folder || "") === (parent || "")) && docs.sameName(y.name, x.name));
       if (clash) return `Something called ${x.name} is already there — rename that first`;
       delete x.archived; delete x.archivedAt; delete x.archivedBy;
@@ -6309,7 +6319,7 @@ async function legalRows(u) {
   const today = officeToday();
   const rows = [];
   for (const sec of sections) {
-    if (!sec.folder || !(u.companies || []).includes(sec.company)) continue;
+    if (!sec.folder || !(u.companies || []).includes(sec.company) || !legal.hasSection(u, ldoc, sec.s.id)) continue;
     for (const f of doc.files) {
       if (f.space !== sec.space || f.archived || !docs.folderIn(doc, f.space, f.folder)) continue;
       const up = docs.chain(doc, f.folder);
@@ -6341,12 +6351,14 @@ app.get(
     const people = logins.filter((u) => legal.hasLegal(u, ldoc) && u.companies.some((c) => req.user.companies.includes(c))).map((u) => u.username).sort((a, b) => a.localeCompare(b));
     res.json({
       today, soonDays: legal.SOON_DAYS, rows, people,
-      sections: sections.filter((s) => s.folder && req.user.companies.includes(s.company)).map((s) => ({
+      sections: sections.filter((s) => s.folder && req.user.companies.includes(s.company) && legal.hasSection(req.user, ldoc, s.s.id)).map((s) => ({
         id: s.s.id, label: s.s.label, company: s.company, space: s.space, folder: s.folder.id,
         canEdit: docs.mayEdit(doc, req.user, s.space, s.folder.id, true),
       })),
-      // Leadership manages the named staff.
+      // Leadership manages the named staff and their sections.
       members: req.user.leadership ? ldoc.members : undefined,
+      access: req.user.leadership ? ldoc.access : undefined,
+      allSections: req.user.leadership ? legal.SECTIONS.map((x) => ({ id: x.id, label: x.label })) : undefined,
       logins: req.user.leadership ? logins.filter((u) => !u.leadership).map((u) => u.username).sort((a, b) => a.localeCompare(b)) : undefined,
     });
   })
@@ -6365,7 +6377,7 @@ app.put(
     if (out.owner) {
       const ldoc = await freshLegal();
       const who = (await getUsers()).map(normalizeUser).find((u) => sameUser(u.username, out.owner));
-      if (!who || !legal.hasLegal(who, ldoc)) return res.status(400).json({ error: "The person responsible needs Legal access" });
+      if (!who || !legal.hasSection(who, ldoc, row.section)) return res.status(400).json({ error: "The person responsible needs access to this Legal section" });
       out.owner = who.username;
     }
     const doc = await withLegal((d) => {
@@ -6394,9 +6406,34 @@ app.put(
       if (!u) return res.status(400).json({ error: `No login called ${String(m).slice(0, 60)}` });
       if (!members.includes(u.username)) members.push(u.username);
     }
-    const doc = await withLegal((d) => { legal.shape(d); d.members = members; d.membersBy = req.user.username; d.membersAt = Date.now(); return d; });
+    const doc = await withLegal((d) => {
+      legal.shape(d);
+      const next = {};
+      for (const m of members) next[m] = (Object.entries(d.access).find(([k]) => sameUser(k, m)) || [])[1] || legal.SECTION_IDS.slice();
+      d.access = next; d.members = members; d.membersBy = req.user.username; d.membersAt = Date.now();
+      return d;
+    });
     legalSnap = { at: Date.now(), doc: legal.shape(doc) };
-    res.json({ members });
+    res.json({ members, access: legalSnap.doc.access });
+  })
+);
+// Which sections each named person sees: { access: { username: [ids] } }.
+// Leadership only; anyone left with no section is off Legal.
+app.put(
+  "/api/legal/access",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!req.user.leadership) return res.status(403).json({ error: "Only Leadership changes who sees Legal" });
+    const want = legal.cleanAccess((req.body || {}).access);
+    const logins = (await getUsers()).map(normalizeUser), access = {};
+    for (const [m, ids] of Object.entries(want)) {
+      const u = logins.find((x) => sameUser(x.username, m));
+      if (!u) return res.status(400).json({ error: `No login called ${String(m).slice(0, 60)}` });
+      if (!u.leadership) access[u.username] = ids;
+    }
+    const doc = await withLegal((d) => { legal.shape(d); d.access = access; d.members = Object.keys(access); d.membersBy = req.user.username; d.membersAt = Date.now(); return d; });
+    legalSnap = { at: Date.now(), doc: legal.shape(doc) };
+    res.json({ members: legalSnap.doc.members, access: legalSnap.doc.access });
   })
 );
 // Mentions of You: Legal documents you're responsible for that expire
@@ -6609,7 +6646,7 @@ function chatTools(req) {
       const hit = (s) => words.every((w) => s.toLowerCase().includes(w));
       const spaces = docSpaces(req.user), doc = docs.shape(await getDocuments()), out = [];
       for (const sp of spaces.filter((s) => s.kind !== "board")) {
-        for (const f of doc.files.filter((x) => x.space === sp.id && !x.archived)) {
+        for (const f of doc.files.filter((x) => x.space === sp.id && !x.archived && docIn(req, doc, sp.id, x.folder || ""))) {
           const where = docs.pathLabel(doc, sp.id, f.folder || "");
           if (hit(`${f.name} ${where}`)) out.push({ name: f.name, where, ref: { space: sp.id, folder: f.folder || "", file: f.id } });
         }

@@ -82,17 +82,24 @@ function renderLegal(head) {
     '<p class="small-note">Documents are added, versioned and archived in Documents (Legal folders, read-only until IT grants edit access) and open view-only here. Type expiry dates and notes by hand from the signed documents; don\'t enter contract prices here. Anything expiring within ' + d.soonDays + " days shows on the person responsible's Mentions of You.</p>" +
     (d.members ? renderLegalMembers(d) : "");
 }
-// Leadership: who else has Legal.
+// Leadership: who else has Legal, and which sections each person sees.
 function renderLegalMembers(d) {
-  var avail = d.logins.filter(function (u) { return d.members.indexOf(u) === -1; });
+  var acc = d.access || {}, secs = d.allSections || [];
+  var people = Object.keys(acc).sort(function (a, b) { return a.localeCompare(b); });
+  var avail = d.logins.filter(function (u) { return people.indexOf(u) === -1; });
   return '<div class="card" style="padding:16px 18px;margin-top:16px;"><div class="card-label">People with Legal (besides Leadership)</div>' +
-    (d.members.length ? '<div class="lg-members">' + d.members.map(function (m) {
-      return '<span class="lg-member">' + E(m) + ' <button type="button" class="text-button danger" data-lg-rm="' + E(m) + '" aria-label="Remove ' + E(m) + ' from Legal">Remove</button></span>';
-    }).join("") + "</div>" : '<p class="small-note">Only Leadership has Legal right now.</p>') +
+    (people.length ? '<div class="table-wrap"><table class="plain lg-access"><thead><tr><th>Person</th>' + secs.map(function (x) { return "<th>" + E(x.label) + "</th>"; }).join("") + "<th></th></tr></thead><tbody>" +
+      people.map(function (m) {
+        return "<tr><td><b>" + E(m) + "</b></td>" + secs.map(function (x) {
+          var on = (acc[m] || []).indexOf(x.id) !== -1;
+          return '<td class="center"><input type="checkbox" class="check" data-lg-acc="' + E(m) + '" data-sec="' + E(x.id) + '"' + (on ? " checked" : "") + ' aria-label="' + E(x.label + " for " + m) + '"></td>';
+        }).join("") + '<td><button type="button" class="text-button danger" data-lg-rm="' + E(m) + '">Remove</button></td></tr>';
+      }).join("") + "</tbody></table></div>"
+      : '<p class="small-note">Only Leadership has Legal right now.</p>') +
     '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;"><select id="lgAdd" aria-label="Login to add"><option value="">Add a person…</option>' +
     avail.map(function (u) { return '<option value="' + E(u) + '"' + (u === lg.addMember ? " selected" : "") + ">" + E(u) + "</option>"; }).join("") +
     '</select><button type="button" data-lg-add>Add</button></div>' +
-    '<p class="small-note">They see Legal and the Legal folders in Documents, and can set expiry dates, notes and who\'s responsible.</p></div>';
+    '<p class="small-note">Tick the sections each person sees. A section they aren\'t ticked for is hidden from them in Legal and in Documents; someone with no sections left is off Legal. They can set expiry dates, notes and who\'s responsible in their sections. Leadership sees every section.</p></div>';
 }
 
 function lgSave(id, change) {
@@ -102,11 +109,12 @@ function lgSave(id, change) {
     requestRender();
   }, function (err) { toast(err.message, true); lg.at = 0; requestRender(); });
 }
-function lgMembers(list) {
-  api("/api/legal/members", { method: "PUT", body: JSON.stringify({ members: list }) }).then(function (x) {
-    lg.data.members = x.members; lg.addMember = ""; lg.at = 0; toast("Saved."); render();
-  }, function (err) { toast(err.message, true); });
+function lgAccess(access) {
+  api("/api/legal/access", { method: "PUT", body: JSON.stringify({ access: access }) }).then(function (x) {
+    lg.data.members = x.members; lg.data.access = x.access; lg.addMember = ""; lg.at = 0; toast("Saved."); render();
+  }, function (err) { toast(err.message, true); lg.at = 0; render(); });
 }
+function lgAccessCopy() { var o = {}, a = lg.data.access || {}; Object.keys(a).forEach(function (k) { o[k] = a[k].slice(); }); return o; }
 document.addEventListener("click", function (e) {
   var t = e.target.closest && e.target.closest("[data-lg-tab],[data-lg-show],[data-lg-view],[data-lg-open],[data-lg-rm],[data-lg-add]");
   if (!t || !$("#view").contains(t)) return;
@@ -119,8 +127,12 @@ document.addEventListener("click", function (e) {
     return;
   }
   if (ds.lgOpen) { var p = ds.lgOpen.split("|"); dcs.tab = "browse"; dcs.space = p[0]; dcs.folder = p[1]; dcs.list = null; go("documents"); return; }
-  if (ds.lgRm) { if (confirm("Remove " + ds.lgRm + " from Legal?")) lgMembers(lg.data.members.filter(function (m) { return m !== ds.lgRm; })); return; }
-  if ("lgAdd" in ds) { if (!lg.addMember) { toast("Pick a person to add.", true); return; } lgMembers(lg.data.members.concat([lg.addMember])); }
+  if (ds.lgRm) { if (confirm("Remove " + ds.lgRm + " from Legal?")) { var a = lgAccessCopy(); delete a[ds.lgRm]; lgAccess(a); } return; }
+  if ("lgAdd" in ds) {
+    if (!lg.addMember) { toast("Pick a person to add.", true); return; }
+    // New people start with every section; untick what they shouldn't see.
+    var b = lgAccessCopy(); b[lg.addMember] = (lg.data.allSections || []).map(function (x) { return x.id; }); lgAccess(b);
+  }
 });
 document.addEventListener("input", function (e) {
   var t = e.target;
@@ -133,6 +145,14 @@ document.addEventListener("change", function (e) {
   if (ds.lgOwner) { lgSave(ds.lgOwner, { owner: t.value }); return; }
   if (ds.lgNotes) { lgSave(ds.lgNotes, { notes: t.value }); return; }
   if (t.id === "lgAdd") lg.addMember = t.value;
+  if (ds.lgAcc) {
+    var a = lgAccessCopy(), list = a[ds.lgAcc] || [];
+    if (t.checked) { if (list.indexOf(ds.sec) === -1) list.push(ds.sec); } else list = list.filter(function (x) { return x !== ds.sec; });
+    if (!list.length && !confirm("That takes " + ds.lgAcc + " off Legal completely. Continue?")) { t.checked = true; return; }
+    a[ds.lgAcc] = list;
+    if (!list.length) delete a[ds.lgAcc];
+    lgAccess(a);
+  }
 });
 
 // ---- Mentions of You: Legal renewals ----

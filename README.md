@@ -747,8 +747,13 @@ Rules in `legal.js`, routes in `index.js`, page `public/js/legal.js`.
   60 days or already have show in a **Legal renewals** box (and count in
   the sidebar badge); clicking one opens that Legal section.
 - **People with Legal:** Leadership adds and removes them at the bottom of
-  the Legal tab. They also see the Legal folders in Documents.
-- **S3:** `legal.json` (`{ members: [usernames], records: { <document id>:
+  the Legal tab and ticks, per person, which sections they see (US
+  Government Contracts, Business Development, Insurance, Vendors). A
+  section someone isn't ticked for is hidden from them in Legal, in the
+  Legal folders in Documents (also by direct link) and in Chat with AOG's
+  document search; someone with no sections left is off Legal. New people
+  start with every section. Leadership always sees all four.
+- **S3:** `legal.json` (`{ members: [usernames], access: { <username>: [section ids] }, records: { <document id>:
   { expiry, notes, owner, by, at } } }`); the documents are in
   `documents.json` / `documents_files/` like any other. Section folders
   carry `legal: "usgov" | "bd" | "insurance" | "vendors"`.
