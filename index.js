@@ -1275,6 +1275,97 @@ async function changeCard(req, res, fn) {
   return out.card;
 }
 
+// Each stored board file has its own folder in S3, named so people can find
+// it in the bucket: <files>/<number> - <customer>/ (e.g. "board_files/RFQ
+// 10234 - Example Airline/"), with the attachments inside under their own
+// names. An empty marker object keeps the folder visible before anything is
+// attached. Changing the number or customer renames the folder. c.folder and
+// file.key hold the names; attachments from before this kept
+// <files>/<card id>/<attachment id> until syncBoardFolder moves them (every
+// stored file, once at startup). Customer documents: <customerFiles>/<customer>/<name>.
+function boardFolderName(doc, c) {
+  const no = c.fileNo ? c.fileNo : c.rfqNo ? `RFQ ${c.rfqNo}` : c.quoteNo ? `Quote ${c.quoteNo}` : c.orderNo ? `SO ${c.orderNo}` : c.poNo ? `PO ${c.poNo}` : "";
+  const party = c.customer || c.vendor || "";
+  let name = keyPart(no ? [no, party].filter(Boolean).join(" - ") : `${party || "File"} - ${c.id.slice(-6)}`);
+  if ((doc.cards || []).some((x) => x.id !== c.id && x.folder === name)) name = `${name} (${c.id.slice(-4)})`;
+  return name;
+}
+// A file name not already used in that folder: "Quote.pdf", "Quote (2).pdf"…
+function uniqueFileName(taken, name) {
+  const clean = keyPart(name, "file");
+  const m = clean.match(/^(.*?)(\.[A-Za-z0-9]{1,6})?$/);
+  let out = clean, n = 1;
+  while (taken.has(out.toLowerCase())) out = `${m[1]} (${++n})${m[2] || ""}`;
+  return out;
+}
+const boardFileKey = (cfg, c, f) => f.key || `${cfg.files}/${c.id}/${f.id}`;
+const customerFileKey = (cfg, f) => f.key || `${cfg.customerFiles}/${f.id}`;
+const boardSyncing = new Set();
+// Move a stored file's attachments into its named folder and save the names.
+async function syncBoardFolder(cfg, cardId) {
+  const lock = `${cfg.id}:${cardId}`;
+  if (boardSyncing.has(lock)) return null;
+  boardSyncing.add(lock);
+  try {
+    const doc = await getBoard(cfg.store);
+    const c = (doc.cards || []).find((x) => x.id === cardId);
+    if (!c) return null;
+    const folder = boardFolderName(doc, c), base = `${cfg.files}/${folder}`;
+    const taken = new Set(), keys = {};
+    for (const f of c.files || []) {
+      const want = f.key && f.key.startsWith(`${base}/`) ? f.key : `${base}/${uniqueFileName(taken, f.key ? f.key.split("/").pop() : f.name)}`;
+      taken.add(want.split("/").pop().toLowerCase());
+      if (want !== boardFileKey(cfg, c, f) && !(await moveFile(boardFileKey(cfg, c, f), want))) continue;
+      keys[f.id] = want;
+    }
+    if (c.folder !== folder) {
+      await putFile(`${base}/`, Buffer.alloc(0), "application/x-directory");
+      if (c.folder) await deleteFile(`${cfg.files}/${c.folder}/`).catch(() => {});
+    }
+    await withBoard((d) => {
+      const x = (d.cards || []).find((y) => y.id === cardId);
+      if (!x) return;
+      x.folder = folder;
+      for (const f of x.files || []) if (keys[f.id]) f.key = keys[f.id];
+    }, cfg.store);
+    return folder;
+  } catch (err) {
+    console.error(`Board folder for ${cardId} failed (kept the old names):`, err.message);
+    return null;
+  } finally {
+    boardSyncing.delete(lock);
+  }
+}
+// Where a new attachment goes: the file's folder, under a free name.
+async function newBoardFileKey(cfg, cardId, name) {
+  await syncBoardFolder(cfg, cardId);
+  const c = ((await getBoard(cfg.store)).cards || []).find((x) => x.id === cardId);
+  const folder = (c && c.folder) || cardId;
+  const taken = new Set(((c && c.files) || []).map((f) => (f.key || "").split("/").pop().toLowerCase()).filter(Boolean));
+  return `${cfg.files}/${folder}/${uniqueFileName(taken, name)}`;
+}
+async function syncCustomerFiles(cfg) {
+  const doc = await getBoard(cfg.store), keys = {};
+  for (const [customer, x] of Object.entries(doc.customers || {})) {
+    const taken = new Set();
+    for (const f of x.files || []) {
+      const base = `${cfg.customerFiles}/${keyPart(customer, "Customer")}`;
+      const want = f.key && f.key.startsWith(`${base}/`) ? f.key : `${base}/${uniqueFileName(taken, f.name)}`;
+      taken.add(want.split("/").pop().toLowerCase());
+      if (want !== customerFileKey(cfg, f) && (await moveFile(customerFileKey(cfg, f), want))) keys[f.id] = want;
+    }
+  }
+  if (Object.keys(keys).length) await withBoard((d) => { for (const x of Object.values(d.customers || {})) for (const f of x.files || []) if (keys[f.id]) f.key = keys[f.id]; }, cfg.store);
+}
+setTimeout(async () => {
+  for (const cfg of Object.values(BOARDS)) {
+    try {
+      for (const c of (await getBoard(cfg.store)).cards || []) await syncBoardFolder(cfg, c.id);
+      await syncCustomerFiles(cfg);
+    } catch (err) { console.error(`${cfg.name} folders:`, err.message); }
+  }
+}, 20 * 1000);
+
 // Pentagon RFQs / Quotes / SOs / POs not yet on a stored file, grouped one
 // file per document number (one line item per row's P/N). A document drops
 // off this list as soon as its number is typed on (or stored with) a file on
@@ -1373,6 +1464,7 @@ app.post(
     };
     logCard(card, req.user.username, `Added the file for ${customer}`);
     await withBoard((doc) => { doc.cards = doc.cards || []; doc.cards.push(card); }, cfg.store);
+    card.folder = await syncBoardFolder(cfg, card.id);
     res.status(201).json(shapeCard(card, req.user, Date.now(), cfg));
   })
 );
@@ -1382,6 +1474,8 @@ app.patch(
   authMiddleware,
   asyncHandler(async (req, res) => {
     const b = req.body || {};
+    // A new number or customer renames the file's folder in S3 afterwards.
+    if (["customer", "fileNo", "rfqNo", "quoteNo", "orderNo", "poNo"].some((k) => k in b)) res.on("finish", () => { if (res.statusCode < 300) syncBoardFolder(boardOf(req), req.params.id); });
     await changeCard(req, res, (c, settings, doc, cfg) => {
       const by = req.user.username, said = [];
       for (const [k, n, label] of [["customer", 120, "customer"], ["platforms", 120, "platform(s)"], ["fileNo", 40, "file number"], ["rfqNo", 40, "RFQ number"],
@@ -1607,6 +1701,7 @@ app.post(
       stored = doc.cards.find((c) => c.pentagonKey === id || (c[field] && String(c[field]).toLowerCase() === String(src[field]).toLowerCase())) || card;
       if (stored === card) doc.cards.push(card);
     }, cfg.store);
+    if (stored === card) card.folder = await syncBoardFolder(cfg, card.id);
     res.status(stored === card ? 201 : 200).json(shapeCard(stored, req.user, Date.now(), cfg));
   })
 );
@@ -1686,7 +1781,8 @@ app.post(
     // part of the black file (RFQ / Quoted) or the red file (Sale on).
     const kind = BOARD_FILE_KINDS.includes(req.query.kind) ? req.query.kind : type.startsWith("image/") ? "picture" : type === "application/pdf" ? "pdf" : /outlook|rfc822/.test(type) ? "email" : "other";
     const file = { id: newId(), name, type, size: req.body.length, at: Date.now(), by: req.user.username, kind, stage: c0.stage };
-    await putFile(`${boardOf(req).files}/${c0.id}/${file.id}`, req.body, type);
+    file.key = await newBoardFileKey(boardOf(req), c0.id, name);
+    await putFile(file.key, req.body, type);
     await changeCard(req, res, (c) => { c.files = c.files || []; c.files.push(file); logCard(c, req.user.username, `Attached ${name}`); });
   })
 );
@@ -1697,7 +1793,7 @@ app.get(
     const c = await boardCard(req, res);
     if (!c) return;
     const meta = (c.files || []).find((f) => f.id === req.params.fid);
-    const file = meta && (await getFile(`${boardOf(req).files}/${c.id}/${meta.id}`));
+    const file = meta && (await getFile(boardFileKey(boardOf(req), c, meta)));
     if (!file) return res.status(404).json({ error: "That file isn't here" });
     sendViewOnly(res, meta, file);
   })
@@ -1717,7 +1813,9 @@ app.post(
     if (!type) return res.status(400).json({ error: "Attach a PDF, image, Word, Excel, PowerPoint, text or email file" });
     if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "No file came through" });
     const file = { id: newId(), name, type, size: req.body.length, at: Date.now(), by: req.user.username };
-    await putFile(`${cfg.customerFiles}/${file.id}`, req.body, type);
+    const have = ((await getBoard(cfg.store)).customers || {})[customer];
+    file.key = `${cfg.customerFiles}/${keyPart(customer, "Customer")}/${uniqueFileName(new Set(((have && have.files) || []).map((f) => (f.key || "").split("/").pop().toLowerCase())), name)}`;
+    await putFile(file.key, req.body, type);
     await withBoard((doc) => { doc.customers = doc.customers || {}; const x = (doc.customers[customer] = doc.customers[customer] || { files: [] }); x.files.push(file); }, cfg.store);
     res.status(201).json(file);
   })
@@ -1731,7 +1829,7 @@ app.get(
     const doc = await getBoard(cfg.store);
     let meta = null;
     for (const x of Object.values(doc.customers || {})) meta = meta || (x.files || []).find((f) => f.id === req.params.fid);
-    const file = meta && (await getFile(`${cfg.customerFiles}/${meta.id}`));
+    const file = meta && (await getFile(customerFileKey(cfg, meta)));
     if (!file) return res.status(404).json({ error: "That file isn't here" });
     sendViewOnly(res, meta, file);
   })
@@ -5652,7 +5750,7 @@ async function docSource(req, res, q) {
     const cfg = BOARDS[sp.board];
     const c = ((await getBoard(cfg.store)).cards || []).find((x) => x.id === String(q.folder || ""));
     meta = c && canSeeBoardCard(req.user, c, cfg) && (c.files || []).find((f) => f.id === String(q.file || ""));
-    if (meta) { key = `${cfg.files}/${c.id}/${meta.id}`; where = `${sp.label} › ${docBoardLabel(c)}`; }
+    if (meta) { key = boardFileKey(cfg, c, meta); where = `${sp.label} › ${docBoardLabel(c)}`; }
   } else {
     const doc = docs.shape(await getDocuments());
     const f = doc.files.find((x) => x.id === String(q.file || "") && x.space === sp.id && !x.archived);
@@ -5909,7 +6007,8 @@ app.post(
       const pre = ((await getBoard(cfg.store)).cards || []).find((c) => c.id === String(b.card || ""));
       if (!pre || !canSeeBoardCard(req.user, pre, cfg)) return res.status(404).json({ error: "That board file isn't here" });
       const meta = { id: newId(), name, type, size: file.body.length, at: Date.now(), by, kind: type.startsWith("image/") ? "picture" : type === "application/pdf" ? "pdf" : /outlook|rfc822/.test(type) ? "email" : "other", stage: pre.stage, fromDocuments: src.where };
-      await putFile(`${cfg.files}/${pre.id}/${meta.id}`, file.body, type);
+      meta.key = await newBoardFileKey(cfg, pre.id, name);
+      await putFile(meta.key, file.body, type);
       let gone = false;
       await withBoard((doc) => {
         const c = (doc.cards || []).find((x) => x.id === pre.id);
