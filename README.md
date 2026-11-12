@@ -661,7 +661,7 @@ building and alarm access, phone list…). Rules are in `onboarding.js`, the
 routes in `index.js`, the page in `public/js/onboarding.js`; everything is
 kept in `onboarding.json` on S3.
 
-- **Who sees it:** HR, IT, and the people in `ONBOARDING_PEOPLE` on the
+- **Who sees it:** full-access logins, HR, IT, and the people in `ONBOARDING_PEOPLE` on the
   stack (usernames comma separated; default
   `alexis,melissa,nyssa,greg,ramin`). Everyone else gets a 403 and no
   sidebar item.
@@ -678,7 +678,8 @@ kept in `onboarding.json` on S3.
   did and what's still open on the Admin side. Reply-to is whoever ticked
   the last item. The card then shows "IT done · emailed Melissa"; unticking
   and re-ticking doesn't send it again.
-- **Mentions of You:** IT sees checklists with IT items still open; the
+- **Mentions of You:** IT and full-access logins see checklists with IT
+  items still open; the
   admin person sees the Admin side once IT is done.
 - Close a checklist when it's finished (it moves to **Closed**; Reopen
   brings it back). Keep it to names and tasks: no passwords, ID numbers or
