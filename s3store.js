@@ -221,6 +221,10 @@ function getStrategy() {
 }
 // Improvements (requests for changes to the tracker): { items: [...] } —
 // screenshots via putFile under improvement_files/<id>. See improvements.js.
+// On/offboarding checklists: { templates, lists } (onboarding.js).
+function getOnboarding() {
+  return readJson("onboarding", {});
+}
 function getImprovements() {
   return readJson("improvements", { items: [] });
 }
@@ -459,6 +463,16 @@ function withStrategy(mutator) {
   return strategyQueue;
 }
 
+let onboardingQueue = Promise.resolve();
+function withOnboarding(mutator) {
+  onboardingQueue = onboardingQueue.then(async () => {
+    const doc = await getOnboarding();
+    const result = await mutator(doc);
+    await writeJson("onboarding", doc);
+    return result;
+  });
+  return onboardingQueue;
+}
 function withImprovements(mutator) {
   improvementsQueue = improvementsQueue.then(async () => {
     const doc = await getImprovements();
@@ -488,6 +502,8 @@ module.exports = {
   keyPart,
   getChats,
   withChats,
+  getOnboarding,
+  withOnboarding,
   getImprovements,
   withImprovements,
   getStrategy,

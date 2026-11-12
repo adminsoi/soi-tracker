@@ -19,9 +19,11 @@ function loadMineCount() {
   // requests for Leadership and the owners, replies to yours
   // (improvements.js); Strategy Meeting topics you own (strategy.js — notes
   // for you arrive as tasks); and, for the document editors, requests to
-  // edit documents (documents.js).
-  return Promise.all([api("/api/tasks/mine"), pentagon, leave, loadLegalMine(), loadSopRequests(), loadImprovements(), loadStrategyMine(), loadDocRequestsMine()]).then(function (r) {
-    var n = r[0].filter(function (t) { return !isDone(t); }).length + r[1].filter(function (m) { return !m.done; }).length + r[2].length + r[3].length + sopWaiting + impWaiting + r[6].length + r[7].length;
+  // edit documents (documents.js); and On/offboarding checklists waiting on
+  // you — IT items for IT, the Admin side for the admin person once IT is
+  // done (onboarding.js).
+  return Promise.all([api("/api/tasks/mine"), pentagon, leave, loadLegalMine(), loadSopRequests(), loadImprovements(), loadStrategyMine(), loadDocRequestsMine(), loadOnboardingMine()]).then(function (r) {
+    var n = r[0].filter(function (t) { return !isDone(t); }).length + r[1].filter(function (m) { return !m.done; }).length + r[2].length + r[3].length + sopWaiting + impWaiting + r[6].length + r[7].length + r[8].length;
     if (n !== mineOpen) { mineOpen = n; renderNav(); }
     return r;
   });
@@ -59,7 +61,7 @@ function renderMentionsShell() {
   return '<div class="intro"><div><div class="eyebrow">You</div><h1>Mentions of You</h1><p>Everything assigned to you' +
     (hasSOI() && me.pentagonMentions ? ", and every Pentagon document where you're the contact" : "") + " — sorted by what's urgent.</p></div></div>" +
     (hasSOI() && me.pentagonMentions && !me.pentagonCode ? '<div class="banner">No Pentagon code is set on your login yet — ask an admin to add one at <b>/admin.html</b> so your RFQs, Quotes, Sales Orders, Purchase Orders and Invoices show up here.</div>' : "") +
-    sfApprovals(true) + legalReminders() + sopApprovals() + impNotices() + strategyNotices() + docEditNotices() +
+    sfApprovals(true) + legalReminders() + sopApprovals() + impNotices() + strategyNotices() + docEditNotices() + onboardingNotices() +
     '<div id="mn-dash"><div class="empty">Loading…</div></div>' +
     (wantPentagon
       ? '<details class="mn-group" id="mn-all"><summary><span class="mn-title">All your Pentagon documents</span><span class="small-note" id="mn-msg"></span></summary>' +

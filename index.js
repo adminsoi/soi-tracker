@@ -77,6 +77,8 @@ const {
   withStrategy,
   getImprovements,
   withImprovements,
+  getOnboarding,
+  withOnboarding,
   getChats,
   withChats,
 } = require("./s3store");
@@ -94,6 +96,7 @@ const docs = require("./documents");
 const legal = require("./legal");
 const strategy = require("./strategy");
 const improvements = require("./improvements");
+const onboarding = require("./onboarding");
 const chat = require("./chat");
 const payCheck = require("./payrollcheck");
 const { pentagonQuery } = require("./pentagon");
@@ -282,6 +285,7 @@ app.post(
       // The same as /api/me, so they're right straight after signing in.
       legal: legal.hasLegal(user, await freshLegal()),
       docAdmin: docs.grantsAdmin(user),
+      onboarding: onboarding.hasAccess(user),
     });
   })
 );
@@ -302,6 +306,8 @@ app.get("/api/me", authMiddleware, asyncHandler(async (req, res) => {
     legal: legal.hasLegal(req.user, await freshLegal()),
     // Documents: decides edit requests (the editors, IT and full access).
     docAdmin: docs.grantsAdmin(req.user),
+    // Company → On/offboarding (HR, IT and the named people; onboarding.js).
+    onboarding: onboarding.hasAccess(req.user),
   });
 }));
 
@@ -6932,6 +6938,186 @@ app.post(
       improvements.shape(d).items.forEach((x) => { if (sameUser(x.by, req.user.username)) x.bySeenAt = now; });
     });
     res.json({ ok: true });
+  })
+);
+
+// ---------- On/offboarding (Company → On/offboarding) ----------
+// Checklists per person joining or leaving: IT and Admin sections, from
+// standard items anyone with access can add to. Rules in onboarding.js.
+// When the last IT item is ticked, the admin person (Melissa) is emailed
+// once that IT is done and it's over to them.
+const onbOnly = (req, res, next) => (onboarding.hasAccess(req.user) ? next() : res.status(403).json({ error: "On/offboarding is for HR, IT and the people named for it" }));
+function onbView(l) {
+  return Object.assign({}, l, { progress: onboarding.progress(l), itDone: onboarding.itDone(l), allDone: onboarding.allDone(l) });
+}
+async function onbChange(req, res, fn) {
+  const out = await withOnboarding((doc) => {
+    const l = onboarding.shape(doc).lists.find((x) => x.id === req.params.id);
+    if (!l) return { status: 404, error: "That checklist isn't here" };
+    const err = fn(l, doc);
+    if (err) return { status: 400, error: err };
+    return { list: JSON.parse(JSON.stringify(l)) };
+  });
+  if (out.error) { res.status(out.status).json({ error: out.error }); return null; }
+  return out.list;
+}
+// IT just finished: tell the admin person, once.
+async function onbHandoff(l, by) {
+  if (!onboarding.itDone(l) || l.handoffAt) return l;
+  const users = (await getUsers()).map(normalizeUser);
+  const admin = users.find((u) => sameUser(u.username, onboarding.ADMIN));
+  const sender = users.find((u) => sameUser(u.username, by));
+  let sent = false;
+  if (admin && admin.email && mailConfigured) {
+    const first = (admin.username || "").charAt(0).toUpperCase() + (admin.username || "").slice(1);
+    const kind = onboarding.KINDS[l.kind].toLowerCase();
+    const open = l.sections.admin.filter((x) => !x.done);
+    try {
+      sent = await sendMail({
+        to: admin.email, replyTo: [sender && sender.email], saveCopy: true,
+        subject: `IT side done: ${l.person}'s ${kind} — over to you`,
+        html: `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.5;color:#222;max-width:600px;">` +
+          `<p>Hi ${escapeHtml(first)},</p>` +
+          `<p>Passing <b>${escapeHtml(l.person)}</b>'s ${escapeHtml(kind)}${l.date ? " (" + escapeHtml(l.date) + ")" : ""} over to you — the IT side is done.</p>` +
+          `<p style="margin:0 0 4px;"><b>Done on the IT side</b></p><ul style="margin:0 0 12px;">${l.sections.it.map((x) => `<li>${escapeHtml(x.label)}</li>`).join("")}</ul>` +
+          (open.length ? `<p style="margin:0 0 4px;"><b>Still to do on your side</b></p><ul style="margin:0 0 12px;">${open.map((x) => `<li>${escapeHtml(x.label)}</li>`).join("")}</ul>` : "") +
+          `<p>It's in the AOG Tracker under Company → On/offboarding, and on your Mentions of You.</p>` +
+          `<p>Thanks,<br>${escapeHtml(sender ? sender.username.charAt(0).toUpperCase() + sender.username.slice(1) : "IT")}</p></div>`,
+      });
+    } catch (err) {
+      console.error("On/offboarding hand-off email failed:", err.message);
+    }
+  }
+  const out = await withOnboarding((doc) => {
+    const x = onboarding.shape(doc).lists.find((y) => y.id === l.id);
+    if (!x || x.handoffAt) return x;
+    x.handoffAt = Date.now(); x.handoffBy = by; x.handoffEmailed = !!sent;
+    onboarding.log(x, by, sent ? `IT side done — emailed ${admin.username} to take over` : `IT side done (no email sent${admin ? "" : `: no login called ${onboarding.ADMIN}`})`);
+    return JSON.parse(JSON.stringify(x));
+  });
+  return out || l;
+}
+app.get(
+  "/api/onboarding",
+  authMiddleware,
+  onbOnly,
+  asyncHandler(async (req, res) => {
+    const doc = onboarding.shape(await getOnboarding());
+    res.json({ kinds: onboarding.KINDS, sections: onboarding.SECTIONS, templates: doc.templates, admin: onboarding.ADMIN,
+      lists: doc.lists.map(onbView).sort((a, b) => (a.closedAt ? 1 : 0) - (b.closedAt ? 1 : 0) || b.at - a.at) });
+  })
+);
+app.post(
+  "/api/onboarding/lists",
+  authMiddleware,
+  onbOnly,
+  asyncHandler(async (req, res) => {
+    const out = await withOnboarding((doc) => {
+      const r = onboarding.newList(doc, req.body || {}, req.user.username, newId, Date.now());
+      if (r.error) return r;
+      doc.lists.push(r.list);
+      return r;
+    });
+    if (out.error) return res.status(400).json({ error: out.error });
+    res.status(201).json(onbView(out.list));
+  })
+);
+// Details of a checklist: { person, company, date, notes, closed }.
+app.patch(
+  "/api/onboarding/lists/:id",
+  authMiddleware,
+  onbOnly,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {}, by = req.user.username;
+    const l = await onbChange(req, res, (x) => {
+      if ("person" in b) { const p = forms.text(b.person, 120); if (!p) return "Who is it for?"; x.person = p; }
+      if ("company" in b) x.company = forms.text(b.company, 60);
+      if ("date" in b) { if (b.date && !/^\d{4}-\d{2}-\d{2}$/.test(b.date)) return "Pick a date"; x.date = b.date || ""; }
+      if ("notes" in b) x.notes = String(b.notes || "").trim().slice(0, 2000);
+      if ("closed" in b) { x.closedAt = b.closed ? Date.now() : 0; onboarding.log(x, by, b.closed ? "Closed the checklist" : "Reopened the checklist"); }
+    });
+    if (l) res.json(onbView(l));
+  })
+);
+// Add an item to one section of a checklist.
+app.post(
+  "/api/onboarding/lists/:id/items",
+  authMiddleware,
+  onbOnly,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {}, by = req.user.username;
+    if (!onboarding.SECTIONS[b.section]) return res.status(400).json({ error: "IT or Admin?" });
+    const label = forms.text(b.label, 200);
+    if (!label) return res.status(400).json({ error: "Write the item first" });
+    const l = await onbChange(req, res, (x) => {
+      x.sections[b.section].push(Object.assign(onboarding.item(label, newId()), { addedBy: by }));
+      onboarding.log(x, by, `Added "${label}" to ${onboarding.SECTIONS[b.section]}`);
+    });
+    if (l) res.status(201).json(onbView(l));
+  })
+);
+// Tick or untick an item (or remove one added by hand).
+app.patch(
+  "/api/onboarding/lists/:id/items/:item",
+  authMiddleware,
+  onbOnly,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {}, by = req.user.username;
+    let l = await onbChange(req, res, (x) => {
+      for (const s of Object.keys(x.sections)) {
+        const i = x.sections[s].findIndex((y) => y.id === req.params.item);
+        if (i === -1) continue;
+        const it = x.sections[s][i];
+        if (b.remove) { x.sections[s].splice(i, 1); onboarding.log(x, by, `Removed "${it.label}"`); return null; }
+        if ("note" in b) it.note = forms.text(b.note, 300);
+        if ("done" in b && !!b.done !== !!it.done) {
+          Object.assign(it, { done: !!b.done, by: b.done ? by : "", at: b.done ? Date.now() : 0 });
+          onboarding.log(x, by, `${b.done ? "Ticked" : "Unticked"} "${it.label}"`);
+        }
+        return null;
+      }
+      return "That item isn't here any more";
+    });
+    if (!l) return;
+    if (onboarding.itDone(l) && !l.handoffAt) l = await onbHandoff(l, by);
+    res.json(onbView(l));
+  })
+);
+// The standard items new checklists start from: { kind, section, items }.
+app.put(
+  "/api/onboarding/templates",
+  authMiddleware,
+  onbOnly,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    if (!onboarding.KINDS[b.kind] || !onboarding.SECTIONS[b.section]) return res.status(400).json({ error: "Pick the list to change" });
+    const items = [...new Set((Array.isArray(b.items) ? b.items : []).map((x) => forms.text(x, 200)).filter(Boolean))].slice(0, 60);
+    const t = await withOnboarding((doc) => {
+      onboarding.shape(doc).templates[b.kind][b.section] = items;
+      doc.templatesBy = req.user.username; doc.templatesAt = Date.now();
+      return doc.templates;
+    });
+    res.json(t);
+  })
+);
+// Mentions of You: checklists waiting on you — IT items for IT, and the
+// Admin side for the admin person once IT is done.
+app.get(
+  "/api/onboarding/mine",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!onboarding.hasAccess(req.user)) return res.json({ items: [] });
+    const it = (req.user.departments || []).includes("IT"), admin = onboarding.isAdminPerson(req.user);
+    if (!it && !admin) return res.json({ items: [] });
+    const doc = onboarding.shape(await getOnboarding());
+    const items = [];
+    for (const l of doc.lists) {
+      if (l.closedAt) continue;
+      const itLeft = l.sections.it.filter((x) => !x.done).length, adminLeft = l.sections.admin.filter((x) => !x.done).length;
+      if (it && itLeft) items.push({ id: l.id, person: l.person, kind: l.kind, date: l.date, side: "IT", left: itLeft });
+      if (admin && adminLeft && onboarding.itDone(l)) items.push({ id: l.id, person: l.person, kind: l.kind, date: l.date, side: "Admin", left: adminLeft });
+    }
+    res.json({ items });
   })
 );
 

@@ -652,6 +652,38 @@ access alone isn't enough).
     matches) and **Open in Performance**. Without Performance access the
     file only says whether records exist.
 
+## On/offboarding (Company → On/offboarding)
+
+A checklist for each person joining or leaving, in two sections: **IT**
+(server / network login, Duo, email and Microsoft 365, Teams, Pentagon, the
+AOG Tracker, VPN, devices, shared passwords) and **Admin** (keys, badge,
+building and alarm access, phone list…). Rules are in `onboarding.js`, the
+routes in `index.js`, the page in `public/js/onboarding.js`; everything is
+kept in `onboarding.json` on S3.
+
+- **Who sees it:** HR, IT, and the people in `ONBOARDING_PEOPLE` on the
+  stack (usernames comma separated; default
+  `alexis,melissa,nyssa,greg,ramin`). Everyone else gets a 403 and no
+  sidebar item.
+- **+ New checklist:** onboarding or offboarding, the person's name,
+  company, start date / last day and notes. It starts with the standard
+  items for that kind; anyone who sees it can tick items, add items to
+  either section or remove them. Every change is in the checklist's
+  History.
+- **Standard items:** the list new checklists start from, editable on the
+  page. Changes apply to checklists started afterwards.
+- **Hand-off email:** when the last IT item is ticked, the admin person
+  (`ONBOARDING_ADMIN`, default `melissa`) is emailed once: "Passing
+  <person>'s offboarding over to you — the IT side is done", listing what IT
+  did and what's still open on the Admin side. Reply-to is whoever ticked
+  the last item. The card then shows "IT done · emailed Melissa"; unticking
+  and re-ticking doesn't send it again.
+- **Mentions of You:** IT sees checklists with IT items still open; the
+  admin person sees the Admin side once IT is done.
+- Close a checklist when it's finished (it moves to **Closed**; Reopen
+  brings it back). Keep it to names and tasks: no passwords, ID numbers or
+  pay.
+
 ## Documents (file manager on S3)
 
 Company → **Documents**: folders by department on SOI's S3, plus every
