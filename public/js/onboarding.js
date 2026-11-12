@@ -30,7 +30,7 @@ function renderOnboarding() {
   var head = '<div class="intro"><div><div class="eyebrow">Company</div><h1>On/offboarding</h1>' +
     "<p>A checklist for everyone joining or leaving: the <b>IT</b> side (server login, Duo, email…) and the <b>Admin</b> side (keys, badge, building access…). " +
     "When the last IT item is ticked, " + E(ob.data ? obName(ob.data.admin) : "the admin person") + " gets an email that it's over to them.</p></div></div>";
-  if (!me.onboarding) return head + '<div class="empty">On/offboarding is for HR, IT and the people named for it.</div>';
+  if (!me.onboarding) return head + '<div class="empty">On/offboarding is for full access, HR, IT and the people named for it.</div>';
   if (!ob.loading && (ob.error ? Date.now() - ob.at > 15000 : !ob.data || Date.now() - ob.at > 60000)) loadOnboarding();
   if (ob.error && !ob.data) return head + '<div class="banner">' + E(ob.error) + "</div>";
   if (!ob.data) return head + '<div class="empty">Loading…</div>';

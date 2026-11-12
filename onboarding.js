@@ -4,7 +4,7 @@
 // rules: who sees it, the standard items, and when IT is done. index.js has
 // the routes; onboarding.json holds { templates, lists }.
 //
-// Seen by HR, IT and the named people (ONBOARDING_PEOPLE on the stack,
+// Seen by full access, HR, IT and the named people (ONBOARDING_PEOPLE on the stack,
 // usernames comma separated; default Alexis, Melissa, Nyssa, Greg and
 // Ramin). Anyone who sees it can tick items and add items, to one
 // checklist or to the standard list new checklists start from. When the
@@ -62,12 +62,14 @@ const DEFAULTS = {
 };
 
 const lc = (s) => String(s || "").toLowerCase();
-/** HR, IT, or one of the named people. */
+/** Full access, HR, IT, or one of the named people. */
 function hasAccess(u) {
   if (!u) return false;
   const d = u.departments || [];
-  return d.includes("HR") || d.includes("IT") || PEOPLE.includes(lc(u.username));
+  return !!u.fullAccess || d.includes("HR") || d.includes("IT") || PEOPLE.includes(lc(u.username));
 }
+/** Whose Mentions of You show open IT items: IT and full access. */
+const isItPerson = (u) => !!u && (!!u.fullAccess || (u.departments || []).includes("IT"));
 const isAdminPerson = (u) => !!u && lc(u.username) === ADMIN;
 
 function shape(doc) {
@@ -108,4 +110,4 @@ function log(l, by, what) {
   if (l.log.length > 300) l.log = l.log.slice(-300);
 }
 
-module.exports = { PEOPLE, ADMIN, KINDS, SECTIONS, DEFAULTS, hasAccess, isAdminPerson, shape, item, newList, itDone, allDone, progress, log };
+module.exports = { PEOPLE, ADMIN, KINDS, SECTIONS, DEFAULTS, hasAccess, isItPerson, isAdminPerson, shape, item, newList, itDone, allDone, progress, log };

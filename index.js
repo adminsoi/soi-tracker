@@ -7107,7 +7107,7 @@ app.get(
   authMiddleware,
   asyncHandler(async (req, res) => {
     if (!onboarding.hasAccess(req.user)) return res.json({ items: [] });
-    const it = (req.user.departments || []).includes("IT"), admin = onboarding.isAdminPerson(req.user);
+    const it = onboarding.isItPerson(req.user), admin = onboarding.isAdminPerson(req.user);
     if (!it && !admin) return res.json({ items: [] });
     const doc = onboarding.shape(await getOnboarding());
     const items = [];
