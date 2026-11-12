@@ -77,6 +77,8 @@ const {
   withStrategy,
   getImprovements,
   withImprovements,
+  getWorkflows,
+  withWorkflows,
   getOnboarding,
   withOnboarding,
   getChats,
@@ -97,6 +99,7 @@ const legal = require("./legal");
 const strategy = require("./strategy");
 const improvements = require("./improvements");
 const onboarding = require("./onboarding");
+const workflows = require("./workflows");
 const chat = require("./chat");
 const payCheck = require("./payrollcheck");
 const { pentagonQuery } = require("./pentagon");
@@ -6937,6 +6940,82 @@ app.post(
       const now = Date.now();
       improvements.shape(d).items.forEach((x) => { if (sameUser(x.by, req.user.username)) x.bySeenAt = now; });
     });
+    res.json({ ok: true });
+  })
+);
+
+// ---------- Strategy Meeting → Workflows ----------
+// Plans drawn as a flowchart and seen as a phased roadmap (rules in
+// workflows.js). Leadership only. The page sends the whole workflow after
+// each change with the version it started from; if someone else saved in
+// between, it gets a 409 and their version.
+app.get(
+  "/api/strategy/workflows",
+  authMiddleware,
+  strategyOnly,
+  asyncHandler(async (req, res) => {
+    const doc = workflows.shape(await getWorkflows());
+    res.json({ workflows: doc.workflows.slice().sort((a, b) => (a.archived ? 1 : 0) - (b.archived ? 1 : 0) || b.updatedAt - a.updatedAt),
+      shapes: workflows.SHAPES, statuses: workflows.STATUSES, max: workflows.MAX });
+  })
+);
+app.post(
+  "/api/strategy/workflows",
+  authMiddleware,
+  strategyOnly,
+  asyncHandler(async (req, res) => {
+    const out = await withWorkflows((doc) => {
+      workflows.shape(doc);
+      if (doc.workflows.length >= workflows.MAX.workflows) return { error: "That's the most workflows the tracker keeps — archive or delete one first" };
+      const r = workflows.newWorkflow(req.body || {}, req.user.username, newId, Date.now());
+      if (r.error) return r;
+      doc.workflows.push(r.workflow);
+      return r;
+    });
+    if (out.error) return res.status(400).json({ error: out.error });
+    res.status(201).json(out.workflow);
+  })
+);
+// Save: { title, notes, phases, nodes, edges, base } (base = the
+// updatedAt the page started from), or { archived }.
+app.put(
+  "/api/strategy/workflows/:id",
+  authMiddleware,
+  strategyOnly,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {}, by = req.user.username;
+    const out = await withWorkflows((doc) => {
+      const w = workflows.shape(doc).workflows.find((x) => x.id === req.params.id);
+      if (!w) return { status: 404, error: "That workflow isn't here any more" };
+      if ("archived" in b && !("nodes" in b)) {
+        w.archived = !!b.archived;
+      } else {
+        if (Number(b.base) !== w.updatedAt) return { status: 409, error: `${w.updatedBy || "Someone"} changed this workflow while you were editing — showing their version`, workflow: JSON.parse(JSON.stringify(w)) };
+        const c = workflows.clean(b);
+        if (!c.title) return { status: 400, error: "Give the workflow a name" };
+        Object.assign(w, c);
+      }
+      w.updatedBy = by; w.updatedAt = Date.now();
+      return { workflow: JSON.parse(JSON.stringify(w)) };
+    });
+    if (out.error) return res.status(out.status).json({ error: out.error, workflow: out.workflow });
+    res.json(out.workflow);
+  })
+);
+app.delete(
+  "/api/strategy/workflows/:id",
+  authMiddleware,
+  strategyOnly,
+  asyncHandler(async (req, res) => {
+    const out = await withWorkflows((doc) => {
+      const list = workflows.shape(doc).workflows, i = list.findIndex((x) => x.id === req.params.id);
+      if (i === -1) return false;
+      if (!list[i].archived) return "archive";
+      list.splice(i, 1);
+      return true;
+    });
+    if (out === "archive") return res.status(400).json({ error: "Archive the workflow before deleting it" });
+    if (!out) return res.status(404).json({ error: "That workflow isn't here any more" });
     res.json({ ok: true });
   })
 );

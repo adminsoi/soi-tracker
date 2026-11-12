@@ -378,6 +378,38 @@ first version's meeting agendas (`meetings`) stay in the file but aren't
 shown. Don't type government client details, contract terms or supplier
 prices into it. Nothing here uses AI.
 
+### Workflows (Strategy Meeting → Workflows tab)
+
+Big plans mapped out two ways over the same boxes. Leadership only, like
+the rest of the Strategy Meeting. Rules are in `workflows.js`, the routes in
+`index.js` and the page in `public/js/workflows.js`; everything is kept in
+`workflows.json` on S3. A map only for now: no owners or due dates, nothing
+on Mentions of You.
+
+- **Flowchart:** boxes on a canvas: Step, Decision (diamond), Start, End
+  and Note.
+  - Drag a box to move it.
+  - Drag the dot on a box's right edge onto another box to draw an arrow, or
+    use **→ Connect to…** in the side panel. Arrows from a decision are
+    labelled Yes and then No; any arrow can be relabelled or reversed.
+  - Double-click empty space to add a step. Zoom with − and +.
+  - **Tidy by phase** lines the boxes up in a column per phase.
+- **Roadmap:** a column per phase and a card per box (notes stay on the
+  Flowchart).
+  - Each card shows its status title, what it comes after and what it leads
+    to.
+  - Drag a card to another phase to move it. Cards follow the Flowchart's
+    order, top to bottom.
+- **Each box has** a label, a kind, a phase and notes. Every box except a
+  note also has a status: To do, In progress, Done or Blocked. Click a box,
+  card or arrow to edit it in the side panel; Delete removes it. With
+  nothing selected, the panel edits the workflow's name, notes and phases
+  (rename, reorder, add, remove).
+- **Saving:** every change saves on its own a moment later. If someone else
+  saved the same workflow in between, the page says so and shows their
+  version. Workflows can be archived and restored; only an archived one can
+  be deleted for good.
+
 ## Calendar
 
 The **Calendar** page (sidebar → Tools) has up to three tabs:
