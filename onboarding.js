@@ -9,13 +9,17 @@
 // Ramin). Anyone who sees it can tick items and add items, to one
 // checklist or to the standard list new checklists start from. When the
 // last IT item is ticked, the admin person (ONBOARDING_ADMIN, default
-// Melissa) is emailed that IT is done and it's over to them. Only names and
+// Melissa) is emailed that IT is done and it's over to them; when every
+// item is ticked, ONBOARDING_DONE_NOTIFY (default Nyssa, Alexis, Ramin and
+// Melissa) are emailed that it's complete. Only names and
 // tasks are kept here: no passwords, ID numbers or pay.
 
 const { text } = require("./staffforms");
 
 const PEOPLE = String(process.env.ONBOARDING_PEOPLE || "alexis,melissa,nyssa,greg,ramin").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
 const ADMIN = String(process.env.ONBOARDING_ADMIN || "melissa").trim().toLowerCase();
+// Emailed once when every item on a checklist is ticked.
+const DONE_NOTIFY = String(process.env.ONBOARDING_DONE_NOTIFY || "nyssa,alexis,ramin,melissa").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
 const KINDS = { onboarding: "Onboarding", offboarding: "Offboarding" };
 const SECTIONS = { it: "IT", admin: "Admin" };
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -110,4 +114,4 @@ function log(l, by, what) {
   if (l.log.length > 300) l.log = l.log.slice(-300);
 }
 
-module.exports = { PEOPLE, ADMIN, KINDS, SECTIONS, DEFAULTS, hasAccess, isItPerson, isAdminPerson, shape, item, newList, itDone, allDone, progress, log };
+module.exports = { PEOPLE, ADMIN, DONE_NOTIFY, KINDS, SECTIONS, DEFAULTS, hasAccess, isItPerson, isAdminPerson, shape, item, newList, itDone, allDone, progress, log };
