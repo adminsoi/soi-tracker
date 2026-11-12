@@ -9,7 +9,8 @@
 // copied from the standard items (which anyone here can add to). Ticking
 // the last IT item emails the admin person (Melissa) that it's over to
 // them. HR, IT and the named people only; the server checks every request.
-var ob = { data: null, at: 0, loading: false, error: "", show: "open", open: {}, adding: false, form: { kind: "offboarding" }, std: false, stdKind: "offboarding", newItem: {} };
+var ob = { data: null, at: 0, loading: false, error: "", show: "open", open: {}, adding: false, form: { kind: "offboarding" }, std: false, stdKind: "offboarding", newItem: {}, modal: "",
+  view: (function () { try { return localStorage.getItem("soi_tracker_ob_view") || "board"; } catch (e) { return "board"; } })() };
 function loadOnboarding() {
   if (ob.loading) return;
   ob.loading = true;
@@ -23,6 +24,25 @@ function obPut(l) {
   render();
 }
 function obName(u) { u = String(u || ""); return u.charAt(0).toUpperCase() + u.slice(1); }
+// Where a checklist is: its board column and the status on its card.
+var OB_STAGES = [
+  { id: "new", label: "Not started", note: "Nothing ticked yet" },
+  { id: "it", label: "IT in progress", note: "IT is working through its side" },
+  { id: "admin", label: "With Admin", note: "IT is done — over to Admin" },
+  { id: "done", label: "Complete", note: "Every item is ticked" }
+];
+function obStage(l) {
+  if (l.allDone) return OB_STAGES[3];
+  if (l.itDone) return OB_STAGES[2];
+  return l.progress.done ? OB_STAGES[1] : OB_STAGES[0];
+}
+function obStagePill(l) {
+  if (l.closedAt) return '<span class="ob-stage ob-st-closed">Closed</span>';
+  var st = obStage(l);
+  return '<span class="ob-stage ob-st-' + st.id + '">' + E(st.label) + "</span>";
+}
+function obCount(l, s) { var xs = l.sections[s] || []; return { done: xs.filter(function (x) { return x.done; }).length, total: xs.length }; }
+function obNames(list) { var n = list.map(obName); return n.length > 1 ? n.slice(0, -1).join(", ") + " and " + n[n.length - 1] : n.join(""); }
 function obWhen(t) { return t ? new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : ""; }
 
 function renderOnboarding() {
@@ -30,7 +50,7 @@ function renderOnboarding() {
   var head = '<div class="intro"><div><div class="eyebrow">Company</div><h1>On/offboarding</h1>' +
     "<p>A checklist for everyone joining or leaving: the <b>IT</b> side (server login, Duo, email…) and the <b>Admin</b> side (keys, badge, building access…). " +
     "When the last IT item is ticked, " + E(ob.data ? obName(ob.data.admin) : "the admin person") + " gets an email that it's over to them" +
-    (ob.data && ob.data.doneNotify.length ? "; when everything is ticked, " + E(ob.data.doneNotify.map(obName).join(", ")) + " get an email that it's complete" : "") + ".</p></div></div>";
+    (ob.data && ob.data.doneNotify.length ? "; when everything is ticked, " + E(obNames(ob.data.doneNotify)) + " get an email that it's complete" : "") + ".</p></div></div>";
   if (!me.onboarding) return head + '<div class="empty">On/offboarding is for full access, HR, IT and the people named for it.</div>';
   if (!ob.loading && (ob.error ? Date.now() - ob.at > 15000 : !ob.data || Date.now() - ob.at > 60000)) loadOnboarding();
   if (ob.error && !ob.data) return head + '<div class="banner">' + E(ob.error) + "</div>";
@@ -41,10 +61,50 @@ function renderOnboarding() {
       var n = d.lists.filter(function (l) { return x[0] === "open" ? !l.closedAt : !!l.closedAt; }).length;
       return '<button type="button" data-ob-show="' + x[0] + '" class="' + (ob.show === x[0] ? "active" : "") + '">' + x[1] + ' <span class="ib-n">' + n + "</span></button>";
     }).join("") + "</div>" +
+    (ob.show === "open" ? '<div class="seg"><button type="button" data-ob-view="board" class="' + (ob.view === "board" ? "active" : "") + '">Board</button><button type="button" data-ob-view="list" class="' + (ob.view !== "board" ? "active" : "") + '">List</button></div>' : "") +
     '<span class="grow" style="flex:1"></span><button type="button" data-ob-std>' + (ob.std ? "Hide standard items" : "Standard items") + '</button><button type="button" class="primary" data-ob-new>+ New checklist</button></div>';
   return head + bar + (ob.adding ? obNewForm() : "") + (ob.std ? obStdEditor() : "") +
-    (lists.length ? lists.map(obCard).join("") : '<div class="card empty">' + (ob.show === "open" ? "No open checklists. Start one with + New checklist." : "No closed checklists yet.") + "</div>") +
-    '<p class="small-note">Keep it to names and tasks: no passwords, ID numbers or pay here.</p>';
+    (ob.show === "open" && ob.view === "board" ? obBoard(lists) : lists.length ? lists.map(obCard).join("") : '<div class="card empty">' + (ob.show === "open" ? "No open checklists. Start one with + New checklist." : "No closed checklists yet.") + "</div>") +
+    '<p class="small-note">Keep it to names and tasks: no passwords, ID numbers or pay here.</p>' + obModal();
+}
+// Board: one column per stage, a card per checklist with its status on top.
+function obBoard(lists) {
+  return '<div class="tk-cols ob-board">' + OB_STAGES.map(function (st) {
+    var cards = lists.filter(function (l) { return obStage(l).id === st.id; })
+      .sort(function (a, b) { return (a.date || "9999") < (b.date || "9999") ? -1 : (a.date || "9999") > (b.date || "9999") ? 1 : b.at - a.at; });
+    var note = st.id === "admin" ? "IT is done — over to " + obName(ob.data.admin) : st.note;
+    return '<section class="tk-col"><header><span class="ob-stage ob-st-' + st.id + '">' + E(st.label) + '</span><span class="ib-n">' + cards.length + '</span></header><div class="ob-col-note">' + E(note) + "</div>" +
+      (cards.length ? cards.map(obTile).join("") : '<div class="brd-empty">Nothing here</div>') + "</section>";
+  }).join("") + "</div>";
+}
+function obTile(l) {
+  var st = obStage(l), it = obCount(l, "it"), ad = obCount(l, "admin");
+  var next = st.id === "done" ? null : ((st.id === "admin" ? l.sections.admin : l.sections.it).filter(function (x) { return !x.done; })[0]);
+  var bar = function (label, c) {
+    return '<span class="ob-mini"><span class="ob-mini-l">' + label + '</span><span class="ob-bar"><span style="width:' + (c.total ? Math.round(100 * c.done / c.total) : 0) + '%"></span></span><span>' + c.done + "/" + c.total + "</span></span>";
+  };
+  return '<button type="button" class="tk-card ob-tile ob-tile-' + st.id + '" data-ob-card="' + E(l.id) + '">' +
+    '<span class="ob-tile-status">' + E(st.label) + "</span>" +
+    '<span class="tk-issue ob-tile-name">' + E(l.person) + "</span>" +
+    '<span class="tk-who">' + E([obKindLabel(l), l.company ? shortCo(l.company) : "", l.date ? (l.kind === "onboarding" ? "starts " : "last day ") + fmtDate(l.date) : ""].filter(Boolean).join(" · ")) + "</span>" +
+    bar("IT", it) + bar("Admin", ad) +
+    (next ? '<span class="tk-who">Next: ' + E(next.label) + "</span>" : "") +
+    (l.doneAt ? '<span class="tk-who">Complete · ' + E(obWhen(l.doneAt)) + (l.doneEmailed ? " · emailed" : "") + "</span>" : l.handoffAt ? '<span class="tk-who">IT done ' + E(obWhen(l.handoffAt)) + (l.handoffEmailed ? " · emailed " + E(obName(ob.data.admin)) : "") + "</span>" : "") +
+    "</button>";
+}
+function obKindLabel(l) { return ob.data.kinds[l.kind] || l.kind; }
+// The card that opens from the board: the status up top, then the checklist.
+function obModal() {
+  var l = ob.modal && ob.data.lists.filter(function (x) { return x.id === ob.modal; })[0];
+  if (!l) return "";
+  var st = l.closedAt ? { id: "closed", label: "Closed", note: "Closed " + obWhen(l.closedAt) } : obStage(l);
+  var note = st.id === "admin" ? "IT is done — over to " + obName(ob.data.admin) : st.note;
+  return '<div class="rs-modal" data-ob-modal><div class="rs-card tk-card-modal" role="dialog" aria-modal="true" aria-labelledby="obmT">' +
+    '<div class="brd-case-head"><div><div class="eyebrow">' + E([obKindLabel(l), l.company ? shortCo(l.company) : "", l.date ? (l.kind === "onboarding" ? "starts " : "last day ") + fmtDate(l.date) : ""].filter(Boolean).join(" · ")) + "</div>" +
+    '<h3 id="obmT">' + E(l.person) + '</h3></div><button type="button" class="text-button" data-ob-x aria-label="Close">✕</button></div>' +
+    '<div class="ob-status-band ob-band-' + st.id + '"><div><div class="ob-band-k">Status</div><div class="ob-band-t">' + E(st.label) + '</div><div class="small-note">' + E(note) + "</div></div>" +
+    '<div class="ob-band-n"><span>IT ' + obCount(l, "it").done + "/" + obCount(l, "it").total + "</span><span>Admin " + obCount(l, "admin").done + "/" + obCount(l, "admin").total + "</span></div></div>" +
+    obBody(l) + "</div></div>";
 }
 function obNewForm() {
   var f = ob.form;
@@ -67,12 +127,16 @@ function obCard(l) {
   var html = '<div class="card ob-card' + (l.closedAt ? " ob-closed" : "") + '">' +
     '<button type="button" class="ob-head" data-ob-open="' + E(l.id) + '" aria-expanded="' + open + '">' +
       '<span class="lg-pill ' + (l.kind === "offboarding" ? "lg-soon" : "sop-ok") + '">' + E(d.kinds[l.kind]) + "</span>" +
-      '<span class="ob-person">' + E(l.person) + "</span>" +
+      obStagePill(l) + '<span class="ob-person">' + E(l.person) + "</span>" +
       '<span class="small-note">' + E([l.company ? shortCo(l.company) : "", l.date ? (l.kind === "onboarding" ? "starts " : "last day ") + fmtDate(l.date) : ""].filter(Boolean).join(" · ")) + "</span>" +
       '<span class="grow" style="flex:1"></span>' + hand +
       '<span class="ob-bar" title="' + p.done + " of " + p.total + ' done"><span style="width:' + pct + '%"></span></span><span class="small-note">' + p.done + "/" + p.total + "</span></button>";
-  if (open) {
-    html += '<div class="ob-body"><div class="ob-cols">' + Object.keys(d.sections).map(function (s) {
+  if (open) html += obBody(l);
+  return html + "</div>";
+}
+function obBody(l) {
+  var d = ob.data;
+  return '<div class="ob-body"><div class="ob-cols">' + Object.keys(d.sections).map(function (s) {
       var items = l.sections[s] || [], left = items.filter(function (x) { return !x.done; }).length;
       return '<div class="ob-col"><div class="card-label">' + E(d.sections[s]) + ' <span class="small-note">' + (left ? left + " to do" : "all done") + "</span></div>" +
         items.map(function (x) {
@@ -85,8 +149,6 @@ function obCard(l) {
     (l.notes ? '<p class="small-note">Notes: ' + E(l.notes) + "</p>" : "") +
     '<details class="ob-log"><summary>History (' + (l.log || []).length + ")</summary>" + (l.log || []).slice().reverse().map(function (h) { return '<div class="small-note">' + E(new Date(h.at).toLocaleString()) + " · <b>" + E(h.by) + "</b> · " + E(h.what) + "</div>"; }).join("") + "</details>" +
     '<div class="nb-foot"><span class="grow"></span>' + (l.closedAt ? '<button type="button" data-ob-close="' + E(l.id) + '|0">Reopen</button>' : '<button type="button" data-ob-close="' + E(l.id) + '|1">' + (l.allDone ? "Close checklist" : "Close (not all ticked)") + "</button>") + "</div></div>";
-  }
-  return html + "</div>";
 }
 // The standard items each new checklist starts from.
 function obStdEditor() {
@@ -108,10 +170,14 @@ function obSaveStd(section, items) {
     .then(function (t) { ob.data.templates = t; toast("Standard items saved."); render(); }, function (err) { toast(err.message, true); });
 }
 document.addEventListener("click", function (e) {
-  var t = e.target.closest && e.target.closest("[data-ob-show],[data-ob-new],[data-ob-cancel],[data-ob-create],[data-ob-kind],[data-ob-open],[data-ob-rm],[data-ob-add],[data-ob-close],[data-ob-std],[data-ob-stdkind],[data-ob-stdrm],[data-ob-stdadd],[data-ob-goto]");
+  if (e.target.hasAttribute && e.target.hasAttribute("data-ob-modal")) { ob.modal = ""; render(); return; }
+  var t = e.target.closest && e.target.closest("[data-ob-view],[data-ob-card],[data-ob-x],[data-ob-show],[data-ob-new],[data-ob-cancel],[data-ob-create],[data-ob-kind],[data-ob-open],[data-ob-rm],[data-ob-add],[data-ob-close],[data-ob-std],[data-ob-stdkind],[data-ob-stdrm],[data-ob-stdadd],[data-ob-goto]");
   if (!t || !$("#view").contains(t)) return;
   var ds = t.dataset;
   if (ds.obShow) { ob.show = ds.obShow; render(); return; }
+  if (ds.obView) { ob.view = ds.obView; try { localStorage.setItem("soi_tracker_ob_view", ob.view); } catch (err) {} render(); return; }
+  if (ds.obCard) { ob.modal = ds.obCard; ob.open[ds.obCard] = true; render(); return; }
+  if ("obX" in ds) { ob.modal = ""; render(); return; }
   if ("obNew" in ds) { ob.adding = true; ob.form = { kind: "offboarding" }; render(); var el = $("#obPerson"); if (el) el.focus(); return; }
   if ("obCancel" in ds) { ob.adding = false; render(); return; }
   if (ds.obKind) { ob.form.kind = ds.obKind; render(); return; }
@@ -167,11 +233,12 @@ document.addEventListener("change", function (e) {
       .then(function (l) {
         var prev = ob.data.lists.filter(function (x) { return x.id === l.id; })[0] || {}, was = prev.handoffAt;
         obPut(l);
-        if (l.doneAt && !prev.doneAt) toast(l.doneEmailed ? "All done — emailed " + ob.data.doneNotify.map(obName).join(", ") + "." : "All done (no email could be sent).");
+        if (l.doneAt && !prev.doneAt) toast(l.doneEmailed ? "All done — emailed " + obNames(ob.data.doneNotify) + "." : "All done (no email could be sent).");
         else if (l.handoffAt && !was) toast(l.handoffEmailed ? "IT side done — emailed " + obName(ob.data.admin) + " to take over." : "IT side done (no email could be sent).");
       }, function (err) { toast(err.message, true); t.checked = !t.checked; });
   }
 });
+document.addEventListener("keydown", function (e) { if (e.key === "Escape" && ob.modal && page === "onboarding") { ob.modal = ""; render(); } });
 document.addEventListener("keydown", function (e) {
   var t = e.target, ds = (t && t.dataset) || {};
   if (e.key !== "Enter") return;
@@ -206,6 +273,6 @@ function onboardingNotices() {
 document.addEventListener("click", function (e) {
   var t = e.target.closest && e.target.closest("[data-ob-goto]");
   if (!t || $("#view").contains(t) && page === "onboarding") return;
-  ob.open[t.dataset.obGoto] = true; ob.show = "open"; ob.at = 0;
+  ob.open[t.dataset.obGoto] = true; ob.modal = t.dataset.obGoto; ob.show = "open"; ob.at = 0;
   go("onboarding");
 });

@@ -670,6 +670,12 @@ kept in `onboarding.json` on S3.
   items for that kind; anyone who sees it can tick items, add items to
   either section or remove them. Every change is in the checklist's
   History.
+- **Board and List:** the Board (the default) has a column per status —
+  Not started, IT in progress, With Admin (IT done) and Complete — and a
+  card per checklist with its status as the title, the IT and Admin
+  progress, and the next item to do. Click a card to open the whole
+  checklist, with the status at the top. List shows the same checklists as
+  rows. Closed checklists are under **Closed**.
 - **Standard items:** the list new checklists start from, editable on the
   page. Changes apply to checklists started afterwards.
 - **Hand-off email:** when the last IT item is ticked, the admin person
