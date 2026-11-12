@@ -6962,6 +6962,41 @@ async function onbChange(req, res, fn) {
   return out.list;
 }
 // IT just finished: tell the admin person, once.
+// Every item ticked: tell ONBOARDING_DONE_NOTIFY, once.
+async function onbAllDone(l, by) {
+  if (!onboarding.allDone(l) || l.doneAt) return l;
+  const users = (await getUsers()).map(normalizeUser);
+  const to = onboarding.DONE_NOTIFY.map((n) => users.find((u) => sameUser(u.username, n))).filter((u) => u && u.email);
+  const sender = users.find((u) => sameUser(u.username, by));
+  const cap = (u) => (u || "").charAt(0).toUpperCase() + (u || "").slice(1);
+  const kind = onboarding.KINDS[l.kind].toLowerCase();
+  let sent = false;
+  if (to.length && mailConfigured) {
+    const rows = (s) => l.sections[s].map((x) => `<li>${escapeHtml(x.label)}${x.by ? ` <span style="color:#888;">— ${escapeHtml(cap(x.by))}</span>` : ""}</li>`).join("");
+    try {
+      sent = await sendMail({
+        to: to.map((u) => u.email), replyTo: [sender && sender.email], saveCopy: true,
+        subject: `Complete: ${l.person}'s ${kind}`,
+        html: `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.5;color:#222;max-width:600px;">` +
+          `<p>Hi all,</p>` +
+          `<p><b>${escapeHtml(l.person)}</b>'s ${escapeHtml(kind)}${l.company ? " (" + escapeHtml(l.company) + ")" : ""}${l.date ? ", " + (l.kind === "onboarding" ? "starting " : "last day ") + escapeHtml(l.date) : ""} is complete — every IT and Admin item is ticked.</p>` +
+          Object.keys(onboarding.SECTIONS).map((s) => `<p style="margin:0 0 4px;"><b>${onboarding.SECTIONS[s]}</b></p><ul style="margin:0 0 12px;">${rows(s)}</ul>`).join("") +
+          `<p>It's in the AOG Tracker under Company → On/offboarding.</p>` +
+          `<p>Thanks,<br>${escapeHtml(sender ? cap(sender.username) : "AOG Tracker")}</p></div>`,
+      });
+    } catch (err) {
+      console.error("On/offboarding complete email failed:", err.message);
+    }
+  }
+  const out = await withOnboarding((doc) => {
+    const x = onboarding.shape(doc).lists.find((y) => y.id === l.id);
+    if (!x || x.doneAt) return x;
+    x.doneAt = Date.now(); x.doneEmailed = !!sent;
+    onboarding.log(x, by, sent ? `All done — emailed ${to.map((u) => cap(u.username)).join(", ")}` : "All done (no email sent)");
+    return JSON.parse(JSON.stringify(x));
+  });
+  return out || l;
+}
 async function onbHandoff(l, by) {
   if (!onboarding.itDone(l) || l.handoffAt) return l;
   const users = (await getUsers()).map(normalizeUser);
@@ -7003,7 +7038,7 @@ app.get(
   onbOnly,
   asyncHandler(async (req, res) => {
     const doc = onboarding.shape(await getOnboarding());
-    res.json({ kinds: onboarding.KINDS, sections: onboarding.SECTIONS, templates: doc.templates, admin: onboarding.ADMIN,
+    res.json({ kinds: onboarding.KINDS, sections: onboarding.SECTIONS, templates: doc.templates, admin: onboarding.ADMIN, doneNotify: onboarding.DONE_NOTIFY,
       lists: doc.lists.map(onbView).sort((a, b) => (a.closedAt ? 1 : 0) - (b.closedAt ? 1 : 0) || b.at - a.at) });
   })
 );
@@ -7080,6 +7115,7 @@ app.patch(
     });
     if (!l) return;
     if (onboarding.itDone(l) && !l.handoffAt) l = await onbHandoff(l, by);
+    if (onboarding.allDone(l) && !l.doneAt) l = await onbAllDone(l, by);
     res.json(onbView(l));
   })
 );

@@ -29,7 +29,8 @@ function renderOnboarding() {
   setBreadcrumb(["Company", "On/offboarding"]);
   var head = '<div class="intro"><div><div class="eyebrow">Company</div><h1>On/offboarding</h1>' +
     "<p>A checklist for everyone joining or leaving: the <b>IT</b> side (server login, Duo, email…) and the <b>Admin</b> side (keys, badge, building access…). " +
-    "When the last IT item is ticked, " + E(ob.data ? obName(ob.data.admin) : "the admin person") + " gets an email that it's over to them.</p></div></div>";
+    "When the last IT item is ticked, " + E(ob.data ? obName(ob.data.admin) : "the admin person") + " gets an email that it's over to them" +
+    (ob.data && ob.data.doneNotify.length ? "; when everything is ticked, " + E(ob.data.doneNotify.map(obName).join(", ")) + " get an email that it's complete" : "") + ".</p></div></div>";
   if (!me.onboarding) return head + '<div class="empty">On/offboarding is for full access, HR, IT and the people named for it.</div>';
   if (!ob.loading && (ob.error ? Date.now() - ob.at > 15000 : !ob.data || Date.now() - ob.at > 60000)) loadOnboarding();
   if (ob.error && !ob.data) return head + '<div class="banner">' + E(ob.error) + "</div>";
@@ -62,7 +63,7 @@ function obNewForm() {
 function obCard(l) {
   var d = ob.data, open = !!ob.open[l.id], p = l.progress;
   var pct = p.total ? Math.round(100 * p.done / p.total) : 0;
-  var hand = l.handoffAt ? '<span class="lg-pill sop-ok">IT done' + (l.handoffEmailed ? " · emailed " + E(obName(d.admin)) : "") + " · " + E(obWhen(l.handoffAt)) + "</span>" : "";
+  var hand = l.doneAt ? '<span class="lg-pill sop-ok">Complete' + (l.doneEmailed ? " · emailed" : "") + " · " + E(obWhen(l.doneAt)) + "</span>" : l.handoffAt ? '<span class="lg-pill sop-ok">IT done' + (l.handoffEmailed ? " · emailed " + E(obName(d.admin)) : "") + " · " + E(obWhen(l.handoffAt)) + "</span>" : "";
   var html = '<div class="card ob-card' + (l.closedAt ? " ob-closed" : "") + '">' +
     '<button type="button" class="ob-head" data-ob-open="' + E(l.id) + '" aria-expanded="' + open + '">' +
       '<span class="lg-pill ' + (l.kind === "offboarding" ? "lg-soon" : "sop-ok") + '">' + E(d.kinds[l.kind]) + "</span>" +
@@ -164,9 +165,10 @@ document.addEventListener("change", function (e) {
     var p = ds.obTick.split("|");
     api("/api/onboarding/lists/" + encodeURIComponent(p[0]) + "/items/" + encodeURIComponent(p[1]), { method: "PATCH", body: JSON.stringify({ done: t.checked }) })
       .then(function (l) {
-        var was = (ob.data.lists.filter(function (x) { return x.id === l.id; })[0] || {}).handoffAt;
+        var prev = ob.data.lists.filter(function (x) { return x.id === l.id; })[0] || {}, was = prev.handoffAt;
         obPut(l);
-        if (l.handoffAt && !was) toast(l.handoffEmailed ? "IT side done — emailed " + obName(ob.data.admin) + " to take over." : "IT side done (no email could be sent).");
+        if (l.doneAt && !prev.doneAt) toast(l.doneEmailed ? "All done — emailed " + ob.data.doneNotify.map(obName).join(", ") + "." : "All done (no email could be sent).");
+        else if (l.handoffAt && !was) toast(l.handoffEmailed ? "IT side done — emailed " + obName(ob.data.admin) + " to take over." : "IT side done (no email could be sent).");
       }, function (err) { toast(err.message, true); t.checked = !t.checked; });
   }
 });

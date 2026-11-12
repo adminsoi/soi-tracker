@@ -678,6 +678,11 @@ kept in `onboarding.json` on S3.
   did and what's still open on the Admin side. Reply-to is whoever ticked
   the last item. The card then shows "IT done · emailed Melissa"; unticking
   and re-ticking doesn't send it again.
+- **Complete email:** when every item on a checklist (IT and Admin) is
+  ticked, the people in `ONBOARDING_DONE_NOTIFY` (default
+  `nyssa,alexis,ramin,melissa`) get one email: "Complete: <person>'s
+  offboarding", listing every item and who ticked it. The card shows
+  "Complete · emailed"; unticking and re-ticking doesn't send it again.
 - **Mentions of You:** IT and full-access logins see checklists with IT
   items still open; the
   admin person sees the Admin side once IT is done.
