@@ -407,6 +407,8 @@ function navItems() {
   // Leadership only (the server checks every People request too).
   if (me.leadership) items.push({ id: "people", ic: "☺", label: "People" });
   items.push({ id: "documents", ic: "▢", label: "Documents" });
+  // HR, IT and the people named for it (the server checks every request too).
+  if (me.onboarding) items.push({ id: "onboarding", ic: "☑", label: "On/offboarding" });
   items.push({ id: "chat", ic: "✳", label: "Chat with AOG" });
   // Everyone: ask for changes to the tracker (improvements.js).
   items.push({ id: "improvements", ic: "✚", label: "Improvements", badge: impWaiting });
@@ -464,6 +466,7 @@ function render() {
     else if (page === "documents") html = renderDocuments();
     else if (page === "chat") html = renderDeptChat();
     else if (page === "improvements") html = renderImprovements();
+    else if (page === "onboarding") html = renderOnboarding();
     else html = renderDepartment();
   } catch (e) {
     console.error(e);
