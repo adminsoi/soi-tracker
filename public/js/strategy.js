@@ -11,7 +11,7 @@
 // with a due date: it becomes a task for them (Mentions of You). Writing
 // #strategymeeting or @strategymeeting in any note in the tracker adds a
 // row here, dated for the next meeting.
-var sm = { data: null, at: 0, loading: false, error: "", date: "next", status: "active", q: "", open: {}, adding: false, form: {}, entry: {} };
+var sm = { tab: "topics", data: null, at: 0, loading: false, error: "", date: "next", status: "active", q: "", open: {}, adding: false, form: {}, entry: {} };
 function loadStrategy() {
   if (sm.loading) return;
   sm.loading = true;
@@ -49,6 +49,11 @@ function renderStrategy() {
     "<p>Every topic for the weekly meeting in one table, with a date to discuss it and a running log of notes and decisions. " +
     "Write <b>#strategymeeting</b> or <b>@strategymeeting</b> in a note anywhere in the tracker to add it here for the next meeting.</p></div></div>";
   if (!me.leadership) return head + '<div class="empty">The Strategy Meeting is for Leadership logins.</div>';
+  // Two tabs: the meeting's topics, and Workflows (workflows.js).
+  head += '<div class="tabs" role="tablist">' + [["topics", "Topics"], ["workflows", "Workflows"]].map(function (t) {
+    return '<button type="button" role="tab" class="tab ' + (sm.tab === t[0] ? "active" : "") + '" aria-selected="' + (sm.tab === t[0]) + '" data-sm-tab="' + t[0] + '">' + t[1] + "</button>";
+  }).join("") + "</div>";
+  if (sm.tab === "workflows") return head + renderWorkflows();
   if (!sm.loading && (sm.error ? Date.now() - sm.at > 15000 : !sm.data || Date.now() - sm.at > 60000)) loadStrategy();
   if (sm.error && !sm.data) return head + '<div class="banner">' + E(sm.error) + "</div>";
   if (!sm.data) return head + '<div class="empty">Loading the Strategy Meeting…</div>';
@@ -129,9 +134,10 @@ function smPut(row) {
   sm.data.topics = sm.data.topics.map(function (x) { return x.id === row.id ? row : x; });
 }
 document.addEventListener("click", function (e) {
-  var t = e.target.closest && e.target.closest("[data-sm-show],[data-sm-add],[data-sm-cancel],[data-sm-create],[data-sm-open],[data-sm-kind],[data-sm-log],[data-sm-del]");
+  var t = e.target.closest && e.target.closest("[data-sm-tab],[data-sm-show],[data-sm-add],[data-sm-cancel],[data-sm-create],[data-sm-open],[data-sm-kind],[data-sm-log],[data-sm-del]");
   if (!t || !$("#view").contains(t)) return;
   var ds = t.dataset;
+  if (ds.smTab) { if (sm.tab === "workflows" && typeof wfSave === "function") wfSave(); sm.tab = ds.smTab; render(); return; }
   if (ds.smShow) { sm.status = ds.smShow; render(); return; }
   if ("smAdd" in ds) { sm.adding = true; sm.form = {}; render(); var el = $("#smNewTopic"); if (el) el.focus(); return; }
   if ("smCancel" in ds) { sm.adding = false; render(); return; }

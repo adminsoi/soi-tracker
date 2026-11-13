@@ -930,3 +930,74 @@
   .ob-band-n { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 12.5px; color: var(--muted); }
   .ob-head .ob-stage { margin-right: -2px; }
   @media (max-width: 900px) { .ob-board { grid-template-columns: repeat(2, minmax(200px, 1fr)); } }
+
+  /* Strategy Meeting → Workflows (workflows.js) */
+  .wf-bar { flex-wrap: wrap; gap: 8px; }
+  .wf-bar select { max-width: 260px; }
+  .wf-title-static { font-size: 14px; }
+  .wf-adds, .wf-zoom { display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .wf-adds button, .wf-zoom button { padding: 6px 10px; font-size: 12px; }
+  .wf-zoom span { font-size: 12px; color: var(--muted); min-width: 40px; text-align: center; }
+  .wf-new { display: flex; gap: 8px; align-items: center; }
+  .wf-new input { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; }
+  .wf-connecting { display: flex; gap: 8px; align-items: center; }
+  .wf-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; align-items: start; margin-top: 10px; }
+  .wf-main { min-width: 0; }
+  .wf-scroll { overflow: auto; max-height: 72vh; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+  .wf-svg { display: block; user-select: none; -webkit-user-select: none; touch-action: none; }
+  .wf-bg { cursor: default; }
+  .wf-dot { fill: var(--line); }
+  .wf-node { cursor: grab; }
+  .wf-svg.ro .wf-node { cursor: pointer; }
+  .wf-node:focus { outline: none; }
+  .wf-shape { fill: var(--paper); stroke: #a99a88; stroke-width: 1.6; }
+  .wf-note .wf-shape { fill: #fbf1c7; stroke: #d9c37a; stroke-dasharray: 4 3; }
+  .wf-start .wf-shape, .wf-end .wf-shape { fill: var(--soft); }
+  .wf-label { font-size: 13px; font-weight: 600; fill: var(--ink); pointer-events: none; }
+  .wf-stxt { font-size: 10px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; pointer-events: none; fill: var(--muted); }
+  .wf-ptxt { font-size: 10px; letter-spacing: .4px; fill: var(--muted); pointer-events: none; }
+  .wf-s-doing .wf-shape { stroke: #d29a3a; stroke-width: 2.4; } .wf-s-doing .wf-stxt { fill: #9a6a14; }
+  .wf-s-done .wf-shape { stroke: #5d9a55; stroke-width: 2.4; } .wf-s-done .wf-stxt { fill: #3d7a35; }
+  .wf-s-blocked .wf-shape { stroke: #c0503f; stroke-width: 2.4; } .wf-s-blocked .wf-stxt { fill: #a33a2a; }
+  .wf-note .wf-shape, .wf-note.wf-s-doing .wf-shape, .wf-note.wf-s-done .wf-shape, .wf-note.wf-s-blocked .wf-shape { stroke: #d9c37a; stroke-width: 1.4; }
+  .wf-node.on .wf-shape { stroke: #4f78b8; stroke-width: 3; }
+  .wf-node.from .wf-shape { stroke: #4f78b8; stroke-width: 3; stroke-dasharray: 6 4; }
+  .wf-handle { fill: var(--card); stroke: #4f78b8; stroke-width: 2; cursor: crosshair; opacity: 0; transition: opacity .12s; }
+  .wf-node:hover .wf-handle, .wf-node.on .wf-handle { opacity: 1; }
+  .wf-eline { fill: none; stroke: #8f8273; stroke-width: 1.8; pointer-events: none; }
+  .wf-ehit { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer; }
+  .wf-edge:hover .wf-eline, .wf-edge.on .wf-eline { stroke: #4f78b8; stroke-width: 2.6; }
+  .wf-arrowhead { fill: #8f8273; }
+  .wf-elabel rect { fill: var(--card); stroke: var(--line); }
+  .wf-elabel text { font-size: 11px; font-weight: 600; fill: var(--ink); }
+  .wf-elabel { cursor: pointer; }
+  .wf-temp { stroke: #4f78b8; stroke-width: 2; stroke-dasharray: 5 4; pointer-events: none; }
+  html[data-theme="dark"] .wf-shape { fill: #1a1d22; stroke: #5c6370; }
+  html[data-theme="dark"] .wf-start .wf-shape, html[data-theme="dark"] .wf-end .wf-shape { fill: #262a31; }
+  html[data-theme="dark"] .wf-note .wf-shape { fill: #3a3523; stroke: #8a7a45; }
+  html[data-theme="dark"] .wf-eline { stroke: #7d8592; } html[data-theme="dark"] .wf-arrowhead { fill: #7d8592; }
+  html[data-theme="dark"] .wf-s-doing .wf-stxt { fill: #f3c47e; } html[data-theme="dark"] .wf-s-done .wf-stxt { fill: #a6dc9c; } html[data-theme="dark"] .wf-s-blocked .wf-stxt { fill: #f0a196; }
+  .wf-panel { padding: 16px 16px 8px; position: sticky; top: 12px; max-height: calc(100vh - 40px); overflow-y: auto; }
+  .wf-panel-h { display: flex; justify-content: space-between; align-items: center; }
+  .wf-panel .nb-field { margin-bottom: 12px; }
+  .wf-status-seg { display: grid; grid-template-columns: 1fr 1fr; width: 100%; box-sizing: border-box; }
+  .wf-status-seg button { padding: 6px 8px; font-size: 12px; }
+  .wf-links { margin: 2px 0 10px; padding-left: 16px; font-size: 12.5px; }
+  .wf-actions { flex-wrap: wrap; gap: 6px; }
+  .wf-phase { display: flex; gap: 4px; align-items: center; margin-bottom: 6px; }
+  .wf-phase input { flex: 1; min-width: 0; padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); color: var(--ink); font: inherit; font-size: 13px; }
+  .wf-legend { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 12px; margin-bottom: 4px; }
+  .wf-key { display: inline-flex; align-items: center; gap: 5px; }
+  .wf-key i { width: 14px; height: 10px; border-radius: 3px; border: 2px solid #a99a88; display: inline-block; }
+  .wf-key.wf-s-doing i { border-color: #d29a3a; } .wf-key.wf-s-done i { border-color: #5d9a55; } .wf-key.wf-s-blocked i { border-color: #c0503f; }
+  .wf-road { display: grid; gap: 12px; overflow-x: auto; }
+  .wf-col.over { outline: 2px dashed #4f78b8; outline-offset: -2px; }
+  .wf-card { border-left-width: 4px; border-left-color: #a99a88; }
+  .wf-card.wf-s-doing { border-left-color: #d29a3a; } .wf-card.wf-s-done { border-left-color: #5d9a55; } .wf-card.wf-s-blocked { border-left-color: #c0503f; }
+  .wf-card.on { border-color: #4f78b8; box-shadow: 0 0 0 1px #4f78b8; }
+  .wf-card-status { font-size: 10.5px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase; color: var(--muted); }
+  .wf-card.wf-s-doing .wf-card-status { color: #9a6a14; } .wf-card.wf-s-done .wf-card-status { color: #3d7a35; } .wf-card.wf-s-blocked .wf-card-status { color: #a33a2a; }
+  html[data-theme="dark"] .wf-card.wf-s-doing .wf-card-status { color: #f3c47e; } html[data-theme="dark"] .wf-card.wf-s-done .wf-card-status { color: #a6dc9c; } html[data-theme="dark"] .wf-card.wf-s-blocked .wf-card-status { color: #f0a196; }
+  .wf-card-kind { color: #4f78b8; }
+  .wf-card-notes { font-style: italic; }
+  @media (max-width: 1000px) { .wf-layout { grid-template-columns: 1fr; } .wf-panel { position: static; } }
