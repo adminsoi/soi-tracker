@@ -1001,3 +1001,8 @@
   .wf-card-kind { color: #4f78b8; }
   .wf-card-notes { font-style: italic; }
   @media (max-width: 1000px) { .wf-layout { grid-template-columns: 1fr; } .wf-panel { position: static; } }
+
+  /* HR: add an HR issue / performance comment from Projects (staff-forms.js) */
+  .rs-card.sf-add-card { width: min(640px, 100%); max-width: 640px; max-height: calc(100vh - 40px); overflow-y: auto; }
+  .section-title > .primary { align-self: center; white-space: nowrap; }
+  .nb-field .sf-check input[type=checkbox] { width: 17px; flex: none; padding: 0; }

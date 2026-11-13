@@ -22,7 +22,9 @@ const CURRENCIES = ["USD", "NZD", "SGD", "GBP", "EUR", "AUD"];
 
 // Field specs: a number is a text field of up to that many characters;
 // an array is a pick-list; "date", "money", "days", "bool" are what they say.
-// `need` lists the fields that must be filled in.
+// `need` lists the fields that must be filled in. raisedBy (HR issues and
+// performance comments) is who brought it up, when HR adds it from their
+// Projects tab on someone's behalf.
 const KINDS = {
   admin: {
     dept: "Administrative", label: "Admin request",
@@ -32,13 +34,13 @@ const KINDS = {
   },
   hr_issue: {
     dept: "HR", label: "HR issue",
-    fields: { topic: ["Workplace concern", "Pay or benefits", "Policy question", "Something else"], subject: 120, details: 2000, urgent: "bool" },
+    fields: { topic: ["Workplace concern", "Pay or benefits", "Policy question", "Something else"], subject: 120, details: 2000, urgent: "bool", raisedBy: 120 },
     need: ["topic", "subject", "details"],
     statuses: ["new", "progress", "done", "cancelled"],
   },
   perf_comment: {
     dept: "HR", label: "Performance comment",
-    fields: { about: 80, type: ["Recognition", "Concern", "Suggestion"], details: 2000 },
+    fields: { about: 80, type: ["Recognition", "Concern", "Suggestion"], details: 2000, raisedBy: 120 },
     need: ["about", "type", "details"],
     statuses: ["new", "progress", "done", "cancelled"],
   },

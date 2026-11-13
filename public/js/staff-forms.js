@@ -116,7 +116,7 @@ function sfCoverPeople() {
 }
 
 // ---- Your submissions (GET /api/staff-forms/mine) ----
-var sf = { data: null, at: 0, loading: false, error: "", hrForm: "hr_issue", form: {}, files: {}, saving: "" };
+var sf = { data: null, at: 0, loading: false, error: "", hrForm: "hr_issue", form: {}, files: {}, saving: "", addKind: "" };
 function loadStaffForms() {
   if (sf.loading) return;
   sf.loading = true;
@@ -288,7 +288,13 @@ function sfUpload(id, files) {
 }
 function sfSend(kind) {
   var f = sf.form[kind] || {};
-  var done = function (msg) { sf.saving = ""; sf.form[kind] = kind === "it" ? { urgency: "Normal" } : {}; sf.files[kind] = []; toast(msg); sf.at = 0; loadStaffForms(); };
+  var done = function (msg) {
+    if (sf.addKind === kind) msg = "Added to " + (kind === "hr_issue" ? "HR issues" : "Performance comments") + ".";
+    sf.saving = ""; sf.form[kind] = kind === "it" ? { urgency: "Normal" } : {}; sf.files[kind] = []; toast(msg); sf.at = 0; loadStaffForms();
+    // Added from the department's Projects tab: close the pop-up and show it there.
+    if (SF_FORMS[kind]) sfDeptReload(SF_FORMS[kind].dept);
+    if (sf.addKind === kind) { sf.addKind = ""; render(); }
+  };
   var fail = function (err) { sf.saving = ""; toast(err.message, true); sf.at = 0; loadStaffForms(); };
   if (kind === "it") {
     if (!String(f.issue || "").trim()) { toast("Describe the issue first.", true); return; }
@@ -302,6 +308,7 @@ function sfSend(kind) {
   var fields = {};
   SF_FORMS[kind].fields.forEach(function (d) { if (f[d.k] != null) fields[d.k] = f[d.k]; });
   if (kind === "perf_comment") { if (f.about === SF_SOMEONE_ELSE) fields.about = f.aboutName || ""; delete fields.aboutName; }
+  if (sf.addKind === kind && f.raisedBy) fields.raisedBy = f.raisedBy;
   sf.saving = kind; render();
   api("/api/staff-forms", { method: "POST", body: JSON.stringify({ kind: kind, company: f.company, fields: fields }) }).then(function (item) {
     if (kind !== "reimburse") return done("Sent to " + shortDept(SF_FORMS[kind].dept) + ".");
@@ -445,6 +452,32 @@ var SF_ONGOING = {
   "HR": [{ kind: "hr_issue", title: "HR issues", note: "Every HR issue staff send comes in here as a task. HR, Leadership and full access only." },
     { kind: "perf_comment", title: "Performance comments", note: "Every performance comment comes in here. Add anything that needs to go on the record in Performance (and PerformYard) yourself." }]
 };
+// HR can add an HR issue or performance comment from their Projects tab
+// (say, one raised in a meeting) instead of waiting for it to be sent: the
+// same form in a pop-up, plus who raised it. It's logged as from you.
+var SF_ADD_LABEL = { hr_issue: "Add HR issue", perf_comment: "Add performance comment" };
+var SF_RAISED = { k: "raisedBy", label: 'Who raised it <span class="opt">optional</span>', type: "text", ph: "e.g. Vicky and Dina, in today's meeting" };
+function sfAddModal(kind) {
+  var spec = SF_FORMS[kind], fields = spec.fields.concat([SF_RAISED]).map(function (d) { return { d: d, html: sfField(kind, d) }; });
+  return '<div class="rs-modal" data-sf-addmodal><div class="rs-card sf-add-card" role="dialog" aria-modal="true" aria-labelledby="sfAddT">' +
+    '<div class="brd-case-head"><div><div class="eyebrow">' + E(shortDept(spec.dept)) + ' · Projects</div><h3 id="sfAddT">' + E(SF_ADD_LABEL[kind]) + '</h3></div><button type="button" class="text-button" data-sf-addclose aria-label="Close">✕</button></div>' +
+    '<p class="small-note" style="margin:6px 0 14px;">It goes on ' + E(spec.title === "HR issue" ? "HR issues" : "Performance comments") + " as from you" + (kind === "hr_issue" ? ", seen only by HR, Leadership and full access." : ". It doesn't go on anyone's record by itself.") + "</p>" +
+    '<div class="grid-2" style="gap:0 16px;">' + fields.filter(function (x) { return x.d.type !== "textarea"; }).map(function (x) { return x.html; }).join("") + sfCompanyField(kind) + "</div>" +
+    fields.filter(function (x) { return x.d.type === "textarea"; }).map(function (x) { return x.html; }).join("") +
+    '<div class="nb-foot"><button type="button" class="primary" data-sf-send="' + kind + '"' + (sf.saving === kind ? " disabled" : "") + ">" + (sf.saving === kind ? "Adding…" : "Add") + '</button><button type="button" class="text-button" data-sf-addclose>Cancel</button></div></div></div>';
+}
+document.addEventListener("click", function (e) {
+  var t = e.target;
+  if (t.hasAttribute && t.hasAttribute("data-sf-addmodal")) { sfAddClose(); return; }
+  t = t.closest && t.closest("[data-sf-addopen],[data-sf-addclose]");
+  if (!t) return;
+  if (t.dataset.sfAddopen) {
+    sf.addKind = t.dataset.sfAddopen; render();
+    var first = document.querySelector("[data-sf-addmodal] select, [data-sf-addmodal] input"); if (first) first.focus();
+  } else sfAddClose();
+});
+document.addEventListener("keydown", function (e) { if (e.key === "Escape" && sf.addKind) sfAddClose(); });
+function sfAddClose() { if (sf.form[sf.addKind]) delete sf.form[sf.addKind].raisedBy; sf.addKind = ""; render(); }
 function renderFormProjects(dept) {
   var groups = SF_ONGOING[dept];
   if (!groups) return "";
@@ -475,16 +508,17 @@ function renderFormProjects(dept) {
       if (i.kind === "hr_issue") return (f.urgent ? "URGENT · " : "") + f.subject;
       return f.type + " about " + f.about;
     };
-    return '<div class="section-title"><div><h2>' + E(g.title) + ' <span class="pill">Ongoing</span></h2><span class="small-note">' + E(g.note) + " " + open + " open of " + all.length + ".</span></div></div>" +
+    var addBtn = SF_ADD_LABEL[g.kind] ? '<button type="button" class="primary" data-sf-addopen="' + g.kind + '">+ ' + E(SF_ADD_LABEL[g.kind]) + "</button>" : "";
+    return '<div class="section-title"><div><h2>' + E(g.title) + ' <span class="pill">Ongoing</span></h2><span class="small-note">' + E(g.note) + " " + open + " open of " + all.length + ".</span></div>" + addBtn + "</div>" +
       filterUi(scope, fields, all, list.length) +
       '<div class="table-wrap"><table class="wide"><thead><tr><th>Task</th><th>From</th><th>Sent</th><th>Person responsible</th><th>Status</th><th>Notes</th></tr></thead><tbody>' +
       (list.length ? list.map(function (i) {
         return '<tr class="' + (SF_OPEN[i.status] == null ? "done" : "") + '"><td class="sf-what"><div class="name-cell"><span class="indent">↳</span><b>' + E(title(i)) + "</b></div>" + sfDetails(i) + (i.reason ? '<span class="co-note">Reason given: ' + E(i.reason) + "</span>" : "") + "</td>" +
-          "<td>" + E(i.by) + (myCompanies().length > 1 ? '<span class="co-note">' + E(shortCo(i.company)) + "</span>" : "") + "</td><td>" + E(sfAge(i)) + "</td>" +
+          "<td>" + E(i.by) + ((i.fields || {}).raisedBy ? '<span class="co-note">Raised by ' + E(i.fields.raisedBy) + "</span>" : "") + (myCompanies().length > 1 ? '<span class="co-note">' + E(shortCo(i.company)) + "</span>" : "") + "</td><td>" + E(sfAge(i)) + "</td>" +
           "<td>" + sfAssignPick(dept, i, can, d.people) + "</td><td>" + sfStatusPick(dept, i, can) + '</td><td class="notes-cell">' + sfNotes(dept, i, can) + "</td></tr>";
       }).join("") : '<tr><td colspan="6" class="empty">' + (all.length ? "Nothing matches these filters." : "Nothing sent yet.") + "</td></tr>") +
       "</tbody></table></div>";
-  }).join("") + '<div class="section-title" style="margin-top:26px;"><div><h2>Projects</h2><span class="small-note">' + E(shortDept(dept)) + "'s own longer-term work, with sub-tasks.</span></div></div>";
+  }).join("") + (sf.addKind && groups.some(function (g) { return g.kind === sf.addKind; }) ? sfAddModal(sf.addKind) : "") + '<div class="section-title" style="margin-top:26px;"><div><h2>Projects</h2><span class="small-note">' + E(shortDept(dept)) + "'s own longer-term work, with sub-tasks.</span></div></div>";
 }
 // Changing a status to Declined or Rejected asks for a reason, which the
 // person who sent it sees.
