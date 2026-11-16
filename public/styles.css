@@ -1006,3 +1006,11 @@
   .rs-card.sf-add-card { width: min(640px, 100%); max-width: 640px; max-height: calc(100vh - 40px); overflow-y: auto; }
   .section-title > .primary { align-self: center; white-space: nowrap; }
   .nb-field .sf-check input[type=checkbox] { width: 17px; flex: none; padding: 0; }
+
+  /* IT tickets: several people and CC (it-requests.js) */
+  .pp { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+  .pp input { flex: 1; min-width: 180px; border: 0 !important; padding: 4px 2px !important; background: transparent !important; outline: none; font: inherit; font-size: 13.5px; color: var(--ink); width: auto !important; }
+  .pp-chip small { color: var(--muted); font-size: 10.5px; }
+  .pp-chip.pp-noemail { border-style: dashed; }
+  .tk-people-edit { margin: 12px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); }
+  .tk-people-edit .nb-field { margin-bottom: 10px; }

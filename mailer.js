@@ -27,7 +27,8 @@ if (!configured) {
 // attachments: [{ name, contentType, content (Buffer) }] — keep the total
 // under about 3 MB (Graph's limit for sending in one request).
 // Returns true when sent, false when email isn't set up.
-async function sendMail({ to, subject, html, replyTo, saveCopy, attachments }) {
+// cc: copied — one address or a list (anyone also in `to` is left out).
+async function sendMail({ to, cc, subject, html, replyTo, saveCopy, attachments }) {
   const toList = [...new Set([].concat(to || []).map((a) => String(a || "").trim()).filter(Boolean))];
   if (!configured || !toList.length) return false;
 
@@ -41,6 +42,9 @@ async function sendMail({ to, subject, html, replyTo, saveCopy, attachments }) {
     },
     saveToSentItems: !!saveCopy,
   };
+  const ccList = [...new Set([].concat(cc || []).map((a) => String(a || "").trim()).filter(Boolean))]
+    .filter((a) => !toList.some((t) => t.toLowerCase() === a.toLowerCase()));
+  if (ccList.length) payload.message.ccRecipients = ccList.map((address) => ({ emailAddress: { address } }));
   const replyList = [...new Set([].concat(replyTo || []).map((a) => String(a || "").trim().toLowerCase()).filter(Boolean))];
   if (replyList.length) payload.message.replyTo = replyList.map((address) => ({ emailAddress: { address } }));
   if (attachments && attachments.length) {
