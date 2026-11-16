@@ -4044,7 +4044,7 @@ function resolvedEmailHtml(rec, me) {
   const issue = p.issue || rec.issue || "";
   const fix = p.fix || (Object.keys(p).length ? "" : rec.resolution) || "";
   return `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.5;color:#222;max-width:600px;">` +
-    `<p>Hi ${escapeHtml((rec.name || "").split(" ")[0] || "there")},</p>` +
+    `<p>Hi ${escapeHtml(ticketHi(rec))},</p>` +
     `<p>Good news — your IT request${rec.submittedAt ? " from " + escapeHtml(String(rec.submittedAt).slice(0, 10)) : ""} has been <b>resolved</b>.</p>` +
     `<div style="border-left:3px solid #9fbf8f;padding:4px 0 2px 14px;margin:16px 0;">` +
     section("The issue", issue) + section("What caused it", p.cause) + section("How it was fixed", fix) + section("What you need to do", p.action) +
@@ -4084,6 +4084,24 @@ async function changeRequests(req, res, ids) {
     const email = String(body.email || "").trim().toLowerCase().slice(0, 120);
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "That email address doesn't look right" });
     Object.assign(change, { email, emailEditedBy: req.user.username, emailEditedAt: Date.now() });
+  }
+  // Who's on the ticket: { people: [...], cc: [...] } (one ticket at a time).
+  // The first person is the requester; the rest are emailed too.
+  if ("people" in body || "cc" in body) {
+    if (ids.length !== 1) return res.status(400).json({ error: "Change one ticket's people at a time" });
+    const users = (await getUsers()).map(normalizeUser);
+    if ("people" in body) {
+      const p = cleanTicketPeople(body.people, users);
+      if (p.error) return res.status(400).json({ error: p.error });
+      if (!p.people.length) return res.status(400).json({ error: "A ticket needs at least one person" });
+      Object.assign(change, { name: p.people[0].name, email: p.people[0].email, also: p.people.slice(1) });
+    }
+    if ("cc" in body) {
+      const c = cleanTicketPeople(body.cc, users);
+      if (c.error) return res.status(400).json({ error: c.error });
+      change.cc = c.people;
+    }
+    change.peopleEditedBy = req.user.username;
   }
   // Resolving: what the issue was, what caused it, how it was fixed and
   // anything they need to do (all optional), and whether to email the
@@ -4152,7 +4170,8 @@ async function changeRequests(req, res, ids) {
         // Any move by a person off New counts as the first response.
         if (prevStatus === "new" && !r.firstResponseAt) r.firstResponseAt = Date.now();
       }
-      if ("email" in change && prevEmail !== r.email) pushActivity(r, { type: "note", text: `Requester email changed from ${prevEmail || "none"} to ${r.email || "none"}`, by: req.user.username });
+      if ("also" in change || "cc" in change) pushActivity(r, { type: "note", text: `People on the ticket: ${[r.name || r.email].concat((r.also || []).map((p) => p.name)).join(", ")}${(r.cc || []).length ? " · cc " + r.cc.map((p) => p.name).join(", ") : ""}`, by: req.user.username });
+      else if ("email" in change && prevEmail !== r.email) pushActivity(r, { type: "note", text: `Requester email changed from ${prevEmail || "none"} to ${r.email || "none"}`, by: req.user.username });
       touch(r);
       out.push(Object.assign({}, r));
     }
@@ -4183,12 +4202,12 @@ async function changeRequests(req, res, ids) {
     const users = await getUsers();
     const me = users.find((u) => sameUser(u.username, req.user.username));
     for (const rec of changed) {
-      if (!rec.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rec.email)) { emailProblems.push(`${rec.name || rec.id}: no email on the ticket`); continue; }
+      if (!ticketTo(rec).length) { emailProblems.push(`${rec.name || rec.id}: no email on the ticket`); continue; }
       try {
         const ref = rec.ref || ticketRef(rec.id);
         rec.ref = ref;
         const ok = await sendMail({
-          to: rec.email,
+          to: ticketTo(rec), cc: ticketCc(rec),
           // Replies go to the person who resolved it and to the IT mailbox,
           // where the tracker picks them up and shows them on the ticket.
           replyTo: [me && me.email, IT_REQUESTS_MAILBOX],
@@ -4201,7 +4220,7 @@ async function changeRequests(req, res, ids) {
         sentIds.set(rec.id, rec.ref);
       } catch (err) {
         console.error("Resolution email failed:", err.message);
-        emailProblems.push(`${rec.email}: ${err.reason || "couldn't send (" + err.message.slice(0, 120) + ")"}`);
+        emailProblems.push(`${ticketTo(rec).join(", ")}: ${err.reason || "couldn't send (" + err.message.slice(0, 120) + ")"}`);
         // The same setup problem would stop every other one too.
         if (err.reason && !/didn't accept the address/.test(err.reason)) break;
       }
@@ -4209,7 +4228,7 @@ async function changeRequests(req, res, ids) {
     if (emailed) await withItRequests((list) => {
       for (const r of list) if (sentIds.has(r.id)) {
         r.notifiedAt = Date.now(); r.notifiedBy = req.user.username; r.ref = sentIds.get(r.id);
-        pushActivity(r, { type: "resolved", text: r.resolution || "", by: req.user.username, emailedTo: r.email });
+        pushActivity(r, { type: "resolved", text: r.resolution || "", by: req.user.username, emailedTo: ticketSentTo(r) });
         if (!r.firstResponseAt) r.firstResponseAt = Date.now();
       }
     });
@@ -4305,11 +4324,46 @@ function kbToHtml(body) {
     return lines.map((l) => /^#{1,3}\s/.test(l) ? `<p style="margin:10px 0 4px;"><b>${escapeHtml(l.replace(/^#+\s*/, ""))}</b></p>` : `<p style="margin:0 0 8px;">${escapeHtml(l)}</p>`).join("");
   }).join("");
 }
+// Who a ticket's emails go to: the requester and anyone added to the
+// ticket (also), with the people copied in (cc).
+function ticketTo(rec) {
+  return [...new Set([rec.email].concat((rec.also || []).map((p) => p.email)).map((e) => String(e || "").toLowerCase()).filter((e) => EMAIL_OK.test(e)))];
+}
+function ticketCc(rec) {
+  const to = ticketTo(rec);
+  return [...new Set((rec.cc || []).map((p) => String(p.email || "").toLowerCase()).filter((e) => EMAIL_OK.test(e) && !to.includes(e)))];
+}
+function ticketSentTo(rec) { const cc = ticketCc(rec); return ticketTo(rec).join(", ") + (cc.length ? " (cc " + cc.join(", ") + ")" : ""); }
+// "Hi Dina, Vicky and Elvis" on a ticket with several people.
+function ticketHi(rec) {
+  const first = (n) => { const w = String(n || "").trim().split(/[\s@.]+/)[0] || ""; return w ? w.charAt(0).toUpperCase() + w.slice(1) : ""; };
+  const names = [...new Set([first(rec.name || rec.email)].concat((rec.also || []).filter((p) => p.email).map((p) => first(p.name || p.email))).filter(Boolean))];
+  return names.length > 1 ? names.slice(0, -1).join(", ") + " and " + names[names.length - 1] : names[0] || "there";
+}
+// People for a ticket from the page: [{ name, email }] or logins by
+// username (their login email is used). Up to 20, no repeats; a name
+// without an email is kept but not emailed.
+function cleanTicketPeople(list, users) {
+  const out = [], seen = new Set();
+  for (const x of (Array.isArray(list) ? list : []).slice(0, 20)) {
+    const login = x && x.username ? users.find((u) => sameUser(u.username, x.username)) : null;
+    const email = String((login && login.email) || (x && x.email) || "").trim().toLowerCase().slice(0, 120);
+    const name = String((x && x.name) || (login ? login.username.charAt(0).toUpperCase() + login.username.slice(1) : "")).replace(/\s+/g, " ").trim().slice(0, 80);
+    // A name on its own is fine (a walk-up with no email); they just aren't emailed.
+    if (email && !EMAIL_OK.test(email)) return { error: `${name || email} — that email address doesn't look right` };
+    if (!email && !name) continue;
+    const key = email || "name:" + name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ name: name || email.split("@")[0], email });
+  }
+  return { people: out };
+}
 function ticketEmailHtml(rec, me, inner) {
   const who = (me && (me.name || me.username)) || "IT";
   const whoName = who.charAt(0).toUpperCase() + who.slice(1);
   return `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.5;color:#222;max-width:600px;">` +
-    `<p>Hi ${escapeHtml((rec.name || "").split(" ")[0] || "there")},</p>` + inner +
+    `<p>Hi ${escapeHtml(ticketHi(rec))},</p>` + inner +
     `<p>Just reply to this email to add anything — it'll come straight to ${escapeHtml(whoName)}.</p>` +
     `<p>Thanks,<br>${escapeHtml(whoName)}<br>SOI Aviation IT</p>` +
     `<p style="color:#888;font-size:12px;">Ticket ${escapeHtml(rec.ref || ticketRef(rec.id))}${rec.issue ? " · " + escapeHtml(subjectIssue(rec.issue)) : ""}</p></div>`;
@@ -4373,7 +4427,7 @@ app.post(
     if (!text && !files.length && !kb) return res.status(400).json({ error: "Write something first" });
     const entry = { type: kind, text, by: req.user.username, files: files.map((f) => f.id), kb: kb ? { id: kb.id, kb: kb.kb, title: kb.title } : null };
     if (kind === "reply") {
-      if (!rec.email || !EMAIL_OK.test(rec.email)) return res.status(400).json({ error: "This ticket has no valid email — fix it with ✎ first, or add an internal note" });
+      if (!ticketTo(rec).length) return res.status(400).json({ error: "This ticket has no valid email — fix it with ✎ first, or add an internal note" });
       if (!mailConfigured) return res.status(400).json({ error: "Email isn't set up on the server (see Admin → Email)" });
       const attachments = [];
       for (const f of files) { const x = await getFile(`it_request_files/${rec.id}/${f.id}`); if (x) attachments.push({ name: f.name, contentType: f.type, content: x.body }); }
@@ -4392,7 +4446,7 @@ app.post(
         (attachments.length ? `<p style="color:#555;font-size:12px;">Attached: ${attachments.map((a) => escapeHtml(a.name)).join(", ")}</p>` : "");
       try {
         await sendMail({
-          to: rec.email, replyTo: [me && me.email, IT_REQUESTS_MAILBOX], saveCopy: true, attachments,
+          to: ticketTo(rec), cc: ticketCc(rec), replyTo: [me && me.email, IT_REQUESTS_MAILBOX], saveCopy: true, attachments,
           subject: `Update on your IT request — ${subjectIssue(rec.issue || "IT request")} [Ticket ${ref}]`,
           html: ticketEmailHtml(rec, me, inner),
         });
@@ -4400,7 +4454,7 @@ app.post(
         console.error("Ticket reply email failed:", err.message);
         return res.status(502).json({ error: err.reason || "Couldn't send the email" });
       }
-      entry.emailedTo = rec.email;
+      entry.emailedTo = ticketSentTo(rec);
     }
     const saved = await withItRequests((list) => {
       const r = list.find((x) => x.id === rec.id);
@@ -4434,17 +4488,17 @@ async function sendAcknowledgements() {
     const sla = itSla(settings);
     if (!sla.ackOn) return;
     const due = (await getItRequests()).filter((r) => r.status === "new" && !r.ackAt && !r.firstResponseAt && !r.archived && !r.duplicateOf &&
-      r.source !== "import" && (r.addedAt || 0) >= sla.since && Date.now() - (r.addedAt || 0) >= sla.ackMinutes * 60000 && r.email && EMAIL_OK.test(r.email)).slice(0, 10);
+      r.source !== "import" && (r.addedAt || 0) >= sla.since && Date.now() - (r.addedAt || 0) >= sla.ackMinutes * 60000 && ticketTo(r).length).slice(0, 10);
     for (const rec of due) {
       const ref = rec.ref || ticketRef(rec.id);
       rec.ref = ref;
       try {
         await sendMail({
-          to: rec.email, replyTo: [IT_REQUESTS_MAILBOX], saveCopy: true,
+          to: ticketTo(rec), cc: ticketCc(rec), replyTo: [IT_REQUESTS_MAILBOX], saveCopy: true,
           subject: `We got your IT request — ${subjectIssue(rec.issue || "IT request")} [Ticket ${ref}]`,
           html: ticketEmailHtml(rec, null, `<p>Thanks for letting us know. We've got your IT request${rec.submittedAt ? " from " + escapeHtml(String(rec.submittedAt).slice(0, 16)) : ""} and we're working on it. We'll email you as soon as there's an update.</p>`),
         });
-        await withItRequests((list) => { const r = list.find((x) => x.id === rec.id); if (r && !r.ackAt) { r.ackAt = Date.now(); r.ref = ref; pushActivity(r, { type: "ack", text: "Automatic “we got your ticket” email", by: "tracker", emailedTo: rec.email }); } });
+        await withItRequests((list) => { const r = list.find((x) => x.id === rec.id); if (r && !r.ackAt) { r.ackAt = Date.now(); r.ref = ref; pushActivity(r, { type: "ack", text: "Automatic “we got your ticket” email", by: "tracker", emailedTo: ticketSentTo(rec) }); } });
       } catch (err) {
         console.error(`Acknowledgement for ${rec.id} failed (will retry):`, err.message);
         break;
@@ -4766,6 +4820,16 @@ async function syncItRequests() {
   return itSync;
 }
 
+// Logins with an email, to pick people for a ticket (IT → Requests).
+app.get(
+  "/api/it-requests/people",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!canSeeItRequests(req.user)) return res.status(403).json({ error: "Only IT can see this" });
+    const users = (await getUsers()).map(normalizeUser).filter((u) => u.email && EMAIL_OK.test(u.email));
+    res.json(users.map((u) => ({ username: u.username, email: u.email.toLowerCase() })).sort((a, b) => a.username.localeCompare(b.username)));
+  })
+);
 // A ticket added by hand on IT → Requests (a call, a walk-up, a Teams
 // message): a request record like a form one. Anyone who can see Requests
 // can add one.
@@ -4778,14 +4842,22 @@ app.post(
     const text = (v, n) => String(v == null ? "" : v).replace(/\s+/g, " ").trim().slice(0, n);
     const issue = String(b.issue || "").trim().slice(0, 1000);
     if (!issue) return res.status(400).json({ error: "Describe the issue" });
-    const name = text(b.name, 80), email = text(b.email, 120).toLowerCase();
+    let name = text(b.name, 80), email = text(b.email, 120).toLowerCase(), also = [], cc = [];
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "That email doesn't look right" });
+    // Several people (the first is the requester) and people to copy in.
+    if (Array.isArray(b.people) || Array.isArray(b.cc)) {
+      const users = (await getUsers()).map(normalizeUser);
+      const p = cleanTicketPeople(b.people, users), c = cleanTicketPeople(b.cc, users);
+      if (p.error || c.error) return res.status(400).json({ error: p.error || c.error });
+      if (p.people.length) { name = p.people[0].name; email = p.people[0].email; also = p.people.slice(1); }
+      cc = c.people;
+    }
     const priority = IT_PRIORITIES.includes(b.priority) ? b.priority : "";
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const rec = {
       id: "manual-" + id, formId: null, source: "manual",
       submittedAt: officeStamp(new Date().toISOString()),
-      name, email, phone: text(b.phone, 40), company: text(b.company, 40), remote: "", issue, startedOn: "",
+      name, email, also, cc, phone: text(b.phone, 40), company: text(b.company, 40), remote: "", issue, startedOn: "",
       urgency: "", contact: text(b.contact, 60), notes: "",
       priority, status: "new", taskId: "", addedAt: Date.now(), addedBy: req.user.username,
     };

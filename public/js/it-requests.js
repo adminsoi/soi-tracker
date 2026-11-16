@@ -284,6 +284,7 @@ function renderItRequests() {
         (can ? '<td class="center"><input type="checkbox" class="check" data-itr-pick="' + E(r.id) + '"' + (on ? " checked" : "") + ' aria-label="Select this request"></td>' : "") +
         "<td>" + when(r.submittedAt) + "</td>" +
         '<td><button type="button" class="itr-person" data-itr-who="' + E(r.pkey) + '">' + E(itrPerson(r)) + "</button>" +
+          ((r.also || []).length || (r.cc || []).length ? '<span class="co-note">' + E(((r.also || []).length ? "+ " + r.also.map(function (p) { return p.name; }).join(", ") : "") + ((r.cc || []).length ? ((r.also || []).length ? " · " : "") + "cc " + r.cc.map(function (p) { return p.name; }).join(", ") : "")) + "</span>" : "") +
           '<span class="co-note">' + E([r.company, r.remote === "Yes" ? "Remote" : ""].filter(Boolean).join(" · ")) + "</span></td>" +
         '<td><button type="button" class="itr-issue itr-open" data-itr-open="' + E(r.id) + '" title="Open the ticket">' + E(r.issue || "—") + "</button>" +
           ((r.activity || []).length ? '<span class="co-note">' + (r.activity || []).filter(function (a) { return a.type === "reply" || a.type === "note"; }).length + " notes / replies" + (r.ackAt ? " · auto-acknowledged" : "") + "</span>" : "") +
@@ -396,7 +397,7 @@ function renderItBoard(list, can) {
 // The card itself.
 function itrCompose() { return itr.compose || (itr.compose = { kind: "reply", text: "", files: [], kbId: "" }); }
 function openItCard(id) { itr.open = id; itr.compose = null; drawItCard(); if (itr.data && itr.data.notebook && !itr.kbList) api("/api/it-notebook").then(function (d) { itr.kbList = d.articles || []; if (itr.open) drawItCard(); }, function () { itr.kbList = []; }); }
-function closeItCard() { itr.open = ""; itr.compose = null; var b = $("#itCard"); if (b) b.remove(); }
+function closeItCard() { itr.pe = null; itr.open = ""; itr.compose = null; var b = $("#itCard"); if (b) b.remove(); }
 function drawItCard() {
   var r = itr.data && itr.data.requests.filter(function (x) { return x.id === itr.open; })[0];
   if (!r) { closeItCard(); return; }
@@ -418,24 +419,28 @@ function drawItCard() {
   var kbs = (itr.kbList || []);
   var html = '<div class="rs-modal" data-itcard><div class="rs-card tk-card-modal" role="dialog" aria-modal="true" aria-labelledby="itcT">' +
     '<div class="brd-case-head"><div><div class="eyebrow">IT ticket' + (r.ref ? " · " + E(r.ref) : "") + " · " + E(r.company || "SOI") + '</div><h3 id="itcT">' + E(subjectIssue(r.issue || "IT request")) + "</h3>" +
-      '<div class="small-note">' + E(itrPerson(r)) + " · submitted " + E(when(itrStart(r))) + (r.urgency ? " · form says " + E(r.urgency) : "") + "</div></div>" +
+      '<div class="small-note">' + E(itrPeopleLine(r)) + " · submitted " + E(when(itrStart(r))) + (r.urgency ? " · form says " + E(r.urgency) : "") + "</div></div>" +
       '<button type="button" class="text-button" data-itc-close>Close ✕</button></div>' +
     '<div class="tk-meta">' +
       (can ? '<label>Status ' + pick("status", [["new", "New"], ["progress", "In progress"], ["done", "Resolved"]], r.status) + "</label>" +
         '<label>Priority ' + pick("priority", [["", "Not rated"]].concat(IT_PRIOS.map(function (p) { return [p.id, p.label]; })), r.priority || "") + "</label>" : "<span>" + E(IT_STATUS_LABEL[r.status]) + "</span>") +
-      '<span class="tk-contact">' + E(r.email || "no email") + (can ? ' <button type="button" class="text-button" data-itr-email="' + E(r.id) + '">✎</button>' : "") + (r.phone ? " · " + E(r.phone) : "") + (r.contact ? " · prefers " + E(r.contact) : "") + "</span>" +
+      '<span class="tk-contact">' + E(itrSentTo(r) || "no email") + (can ? ' <button type="button" class="text-button" data-itc-people="' + E(r.id) + '" title="Add or remove people and CC">✎ People</button>' : "") + (r.phone ? " · " + E(r.phone) : "") + (r.contact ? " · prefers " + E(r.contact) : "") + "</span>" +
       '<span class="tk-sla">' + itrSlaChip(s.resp, "Response target") + itrSlaChip(s.resol, "Resolution target") + "</span></div>" +
+    (itr.pe && itr.pe.id === r.id ? '<div class="tk-people-edit">' + itrPpDatalist() +
+      '<div class="nb-field"><label>People on this ticket</label>' + itrPicker("card", "people") + "</div>" +
+      '<div class="nb-field"><label>CC</label>' + itrPicker("card", "cc") + "</div>" +
+      '<div class="nb-foot"><button type="button" class="primary" data-itc-people-save>Save people</button><button type="button" class="text-button" data-itc-people-cancel>Cancel</button><span class="small-note">Everyone here gets the ticket\'s emails from now on.</span></div></div>' : "") +
     '<div class="tk-issue-full">' + E(r.issue || "No description.") + (r.notes ? "\n\n" + E(r.notes) : "") + "</div>" +
     '<div class="card-label" style="margin-top:14px;">Activity</div><div class="tk-timeline">' + events.map(ev).join("") + "</div>" +
     (can ? '<div class="tk-compose">' +
-      '<div class="seg"><button type="button" data-itc-kind="reply" class="' + (c.kind === "reply" ? "active" : "") + '">Email the requester</button><button type="button" data-itc-kind="note" class="' + (c.kind === "note" ? "active" : "") + '">Internal work note</button></div>' +
-      '<p class="small-note" style="margin:6px 0;">' + (c.kind === "reply" ? (r.email ? "Sent to " + E(r.email) + " as soon as you post it, with the ticket number so their reply comes back here." : "This ticket has no email — fix it with ✎, or add an internal note.") : "Only IT sees work notes; nothing is emailed.") + "</p>" +
+      '<div class="seg"><button type="button" data-itc-kind="reply" class="' + (c.kind === "reply" ? "active" : "") + '">' + ((r.also || []).length ? "Email everyone on it" : "Email the requester") + '</button><button type="button" data-itc-kind="note" class="' + (c.kind === "note" ? "active" : "") + '">Internal work note</button></div>' +
+      '<p class="small-note" style="margin:6px 0;">' + (c.kind === "reply" ? (itrSentTo(r) ? "Sent to " + E(itrSentTo(r)) + " as soon as you post it, with the ticket number so their reply comes back here." : "This ticket has no email — fix it with ✎, or add an internal note.") : "Only IT sees work notes; nothing is emailed.") + "</p>" +
       '<textarea id="itcText" rows="4" placeholder="' + (c.kind === "reply" ? "Update for the requester…" : "What you checked, what you tried, what's next…") + '">' + E(c.text) + "</textarea>" +
       '<div class="tk-compose-row">' +
         (c.files.length ? c.files.map(function (f) { return '<span class="fchip">📎 ' + E(f.name) + '<button type="button" data-itc-unfile="' + E(f.id) + '" aria-label="Remove">×</button></span>'; }).join("") : "") +
         '<input type="file" id="itcFile" multiple hidden><button type="button" data-itc-attach>📎 Attach files</button>' +
         (itr.data.notebook ? '<select data-itc-kb aria-label="Include a KB article"><option value="">Include a KB article…</option>' + kbs.map(function (a) { return '<option value="' + E(a.id) + '"' + (a.id === c.kbId ? " selected" : "") + ">KB-" + String(a.kb).padStart(4, "0") + " · " + E(a.title) + "</option>"; }).join("") + "</select>" : "") +
-        '<span class="grow"></span><button type="button" class="primary" data-itc-post' + (itr.posting ? " disabled" : "") + ">" + (itr.posting ? "Sending…" : c.kind === "reply" ? "Send to requester" : "Add work note") + "</button></div></div>" : "") +
+        '<span class="grow"></span><button type="button" class="primary" data-itc-post' + (itr.posting ? " disabled" : "") + ">" + (itr.posting ? "Sending…" : c.kind === "reply" ? ((r.also || []).length || (r.cc || []).length ? "Send to everyone" : "Send to requester") : "Add work note") + "</button></div></div>" : "") +
     '<div class="tk-foot">' + (can && r.status !== "done" ? '<button type="button" data-itc-resolve>Resolve…</button>' : "") +
       (itr.data.notebook ? '<button type="button" data-itc-kbnew>Write a KB article from this ticket</button>' : "") +
       (files.length ? '<span class="small-note">Files: ' + files.map(function (f) { return '<button type="button" class="text-button" data-itf-dl="' + E(f.id) + '">' + E(f.name) + "</button>"; }).join(", ") + "</span>" : "") + "</div>" +
@@ -517,16 +522,123 @@ document.addEventListener("click", function (e) {
 });
 document.addEventListener("keydown", function (e) { if (e.key === "Escape" && itr.open && $("#itCard")) closeItCard(); });
 
+// ---- People on a ticket ----
+// A ticket can have several people (the first is the requester) and people
+// copied in. Everyone on it gets the ticket's emails; CC is copied. Pick a
+// login or someone from an earlier ticket, or type "Name <email>" or just
+// an email. A name on its own is kept but not emailed.
+var itrPp = { logins: null, loading: false };
+function itrPpSuggest() {
+  if (!itrPp.logins && !itrPp.loading) {
+    itrPp.loading = true;
+    api("/api/it-requests/people").then(function (l) { itrPp.logins = l; }, function () { itrPp.logins = []; })
+      .then(function () { itrPp.loading = false; if (itr.open && $("#itCard")) drawItCard(); else requestRender(); });
+  }
+  var out = [], seen = {};
+  var add = function (name, email) { email = String(email || "").toLowerCase(); if (!email || seen[email]) return; seen[email] = 1; out.push({ name: name || email.split("@")[0], email: email }); };
+  (itrPp.logins || []).forEach(function (u) { add(u.username.charAt(0).toUpperCase() + u.username.slice(1), u.email); });
+  ((itr.data && itr.data.requests) || []).forEach(function (r) { add(r.name, r.email); (r.also || []).concat(r.cc || []).forEach(function (p) { add(p.name, p.email); }); });
+  return out;
+}
+function itrPpParse(text) {
+  var t = String(text || "").trim().replace(/[,;]+$/, "").trim();
+  if (!t) return null;
+  var m = t.match(/^(.*?)\s*<([^>]+)>$/);
+  if (m) return { name: m[1].trim() || m[2].split("@")[0], email: m[2].trim().toLowerCase() };
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t)) {
+    var known = itrPpSuggest().filter(function (p) { return p.email === t.toLowerCase(); })[0];
+    return known || { name: t.split("@")[0], email: t.toLowerCase() };
+  }
+  var byName = itrPpSuggest().filter(function (p) { return p.name.toLowerCase() === t.toLowerCase(); });
+  if (byName.length === 1) return byName[0];
+  return { name: t, email: "" };
+}
+function itrPpList(ctx, key) {
+  if (ctx === "form") return itr.form[key] || (itr.form[key] = []);
+  return itr.pe ? itr.pe[key] : [];
+}
+function itrPicker(ctx, key) {
+  var list = itrPpList(ctx, key), id = ctx + "|" + key;
+  return '<div class="pp">' + list.map(function (p, i) {
+    return '<span class="fchip pp-chip' + (p.email ? "" : " pp-noemail") + '" title="' + E(p.email || "No email — not emailed") + '">' + E(p.name) + (ctx + key === "formpeople" || ctx + key === "cardpeople" ? (i === 0 ? ' <small>requester</small>' : "") : "") +
+      (p.email ? "" : " <small>no email</small>") + '<button type="button" data-pp-rm="' + E(id + "|" + i) + '" aria-label="Remove ' + E(p.name) + '">✕</button></span>';
+  }).join("") +
+    '<input list="itrPpList" data-pp-in="' + E(id) + '" placeholder="' + (list.length ? "Add another…" : "Type a name or email, then Enter") + '" autocomplete="off" aria-label="' + (key === "cc" ? "Add someone to copy in" : "Add someone to this ticket") + '"></div>';
+}
+function itrPpDatalist() {
+  return '<datalist id="itrPpList">' + itrPpSuggest().map(function (p) { return '<option value="' + E(p.name + " <" + p.email + ">") + '">'; }).join("") + "</datalist>";
+}
+function itrPpRedraw(ctx, key) {
+  if (ctx === "card") drawItCard(); else render();
+  var el = document.querySelector('[data-pp-in="' + ctx + "|" + key + '"]'); if (el) el.focus();
+}
+function itrPpAdd(input) {
+  var parts = input.dataset.ppIn.split("|"), p = itrPpParse(input.value);
+  if (!p) return false;
+  var list = itrPpList(parts[0], parts[1]);
+  if (list.some(function (x) { return (p.email && x.email === p.email) || (!p.email && x.name.toLowerCase() === p.name.toLowerCase()); })) { input.value = ""; return true; }
+  list.push(p); input.value = "";
+  itrPpRedraw(parts[0], parts[1]);
+  return true;
+}
+document.addEventListener("keydown", function (e) {
+  var t = e.target;
+  if (!t.dataset || !t.dataset.ppIn) return;
+  if (e.key === "Enter" || e.key === "," || e.key === ";") { if (t.value.trim()) { e.preventDefault(); itrPpAdd(t); } else if (e.key === "Enter") e.preventDefault(); }
+  else if (e.key === "Backspace" && !t.value) {
+    var parts = t.dataset.ppIn.split("|"), list = itrPpList(parts[0], parts[1]);
+    if (list.length) { list.pop(); itrPpRedraw(parts[0], parts[1]); }
+  }
+});
+// Picking from the suggestions adds them straight away.
+document.addEventListener("input", function (e) { var t = e.target; if (t.dataset && t.dataset.ppIn && /<[^>]+@[^>]+>$/.test(t.value)) itrPpAdd(t); });
+document.addEventListener("focusout", function (e) { var t = e.target; if (t.dataset && t.dataset.ppIn && t.value.trim()) setTimeout(function () { if (document.body.contains(t)) itrPpAdd(t); }, 0); });
+document.addEventListener("click", function (e) {
+  var t = e.target.closest && e.target.closest("[data-pp-rm],[data-itc-people],[data-itc-people-save],[data-itc-people-cancel]");
+  if (!t) return;
+  var ds = t.dataset;
+  if (ds.ppRm) { var p = ds.ppRm.split("|"); itrPpList(p[0], p[1]).splice(+p[2], 1); itrPpRedraw(p[0], p[1]); return; }
+  if (ds.itcPeople) {
+    var r = itr.data.requests.filter(function (x) { return x.id === ds.itcPeople; })[0];
+    itr.pe = { id: r.id, people: [{ name: r.name || (r.email || "").split("@")[0], email: r.email || "" }].filter(function (p) { return p.name || p.email; }).concat((r.also || []).map(function (p) { return { name: p.name, email: p.email }; })),
+      cc: (r.cc || []).map(function (p) { return { name: p.name, email: p.email }; }) };
+    drawItCard(); var el = document.querySelector('[data-pp-in="card|people"]'); if (el) el.focus();
+    return;
+  }
+  if ("itcPeopleCancel" in ds) { itr.pe = null; drawItCard(); return; }
+  if ("itcPeopleSave" in ds) {
+    var pe = itr.pe;
+    document.querySelectorAll("[data-pp-in]").forEach(function (i) { if (i.value.trim()) itrPpAdd(i); });
+    pe = itr.pe;
+    if (!pe.people.length) { toast("A ticket needs at least one person.", true); return; }
+    t.disabled = true;
+    api("/api/it-requests/" + encodeURIComponent(pe.id), { method: "PATCH", body: JSON.stringify({ people: pe.people, cc: pe.cc }) }).then(function (res) {
+      var rec = itr.data.requests.filter(function (x) { return x.id === pe.id; })[0], nu = res.requests && res.requests[0];
+      if (rec && nu) Object.assign(rec, nu);
+      itr.pe = null; toast("People updated."); drawItCard(); render();
+    }, function (err) { t.disabled = false; toast(err.message, true); });
+  }
+});
+function itrPeopleLine(r) {
+  var to = [r.name || r.email || "Unknown"].concat((r.also || []).map(function (p) { return p.name; }));
+  return to.join(", ") + ((r.cc || []).length ? " · cc " + r.cc.map(function (p) { return p.name; }).join(", ") : "");
+}
+function itrSentTo(r) {
+  var to = [r.email].concat((r.also || []).map(function (p) { return p.email; })).filter(Boolean);
+  var cc = (r.cc || []).map(function (p) { return p.email; }).filter(function (e) { return e && to.indexOf(e) === -1; });
+  return to.join(", ") + (cc.length ? " (cc " + cc.join(", ") + ")" : "");
+}
+
 // A ticket that didn't come through the form (a call, a walk-up, Teams).
 function itrAddForm(plist) {
   var f = itr.form;
   var field = function (key, label, html) { return '<div class="nb-field"><label for="itf-' + key + '">' + label + "</label>" + html + "</div>"; };
   var inp = function (key, type, ph, extra) { return '<input id="itf-' + key + '" type="' + type + '" data-itr-f="' + key + '" value="' + E(f[key] || "") + '" placeholder="' + E(ph) + '" autocomplete="off"' + (extra || "") + ">"; };
   return '<div class="card" style="margin-bottom:14px;padding:20px 22px;"><div class="card-label">New ticket</div>' +
-    '<datalist id="itrPeople">' + plist.map(function (p) { return '<option value="' + E(p.name) + '">'; }).join("") + "</datalist>" +
+    itrPpDatalist() +
+    '<div class="nb-field"><label>People on this ticket</label>' + itrPicker("form", "people") + '<span class="small-note">The first person is the requester. Everyone here gets the ticket\'s emails — updates, “we got your ticket” and Resolved.</span></div>' +
+    '<div class="nb-field"><label>CC <span class="opt">optional</span></label>' + itrPicker("form", "cc") + '<span class="small-note">Copied on every email about this ticket.</span></div>' +
     '<div class="grid-2" style="gap:0 16px;">' +
-      field("name", "Who's it for", inp("name", "text", "Name", ' list="itrPeople"')) +
-      field("email", "Email (optional)", inp("email", "email", "name@soiaviation.com")) +
       field("company", "Company", '<select id="itf-company" data-itr-f="company">' + ["SOI", "CAS", "RedSun", "NanoTech"].map(function (c) {
         return '<option' + ((f.company || "SOI") === c ? " selected" : "") + ">" + c + "</option>"; }).join("") + "</select>") +
       field("priority", "Priority", '<select id="itf-priority" data-itr-f="priority"><option value="">Rate later</option>' + IT_PRIOS.map(function (p) {
@@ -584,7 +696,8 @@ function resolveDialog(ids) {
     // One ticket: the address can be fixed here (it's saved on the ticket).
     (one ? '<div class="rs-email"><label class="small-note" style="display:flex;gap:7px;align-items:center;"><input type="checkbox" class="check" id="rsNotify"' + (one.email ? " checked" : "") + "> <span>Email the requester at</span></label>" +
         '<input id="rsEmail" type="email" value="' + E(one.email || "") + '" placeholder="name@company.com" aria-label="Requester email">' +
-        '<span class="small-note">Wrong address? Fix it here — it\'s saved on the ticket. Replies come to you and show up on the ticket.</span></div>' +
+        '<span class="small-note">Wrong address? Fix it here — it\'s saved on the ticket. Replies come to you and show up on the ticket.' +
+        ((one.also || []).length || (one.cc || []).length ? " Also sent to " + E(itrPeopleLine(Object.assign({}, one, { name: "" })).replace(/^, /, "")) + "." : "") + "</span></div>" +
         '<div class="rs-preview" id="rsPreview" aria-live="polite"></div>'
     : withEmail.length ? '<label class="small-note" style="display:flex;gap:7px;align-items:flex-start;margin-top:4px;"><input type="checkbox" class="check" id="rsNotify" checked> <span>Email ' + (withEmail.length === 1 ? E(withEmail[0].email) : withEmail.length + " requesters") + " — replies come to you and show up on the ticket here.</span></label>" +
         (withEmail.length < list.length ? '<p class="small-note" style="margin:6px 0 0;">' + (list.length - withEmail.length) + " without an email won't be emailed.</p>" : "") +
@@ -699,13 +812,14 @@ document.addEventListener("click", function (e) {
   if ("itrKeep" in ds) { changeItRequests([ds.itrKeep], { replySeen: true, replyPending: false }); return; }
   if ("itrReplied" in ds) { itr.tab = "done"; itr.person = ""; render(); return; }
   if (t.id === "itrImport") { $("#itrFile").click(); return; }
-  if ("itrAdd" in ds) { itr.adding = true; render(); var n = $("#itf-name"); if (n) n.focus(); return; }
+  if ("itrAdd" in ds) { itr.adding = true; render(); var n = document.querySelector('[data-pp-in="form|people"]'); if (n) n.focus(); return; }
   if ("itrCancel" in ds) { itr.adding = false; itr.form = {}; render(); return; }
   if ("itrSave" in ds) {
     var f = itr.form;
     if (!String(f.issue || "").trim()) { toast("Describe the issue first.", true); var iss = $("#itf-issue"); if (iss) iss.focus(); return; }
     itr.saving = true; render();
-    api("/api/it-requests", { method: "POST", body: JSON.stringify({ name: f.name, email: f.email, company: f.company || "SOI", priority: f.priority, issue: f.issue }) }).then(function () {
+    document.querySelectorAll('[data-pp-in^="form|"]').forEach(function (i) { if (i.value.trim()) itrPpAdd(i); });
+    api("/api/it-requests", { method: "POST", body: JSON.stringify({ people: f.people || [], cc: f.cc || [], company: f.company || "SOI", priority: f.priority, issue: f.issue }) }).then(function () {
       itr.saving = false; itr.adding = false; itr.form = {}; itr.tab = "new"; itr.at = 0;
       toast("Ticket added.");
       render(); refresh();
