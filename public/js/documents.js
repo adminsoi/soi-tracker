@@ -325,7 +325,7 @@ document.addEventListener("click", function (e) {
       { url: "/api/tasks/" + encodeURIComponent(p.id) + "/files/" + encodeURIComponent(f.id) + "/view" });
     return;
   }
-  if (!confirm("Remove " + f.name + " from this project? The original stays in Documents.")) return;
+  if (!confirm("Remove " + f.name + " from this task? The copy in Documents stays.")) return;
   api("/api/tasks/" + encodeURIComponent(p.id) + "/files/" + encodeURIComponent(f.id), { method: "DELETE" })
     .then(function () { p.files = p.files.filter(function (x) { return x !== f; }); toast("Removed."); render(); }, function (err) { toast(err.message, true); });
 });
@@ -556,4 +556,52 @@ document.addEventListener("click", function (e) {
   var t = e.target.closest && e.target.closest("[data-dc-req-goto]");
   if (!t) return;
   dcs.tab = "access"; dcs.access = null; go("documents");
+});
+
+// 📎 Add document on a task, and Push to SOP (departments.js draws them).
+function taskById(id) { return tasks.filter(function (x) { return x.id === id; })[0]; }
+function taskUpload(t, list) {
+  var files = Array.prototype.slice.call(list || []);
+  if (!files.length) return;
+  setSync("busy", "Uploading…");
+  var next = function () {
+    var f = files.shift();
+    if (!f) { setSync("on", "Live"); render(); return; }
+    fetch("/api/tasks/" + encodeURIComponent(t.id) + "/files?name=" + encodeURIComponent(f.name), { method: "POST", headers: { Authorization: "Bearer " + token(), "Content-Type": "application/octet-stream" }, body: f })
+      .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "Upload failed"); return d; }); })
+      .then(function (meta) {
+        t.files = (t.files || []).concat([meta]);
+        toast(meta.docPath ? "Added. Also filed in Documents › " + meta.docPath : "Added to the task.");
+      }, function (err) { toast(f.name + ": " + err.message, true); })
+      .then(next);
+  };
+  next();
+}
+document.addEventListener("click", function (e) {
+  var b = e.target.closest && e.target.closest("[data-task-file],[data-task-sop]");
+  if (!b) return;
+  if (b.dataset.taskFile) {
+    var inp = document.querySelector('[data-task-file-in="' + b.dataset.taskFile + '"]');
+    if (inp) inp.click();
+    return;
+  }
+  var ids = b.dataset.taskSop.split("|"), t = taskById(ids[0]);
+  var f = t && (t.files || []).filter(function (x) { return x.id === ids[1]; })[0];
+  if (!f) return;
+  dcAsk("Push to SOP: " + f.name + "\n\nThis proposes it as a new SOP for " + shortDept(t.department) + ". Every Leadership login has to approve it before it's added to the department's SOPs.", "SOP title", f.name.replace(/\.pdf$/i, ""), function (title) {
+    api("/api/tasks/" + encodeURIComponent(t.id) + "/files/" + encodeURIComponent(f.id) + "/push-sop", { method: "POST", body: JSON.stringify({ title: title }) })
+      .then(function (r) {
+        f.sopRequest = r.id; f.sopStatus = "pending";
+        toast("Sent to Leadership. It's added to the SOPs once everyone approves.");
+        if (typeof loadSopRequests === "function") { sopReq.at = 0; loadSopRequests(); }
+        render();
+      }, function (err) { toast(err.message, true); });
+  });
+});
+document.addEventListener("change", function (e) {
+  var inp = e.target.closest && e.target.closest("[data-task-file-in]");
+  if (!inp) return;
+  var t = taskById(inp.dataset.taskFileIn);
+  if (t) taskUpload(t, inp.files);
+  inp.value = "";
 });

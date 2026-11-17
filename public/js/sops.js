@@ -223,7 +223,20 @@ function loadSopRequests() {
 }
 function sopReqFresh() { if (!sopReq.loading && (!sopReq.data || Date.now() - sopReq.at > 60000)) loadSopRequests(); }
 var SOP_REQ_STATUS = { pending: ["Waiting for Leadership", "lg-soon"], approving: ["Being approved", "lg-soon"], approved: ["Approved", "sop-ok"], declined: ["Declined", "lg-expired"], withdrawn: ["Withdrawn", ""] };
-function sopReqPill(r) { var s = SOP_REQ_STATUS[r.status] || [r.status, ""]; return '<span class="lg-pill ' + s[1] + '">' + E(s[0]) + "</span>"; }
+function sopReqPill(r) {
+  var s = SOP_REQ_STATUS[r.status] || [r.status, ""], label = s[0];
+  if (r.needAll && r.status === "pending" && r.needed) label += " · " + (r.needed.length - r.waitingOn.length) + " of " + r.needed.length + " approved";
+  return '<span class="lg-pill ' + s[1] + '">' + E(label) + "</span>";
+}
+// Pushed from a task: needs every Leadership login. Who has, who hasn't.
+function sopReqAll(r) {
+  if (!r.needAll) return "";
+  var done = (r.approvals || []).map(function (a) { return a.by; });
+  return '<p class="small-note" style="margin:6px 0 0;">' + (r.fromTask ? "From the task “" + E(r.fromTask.title || "task") + "”. " : "") +
+    "Needs every Leadership login to approve; one decline stops it." +
+    (done.length ? " Approved by " + E(done.join(", ")) + "." : "") +
+    (r.status === "pending" && r.waitingOn && r.waitingOn.length ? " Waiting on " + E(r.waitingOn.join(", ")) + "." : "") + "</p>";
+}
 
 // The form, opened from a department's SOPs ("Propose a change" or a row's button).
 function sopProposeForm(dept, d) {
@@ -281,13 +294,14 @@ function sopReqCard(r) {
   var dec = r.canDecide ? '<div class="grid-2" style="gap:0 16px;margin-top:10px;">' +
       (r.file ? '<div class="nb-field"><label for="sopRv' + E(r.id) + '">Version label for the new PDF</label><input id="sopRv' + E(r.id) + '" placeholder="e.g. v3" autocomplete="off"></div>' : "") +
       '<div class="nb-field"><label for="sopRn' + E(r.id) + '">Note (needed to decline)</label><textarea id="sopRn' + E(r.id) + '" rows="2">' + E(sopReq.notes[r.id] || "") + "</textarea></div></div>" +
-      '<div class="nb-foot"><button type="button" class="primary" data-sop-rapprove="' + E(r.id) + '">Approve' + (r.file ? (r.kind === "new" ? " and add the SOP" : " and make it the new version") : "") + '</button><button type="button" data-sop-rdecline="' + E(r.id) + '">Decline</button></div>' : "";
+      '<div class="nb-foot"><button type="button" class="primary" data-sop-rapprove="' + E(r.id) + '">Approve' + (r.needAll && r.waitingOn && r.waitingOn.length > 1 ? "" : r.file ? (r.kind === "new" ? " and add the SOP" : " and make it the new version") : "") + '</button><button type="button" data-sop-rdecline="' + E(r.id) + '">Decline</button></div>' : "";
   var own = r.mine && r.status === "pending" ? '<div class="nb-foot"><input type="file" accept="application/pdf,.pdf" hidden data-sop-rattach-in="' + E(r.id) + '">' +
       '<button type="button" data-sop-rattach="' + E(r.id) + '">' + (r.file ? "Replace PDF" : "Attach PDF") + '</button><button type="button" class="text-button" data-sop-rwithdraw="' + E(r.id) + '">Withdraw</button></div>' : "";
   return '<div class="card" style="padding:14px 16px;margin-bottom:10px;">' +
     '<div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;"><b>' + E(r.kind === "new" ? "New SOP: " + (r.sopLabel || r.title) : r.sopLabel || "SOP") + "</b>" +
     '<span class="small-note">' + E(r.dept === "*" ? "Every department" : shortDept(r.dept)) + " · " + E(r.by) + " · " + E(new Date(r.at).toLocaleDateString()) + "</span>" + sopReqPill(r) + "</div>" +
     '<div class="nb-read" style="margin-top:8px;"><p class="small-note" style="margin:0;">What should change</p>' + nbFormat(r.what) + (r.why ? '<p class="small-note" style="margin:6px 0 0;">Why</p>' + nbFormat(r.why) : "") + "</div>" +
+    sopReqAll(r) +
     (r.file ? '<p style="margin:6px 0 0;"><button type="button" class="text-button" data-sop-rview="' + E(r.id) + '">📄 ' + E(r.file.name) + "</button></p>" : '<p class="small-note" style="margin:6px 0 0;">No PDF attached.</p>') +
     (r.decidedBy && r.status !== "pending" ? '<p class="small-note" style="margin:6px 0 0;">' + E(SOP_REQ_STATUS[r.status][0]) + " by " + E(r.decidedBy) + " · " + E(new Date(r.decidedAt).toLocaleDateString()) +
       (r.status === "approved" ? (r.applied ? " · the PDF is now the SOP's current version" : " · a department manager adds the new PDF with New version") : "") + "</p>" +
@@ -302,7 +316,8 @@ function sopApprovals() {
   return '<div class="card" style="padding:16px 18px;margin-bottom:16px;"><div class="card-label">SOP changes waiting for your decision</div><ul class="lg-due-list">' +
     list.map(function (r) {
       return '<li><button type="button" class="text-button" data-sop-rgoto>' + E(r.kind === "new" ? "New SOP: " + (r.sopLabel || r.title) : r.sopLabel) + "</button> " +
-        '<span class="small-note">' + E(r.dept === "*" ? "Every department" : shortDept(r.dept)) + " · from " + E(r.by) + " · " + E(new Date(r.at).toLocaleDateString()) + "</span></li>";
+        '<span class="small-note">' + E(r.dept === "*" ? "Every department" : shortDept(r.dept)) + " · from " + E(r.by) + " · " + E(new Date(r.at).toLocaleDateString()) +
+        (r.needAll && r.needed ? " · needs all Leadership: " + (r.needed.length - r.waitingOn.length) + " of " + r.needed.length + " approved" : "") + "</span></li>";
     }).join("") + "</ul></div>";
 }
 function sopVersionsRow(x) {
@@ -326,9 +341,11 @@ document.addEventListener("click", function (e) {
   if ((ds.sopRapprove || ds.sopRdecline) && r) {
     var approve = !!ds.sopRapprove, note = ($("#sopRn" + r.id) || {}).value || "", version = ($("#sopRv" + r.id) || {}).value || "";
     if (!approve && !note.trim()) { toast("Write a note saying why it's declined.", true); return; }
-    if (approve && !confirm(r.file ? "Approve? The attached PDF becomes " + (r.kind === "new" ? "a new SOP" : "the SOP's current version (the old one is kept)") + "." : "Approve? No PDF is attached, so a department manager will add the new version.")) return;
+    var partial = r.needAll && r.waitingOn && r.waitingOn.length > 1;
+    if (approve && partial && !confirm("Approve? It still needs " + (r.waitingOn.length - 1) + " more Leadership approval" + (r.waitingOn.length === 2 ? "" : "s") + " before it's added to the SOPs.")) return;
+    if (approve && !partial && !confirm(r.file ? "Approve? The attached PDF becomes " + (r.kind === "new" ? "a new SOP" : "the SOP's current version (the old one is kept)") + "." : "Approve? No PDF is attached, so a department manager will add the new version.")) return;
     api("/api/sop-requests/" + encodeURIComponent(r.id) + "/decide", { method: "POST", body: JSON.stringify({ approve: approve, note: note, version: version }) }).then(function () {
-      delete sopReq.notes[r.id]; toast(approve ? "Approved." : "Declined."); Object.keys(sopData).forEach(function (k) { sopData[k].at = 0; }); loadSopRequests(); loadMineCount();
+      delete sopReq.notes[r.id]; toast(approve ? (partial ? "Approved. Waiting on the rest of Leadership." : "Approved.") : "Declined."); Object.keys(sopData).forEach(function (k) { sopData[k].at = 0; }); loadSopRequests(); loadMineCount();
     }, function (err) { toast(err.message, true); });
     return;
   }

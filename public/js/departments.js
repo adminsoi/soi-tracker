@@ -337,7 +337,7 @@ function opsRow(t) {
     ? '<span class="static"><strong>' + E(t.docLabel + " " + t.docNo) + '</strong><span class="src">PENTAGON</span></span>'
     : input(t, "title", t.title, "text", "Task", ed);
   return '<tr class="' + cls + '">' +
-    "<td>" + nameCell + coNote(t) + addedNote(t) + "</td>" +
+    "<td>" + nameCell + coNote(t) + addedNote(t) + taskDocs(t, ed) + "</td>" +
     "<td>" + (card ? staticCell(t.part) : input(t, "part", t.part, "text", "Part number", ed)) + "</td>" +
     "<td>" + (card ? staticCell("") : input(t, "platform", t.platform, "text", "Aircraft", ed)) + "</td>" +
     "<td>" + (card ? staticCell(t.party) : input(t, "customer", t.customer, "text", "Customer", ed)) + "</td>" +
@@ -378,19 +378,31 @@ function projectRow(p, subs) {
     '<td class="center">' + doneToggle(p) + '</td><td class="notes-cell">' + input(p, "notes", p.notes, "textarea", "", ed) + "</td>" +
     '<td class="row-tools">' + tools + "</td></tr>";
 }
-// Documents added to a project from Documents → Add to… (copies, view-only;
-// documents.js opens and removes them).
-function projectDocs(p, ed) {
-  if (!p.files || !p.files.length) return "";
-  return '<div class="proj-docs">' + p.files.map(function (f) {
-    return '<span class="proj-doc"><button type="button" class="text-button" data-proj-doc="' + E(p.id + "|" + f.id) + '">📄 ' + E(f.name) + "</button>" +
-      (ed ? '<button type="button" class="text-button danger" data-proj-doc-del="' + E(p.id + "|" + f.id) + '" aria-label="Remove ' + E(f.name) + ' from this project">Remove</button>' : "") + "</span>";
-  }).join("") + "</div>";
+// Documents on a task: 📎 Add document (e.g. a quote) on any task you can
+// see. Each is also filed in Documents › company › department › Task
+// uploads › task name. A PDF can be pushed to the department's SOPs, which
+// needs every Leadership login to approve. documents.js opens / removes.
+var TD_SOP = { pending: "Waiting for Leadership", approved: "In SOPs ✓", declined: "SOP declined", withdrawn: "SOP withdrawn" };
+function taskDocs(t, ed) {
+  if (t.draft || isCard(t)) return "";
+  var files = t.files || [];
+  var isPdfName = function (f) { return f.type === "application/pdf" || /\.pdf$/i.test(f.name); };
+  return '<div class="proj-docs">' + files.map(function (f) {
+    var mine = sameUser(f.by, me.username);
+    var sop = f.sopStatus ? '<span class="td-sop td-' + E(f.sopStatus) + '">' + E(TD_SOP[f.sopStatus] || f.sopStatus) + "</span>" : "";
+    var push = isPdfName(f) && (!f.sopStatus || f.sopStatus === "declined" || f.sopStatus === "withdrawn")
+      ? '<button type="button" class="text-button" data-task-sop="' + E(t.id + "|" + f.id) + '" title="Propose this PDF as an SOP for ' + E(shortDept(t.department)) + '. Every Leadership login has to approve it.">Push to SOP</button>' : "";
+    return '<span class="proj-doc"><button type="button" class="text-button" data-proj-doc="' + E(t.id + "|" + f.id) + '" title="' + E(f.docPath ? "Also in Documents › " + f.docPath : f.name) + '">📄 ' + E(f.name) + "</button>" + sop + push +
+      (ed || mine ? '<button type="button" class="text-button danger" data-proj-doc-del="' + E(t.id + "|" + f.id) + '" aria-label="Remove ' + E(f.name) + ' from this task">Remove</button>' : "") + "</span>";
+  }).join("") +
+    '<span class="proj-doc"><input type="file" hidden multiple data-task-file-in="' + E(t.id) + '"><button type="button" class="text-button td-add" data-task-file="' + E(t.id) + '">📎 Add document</button></span></div>';
 }
+// Kept for anything still calling the old name.
+function projectDocs(p, ed) { return taskDocs(p, ed); }
 function subRow(s) {
   var ed = s.draft || canEditTask(s);
   var cls = (isDone(s) ? "done " : "") + (isOverdue(s) ? "overdue " : "") + (s.draft ? "draft" : "");
-  return '<tr class="' + cls + '"><td><div class="name-cell"><span class="indent">↳</span>' + input(s, "title", s.title, "text", "Sub-task", ed) + "</div>" + addedNote(s) + "</td>" +
+  return '<tr class="' + cls + '"><td><div class="name-cell"><span class="indent">↳</span>' + input(s, "title", s.title, "text", "Sub-task", ed) + "</div>" + addedNote(s) + taskDocs(s, ed) + "</td>" +
     "<td>" + responsibleCell(s) + "</td><td>" + input(s, "dueDate", s.dueDate, "date", "", ed) + "</td>" +
     '<td class="center">' + doneToggle(s) + '</td><td class="notes-cell">' + input(s, "notes", s.notes, "textarea", "", ed) + "</td>" +
     '<td class="row-tools">' + delButton(s) + "</td></tr>";
@@ -448,7 +460,7 @@ function srcNote(t) {
 function taskRow(t) {
   var ed = t.draft || canEditTask(t);
   var cls = (isDone(t) ? "done " : "") + (isOverdue(t) ? "overdue " : "") + (t.draft ? "draft" : "");
-  return '<tr class="' + cls + '"><td>' + input(t, "title", t.title, "text", "Task", ed) + srcNote(t) + addedNote(t) + "</td>" +
+  return '<tr class="' + cls + '"><td>' + input(t, "title", t.title, "text", "Task", ed) + srcNote(t) + addedNote(t) + taskDocs(t, ed) + "</td>" +
     "<td>" + responsibleCell(t) + "</td><td>" + input(t, "dueDate", t.dueDate, "date", "", ed) + "</td>" +
     '<td class="center">' + doneToggle(t) + '</td><td class="notes-cell">' + input(t, "notes", t.notes, "textarea", "", ed) + "</td>" +
     '<td class="row-tools">' + delButton(t) + "</td></tr>";

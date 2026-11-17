@@ -1030,3 +1030,11 @@
   .fbm-more { margin: 10px 0 4px; }
   .fbm-more > summary { cursor: pointer; font-size: 12px; color: var(--muted); padding: 6px 0; }
   html[data-theme="dark"] .co-note.warn { color: #f3c47e; }
+
+  /* Documents on tasks */
+  .proj-docs .td-add { color: var(--muted); }
+  .td-sop { font-size: 10px; padding: 1px 7px; border-radius: 9px; background: var(--soft); color: var(--muted); margin: 0 4px; white-space: nowrap; }
+  .td-sop.td-approved { background: #dcebd9; color: #2f5a35; }
+  .td-sop.td-declined { background: #f6dce5; color: #864b65; }
+  html[data-theme="dark"] .td-sop.td-approved { background: rgba(95, 179, 122, .16); color: #93d9a8; }
+  html[data-theme="dark"] .td-sop.td-declined { background: rgba(230, 90, 80, .18); color: #ff9d92; }
