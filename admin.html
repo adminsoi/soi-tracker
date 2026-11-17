@@ -327,6 +327,24 @@
     </div>
 
     <div class="card">
+      <h2>Bills from email</h2>
+      <div class="hint" style="margin-bottom:12px;">Invoice emails in these mailboxes show on Finance → Approvals → <b>Bills from email</b>, for anyone who can see that company's Finance. A message counts when it has a PDF or spreadsheet attached and "invoice", "bill", "AP" or similar is in the subject or file name, or when it's from one of the senders below (e.g. someone who sends AP lists). Claude on Bedrock (SOI's AWS account) reads each file to fill in vendor, invoice number, amount and due date; someone in Finance always checks them before adding. The tracker's Microsoft app needs Mail.Read on these mailboxes. Checked every 15 minutes.</div>
+      <p class="hint" id="bmState" style="margin-top:0;"></p>
+      <form id="bmForm">
+        <div class="field-row">
+          <div class="field"><label for="bm-boxes">Mailboxes to check (one per line)</label><textarea id="bm-boxes" rows="3" placeholder="name@soiaviation.com&#10;ap@soiaviation.com"></textarea></div>
+          <div class="field"><label for="bm-senders">Always count email from (address, or @domain for a whole company)</label><textarea id="bm-senders" rows="3" placeholder="someone@supplier.com&#10;@supplier.com"></textarea></div>
+        </div>
+        <div class="field-row">
+          <div class="field" style="max-width:260px;"><label for="bm-company">Shows in Finance for</label><select id="bm-company"></select></div>
+          <div class="field" style="max-width:220px;"><label for="bm-days">Look back (days, first check)</label><input type="number" id="bm-days" min="1" max="120" required></div>
+        </div>
+        <button type="submit">Save bills from email</button>
+        <div class="msg" id="bmMsg"></div>
+      </form>
+    </div>
+
+    <div class="card">
       <h2>HR global calendar</h2>
       <div class="hint" style="margin-bottom:12px;">Shown as its own tab on the Calendar page (List or Month), and used to fill in "Who's in office" from entries like "Greg – PTO" or "Alexis WFH". Leadership logins only. In Outlook on the web: Settings → Calendar → Shared calendars → Publish a calendar → pick the calendar → choose <b>"Can view titles and locations"</b> (or all details — "busy only" has no names) → Publish → copy the <b>ICS</b> link. The link is kept on the server and never shown to other users, but anyone who has it can read the calendar, so don't share it elsewhere.</div>
       <form id="calendarForm">
@@ -1048,9 +1066,31 @@
       .then(function () { msg.textContent = "Saved."; msg.className = "msg ok"; loadSla(); }, function (err) { msg.textContent = err.message; msg.className = "msg"; });
   });
 
+  // ---------- Bills from email ----------
+  function bmLines(v) { return (v || []).join("\n"); }
+  function loadBillMail() {
+    return Promise.all([api("/api/admin/bill-mail"), fetch("/api/companies").then(function (r) { return r.json(); })]).then(function (x) {
+      var c = x[0], sel = document.getElementById("bm-company");
+      sel.innerHTML = x[1].map(function (n) { return '<option value="' + escapeHtml(n) + '">' + escapeHtml(n) + "</option>"; }).join("");
+      sel.value = c.company;
+      document.getElementById("bm-boxes").value = bmLines(c.mailboxes);
+      document.getElementById("bm-senders").value = bmLines(c.senders);
+      document.getElementById("bm-days").value = c.days;
+      document.getElementById("bmState").innerHTML = c.graphConfigured ? "" : "<b>Microsoft 365 isn't connected</b> (MS_TENANT_ID / MS_CLIENT_ID / MS_CLIENT_SECRET), so nothing can be checked yet.";
+    }).catch(function () {});
+  }
+  document.getElementById("bmForm").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var msg = document.getElementById("bmMsg");
+    msg.textContent = ""; msg.className = "msg";
+    api("/api/admin/bill-mail", { method: "PUT", body: JSON.stringify({ mailboxes: document.getElementById("bm-boxes").value, senders: document.getElementById("bm-senders").value, company: document.getElementById("bm-company").value, days: Number(document.getElementById("bm-days").value) }) })
+      .then(function () { msg.textContent = "Saved. Checking the mailboxes now — results show in Finance in a few minutes."; msg.className = "msg ok"; loadBillMail(); }, function (err) { msg.textContent = err.message; msg.className = "msg"; });
+  });
+
   function start() {
     showPanel();
     loadSla();
+    loadBillMail();
     loadEmailState();
     Promise.all([loadCompanies(), loadDepartments()]).then(function () {
       loadClaudeProjects();

@@ -81,6 +81,8 @@ const {
   withWorkflows,
   getOnboarding,
   withOnboarding,
+  getBillMail,
+  withBillMail,
   getChats,
   withChats,
 } = require("./s3store");
@@ -91,6 +93,8 @@ const { itRequestsConfigured, fetchItRequests, IT_REQUESTS_MAILBOX, parseFormWor
 const { inboxThreads, syncFollowIndex, MailError, threadMessages, replyToMessage, sendAs, forgetInbox } = require("./mail");
 const replies = require("./replies");
 const { askClaude, invoke, AiError } = require("./bedrock");
+const billMail = require("./billmail");
+const { graphConfigured } = require("./graph");
 const board = require("./board");
 const forms = require("./staffforms");
 const employment = require("./people");
@@ -830,6 +834,270 @@ app.post(
     });
     if (problem) return res.status(400).json({ error: problem });
     res.json(result);
+  })
+);
+
+// ---- Finance → Bills from email (billmail.js) ----
+// Invoice emails in the mailboxes set at /admin.html → "Bills from email",
+// read by Claude on Bedrock, waiting for someone in Finance to add each one
+// to Daily payments, keep it as paid (records only) or hide it. The scan
+// runs every 15 minutes and when someone clicks Check now.
+let billScan = null;
+let billScanAt = 0;
+let billScanErrors = {};
+const BILL_KEEP_DAYS = 400;
+const blankBill = (n, status) => ({ n, vendor: "", invoiceNo: "", amount: 0, currency: "USD", due: "", invoiceDate: "", paid: false, status: status || "new" });
+
+async function readPendingBills() {
+  for (let round = 0; round < billMail.MAX_READ; round++) {
+    const doc = await getBillMail();
+    const it = Object.values(doc.items || {}).filter((x) => x.read === "pending").sort((a, b) => String(b.receivedAt).localeCompare(String(a.receivedAt)))[0];
+    if (!it) return;
+    let got = null;
+    let err = "";
+    try { got = await billMail.readBills(it); } catch (e) { err = e.message || "Couldn't read it"; }
+    await withBillMail((d) => {
+      const x = d.items[it.key];
+      if (!x || x.read !== "pending") return;
+      if (got) {
+        x.read = "done";
+        x.kind = got.kind;
+        x.bills = got.kind === "not_a_bill" || !got.bills.length
+          ? [Object.assign(blankBill(0, got.kind === "not_a_bill" ? "dismissed" : "new"), { auto: got.kind === "not_a_bill" })]
+          : got.bills.map((b, n) => Object.assign({ n, status: "new" }, b));
+      } else {
+        x.read = "error";
+        x.readError = String(err).slice(0, 300);
+        x.bills = [blankBill(0)];
+      }
+    });
+  }
+}
+
+function runBillScan() {
+  if (billScan) return billScan;
+  billScan = (async () => {
+    const cfg = billMail.billSettings(await getSettings());
+    if (!cfg.mailboxes.length) { billScanErrors = {}; return; }
+    const doc = await getBillMail();
+    const known = new Set(Object.keys(doc.items || {}));
+    const found = [];
+    const scans = {};
+    const errors = {};
+    for (const box of cfg.mailboxes) {
+      const floor = Date.now() - cfg.days * 864e5;
+      const last = doc.scans && doc.scans[box] ? Date.parse(doc.scans[box]) - 864e5 : floor;
+      const started = new Date().toISOString();
+      try {
+        const items = await billMail.scanMailbox(cfg, box, new Date(Math.max(floor, last)).toISOString(), known);
+        items.forEach((i) => known.add(i.key));
+        found.push(...items);
+        scans[box] = started;
+      } catch (e) {
+        errors[box] = e.message;
+        console.error(`Bills from email: ${box} failed: ${e.message}`);
+      }
+    }
+    billScanErrors = errors;
+    const cutoff = Date.now() - BILL_KEEP_DAYS * 864e5;
+    await withBillMail((d) => {
+      d.items = d.items || {};
+      d.scans = d.scans || {};
+      for (const it of found) {
+        if (!d.items[it.key]) d.items[it.key] = Object.assign({ id: newId(), company: cfg.company, foundAt: new Date().toISOString(), read: "pending", bills: [] }, it);
+      }
+      Object.assign(d.scans, scans);
+      for (const [k, x] of Object.entries(d.items)) if (Date.parse(x.receivedAt) < cutoff) delete d.items[k];
+    });
+    await readPendingBills();
+  })().catch((e) => console.error("Bills from email scan failed:", e.message))
+    .finally(() => { billScan = null; billScanAt = Date.now(); });
+  return billScan;
+}
+setInterval(() => { if (graphConfigured) runBillScan(); }, 15 * 60 * 1000);
+setTimeout(() => { if (graphConfigured) runBillScan(); }, 45 * 1000);
+
+const invKey = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+async function billItemFor(req, id) {
+  const doc = await getBillMail();
+  const it = Object.values(doc.items || {}).find((x) => x.id === id);
+  if (!it || !canSeeFinance(req.user, it.company)) { const e = new Error("That email isn't there any more"); e.status = 404; throw e; }
+  return it;
+}
+
+app.get(
+  "/api/finance/email-bills",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const company = String(req.query.company || "");
+    if (!canSeeFinance(req.user, company)) return res.status(403).json({ error: "Finance isn't available for your account" });
+    const cfg = billMail.billSettings(await getSettings());
+    if (cfg.company !== company || !cfg.mailboxes.length) return res.json({ enabled: false, company: cfg.company });
+    const [doc, all] = await Promise.all([getBillMail(), getFinance()]);
+    const fin = { ...emptyFinance(), ...(all[company] || {}) };
+    // Invoice numbers already in Pentagon or typed in, to flag doubles.
+    const seen = new Map();
+    if (company === FINANCE_PENTAGON_COMPANY) {
+      const pg = await pentagonFinance(fin);
+      for (const r of pg.rows.dailyPayments.concat(pg.rows.approvedToPay)) {
+        for (const k of [r.docNo, r.ref]) if (invKey(k)) seen.set(invKey(k), "In Pentagon as #" + r.docNo);
+      }
+    }
+    for (const r of fin.dailyPayments.concat(fin.approvedToPay)) {
+      if (invKey(r.invoiceNo) && !seen.has(invKey(r.invoiceNo))) seen.set(invKey(r.invoiceNo), (r.fromEmail ? "Already added from email" : "Already in Daily payments") + (r.vendor ? " (" + r.vendor + ")" : ""));
+    }
+    const rowIds = new Set(fin.dailyPayments.concat(fin.approvedToPay).map((r) => r.id));
+    const items = Object.values(doc.items || {}).filter((x) => x.company === company)
+      .sort((a, b) => String(b.receivedAt).localeCompare(String(a.receivedAt)))
+      .map((x) => ({
+        id: x.id, mailbox: x.mailbox, subject: x.subject, from: x.from, receivedAt: x.receivedAt, always: !!x.always,
+        file: x.file ? { name: x.file.name, size: x.file.size, type: x.file.type } : null,
+        read: x.read, readError: x.readError || "", kind: x.kind || "",
+        bills: (x.bills || []).map((b) => Object.assign({}, b, {
+          dupe: b.status === "new" && invKey(b.invoiceNo) ? seen.get(invKey(b.invoiceNo)) || "" : "",
+          rowGone: b.status === "added" && b.rowId ? !rowIds.has(b.rowId) : false,
+        })),
+      }));
+    res.json({
+      enabled: true, company, mailboxes: cfg.mailboxes, senders: cfg.senders, days: cfg.days,
+      scans: doc.scans || {}, scanning: !!billScan, errors: billScanErrors, items,
+    });
+  })
+);
+
+app.post(
+  "/api/finance/email-bills/scan",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const cfg = billMail.billSettings(await getSettings());
+    if (!canSeeFinance(req.user, cfg.company)) return res.status(403).json({ error: "Finance isn't available for your account" });
+    if (!cfg.mailboxes.length) return res.status(400).json({ error: "No mailboxes are set up yet — an admin adds them at /admin.html → Bills from email." });
+    if (!billScan && Date.now() - billScanAt < 20 * 1000) return res.json({ scanning: false, recent: true });
+    runBillScan();
+    res.json({ scanning: true });
+  })
+);
+
+// Opens the attached file (from the mailbox, through the tracker).
+app.get(
+  "/api/finance/email-bills/:id/file",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    let it;
+    try { it = await billItemFor(req, req.params.id); } catch (e) { return res.status(e.status || 500).json({ error: e.message }); }
+    if (!it.file) return res.status(404).json({ error: "That email has no file — open it in Outlook" });
+    try {
+      const a = await billMail.fetchAttachment(it.mailbox, it.msgId, it.file.id);
+      res.setHeader("Content-Type", it.file.type === "pdf" ? "application/pdf" : a.contentType);
+      res.setHeader("Content-Disposition", `inline; filename="${String(it.file.name).replace(/[^\w.\- ]/g, "_")}"`);
+      res.setHeader("Cache-Control", "private, no-store");
+      res.send(a.buffer);
+    } catch (e) {
+      res.status(502).json({ error: e.status === 404 ? "That email or file isn't in the mailbox any more." : e.message });
+    }
+  })
+);
+
+// One bill on an email: add it to Daily payments, keep it as paid (records
+// only), hide it, bring it back, or have Claude read the email again.
+app.post(
+  "/api/finance/email-bills/:id",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const op = String(b.op || "");
+    let it;
+    try { it = await billItemFor(req, req.params.id); } catch (e) { return res.status(e.status || 500).json({ error: e.message }); }
+    const company = it.company;
+    const n = Number(b.n) || 0;
+    const f = b.fields && typeof b.fields === "object" ? b.fields : {};
+    const typed = {
+      vendor: String(f.vendor || "").trim().slice(0, 120),
+      invoiceNo: String(f.invoiceNo || "").trim().slice(0, 60),
+      amount: Number.isFinite(Number(f.amount)) ? Math.round(Number(f.amount) * 100) / 100 : 0,
+      due: /^\d{4}-\d{2}-\d{2}$/.test(f.due || "") ? f.due : "",
+    };
+    const who = req.user.username;
+    const at = new Date().toISOString();
+
+    if (op === "reread") {
+      let problem = null;
+      await withBillMail((d) => {
+        const x = d.items[it.key];
+        if ((x.bills || []).some((y) => y.status === "added" || y.status === "paid")) { problem = "Some of it is already added or kept as paid — read again only works before that."; return; }
+        x.read = "pending";
+        delete x.readError;
+      });
+      if (problem) return res.status(400).json({ error: problem });
+      if (!billScan) readPendingBills().catch((e) => console.error("Reading bill failed:", e.message));
+      return res.json({ ok: true });
+    }
+    if (op === "addline") {
+      await withBillMail((d) => {
+        const x = d.items[it.key];
+        x.bills = x.bills || [];
+        if (x.bills.length < 80) x.bills.push(blankBill(x.bills.reduce((m, y) => Math.max(m, y.n + 1), 0)));
+      });
+      return res.json({ ok: true });
+    }
+    if (!["add", "paid", "dismiss", "reopen"].includes(op)) return res.status(400).json({ error: "Unknown change" });
+    if (op === "add" && !typed.vendor) return res.status(400).json({ error: "Who is the bill from? Fill in the vendor." });
+    if (op === "add" && !(typed.amount > 0)) return res.status(400).json({ error: "Fill in the amount to pay." });
+
+    // Claim the bill first so a double click can't add it twice.
+    let problem = null;
+    let before = null;
+    await withBillMail((d) => {
+      const x = d.items[it.key];
+      const bill = x && (x.bills || []).find((y) => y.n === n);
+      if (!bill) { problem = "That bill isn't there any more"; return; }
+      before = Object.assign({}, bill);
+      if (op === "reopen") {
+        if (bill.status === "new") { problem = "It's already waiting"; return; }
+        bill.status = "reopening";
+        return;
+      }
+      if (bill.status !== "new") { problem = "Someone already dealt with this one — refresh"; return; }
+      Object.assign(bill, typed, { status: op === "add" ? "added" : op === "paid" ? "paid" : "dismissed", by: who, at });
+      delete bill.auto;
+    });
+    if (problem) return res.status(409).json({ error: problem });
+
+    const rowId = newId();
+    if (op === "add") {
+      try {
+        await withFinance((all) => {
+          const fin = (all[company] = { ...emptyFinance(), ...(all[company] || {}) });
+          fin.dailyPayments.push({
+            id: rowId, vendor: typed.vendor, amount: typed.amount, due: typed.due || at.slice(0, 10), invoiceNo: typed.invoiceNo,
+            notes: [typed.invoiceNo ? "Invoice " + typed.invoiceNo : "", "From email: " + it.subject].filter(Boolean).join(" · ").slice(0, 500),
+            fromEmail: it.id, createdBy: who,
+          });
+        });
+      } catch (e) {
+        await withBillMail((d) => { const bill = d.items[it.key].bills.find((y) => y.n === n); Object.assign(bill, before); });
+        throw e;
+      }
+      await withBillMail((d) => { d.items[it.key].bills.find((y) => y.n === n).rowId = rowId; });
+      return res.json({ ok: true, rowId });
+    }
+    if (op === "reopen") {
+      // An added bill comes back only once its Daily payments row is gone.
+      let blocked = false;
+      if (before.status === "added" && before.rowId) {
+        const fin = (await getFinance())[company] || {};
+        blocked = (fin.dailyPayments || []).concat(fin.approvedToPay || []).some((r) => r.id === before.rowId);
+      }
+      await withBillMail((d) => {
+        const bill = d.items[it.key].bills.find((y) => y.n === n);
+        if (blocked) { Object.assign(bill, before); return; }
+        bill.status = "new";
+        ["by", "at", "rowId", "auto"].forEach((k) => delete bill[k]);
+      });
+      if (blocked) return res.status(409).json({ error: "It's still in Daily payments / Approved to pay. Delete that row first, then bring it back here." });
+    }
+    res.json({ ok: true });
   })
 );
 
@@ -4512,6 +4780,32 @@ async function sendAcknowledgements() {
 }
 setInterval(sendAcknowledgements, 60 * 1000);
 setTimeout(sendAcknowledgements, 20 * 1000);
+
+// Bills from email (admin page): which mailboxes are scanned for invoices,
+// which senders always count, how far back, and for which company's Finance.
+// Mailboxes must be on a domain one of the logins uses.
+app.get("/api/admin/bill-mail", adminMiddleware, asyncHandler(async (req, res) => {
+  const s = await getSettings();
+  res.json(Object.assign(billMail.billSettings(s), { graphConfigured }));
+}));
+app.put(
+  "/api/admin/bill-mail",
+  adminMiddleware,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const users = (await getUsers()).map(normalizeUser);
+    const domains = new Set(users.map((u) => String(u.email || "").toLowerCase().split("@")[1]).filter(Boolean));
+    const cfg = billMail.billSettings({ billMail: b });
+    const bad = billMail.billSettings({ billMail: { mailboxes: b.mailboxes } }).mailboxes.length !== String(b.mailboxes || "").split(/[\s,;]+/).filter(Boolean).length;
+    if (bad) return res.status(400).json({ error: "One of the mailboxes isn't an email address." });
+    const outside = cfg.mailboxes.filter((m) => !domains.has(m.split("@")[1]));
+    if (outside.length) return res.status(400).json({ error: `${outside.join(", ")} isn't on a company domain (one the logins use).` });
+    if (!COMPANIES.includes(cfg.company)) return res.status(400).json({ error: "Pick a company" });
+    await withSettings((s) => { s.billMail = cfg; });
+    if (cfg.mailboxes.length) runBillScan();
+    res.json(Object.assign(cfg, { graphConfigured }));
+  })
+);
 
 // SLA settings (admin page).
 app.get("/api/admin/it-sla", adminMiddleware, asyncHandler(async (req, res) => res.json(itSla(await getSettings()))));

@@ -229,6 +229,10 @@ function getWorkflows() {
 function getOnboarding() {
   return readJson("onboarding", {});
 }
+// Finance bills found in email: { items: {}, scans: {} } (billmail.js).
+function getBillMail() {
+  return readJson("bill_mail", { items: {}, scans: {} });
+}
 function getImprovements() {
   return readJson("improvements", { items: [] });
 }
@@ -477,6 +481,16 @@ function withWorkflows(mutator) {
   });
   return workflowsQueue;
 }
+let billMailQueue = Promise.resolve();
+function withBillMail(mutator) {
+  billMailQueue = billMailQueue.then(async () => {
+    const doc = await getBillMail();
+    const result = await mutator(doc);
+    await writeJson("bill_mail", doc);
+    return result;
+  });
+  return billMailQueue;
+}
 let onboardingQueue = Promise.resolve();
 function withOnboarding(mutator) {
   onboardingQueue = onboardingQueue.then(async () => {
@@ -517,6 +531,8 @@ module.exports = {
   getChats,
   withChats,
   getOnboarding,
+  getBillMail,
+  withBillMail,
   getWorkflows,
   withWorkflows,
   withOnboarding,

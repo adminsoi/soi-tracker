@@ -33,6 +33,11 @@ function finCell(list, r, key, type, ph) {
 function finTick(list, r, key, label) {
   return '<input class="check" type="checkbox" data-fin-tick="' + list + '" data-fid="' + E(r.id) + '" data-key="' + key + '"' + (r[key] ? " checked" : "") + (isManager() ? "" : " disabled") + ' aria-label="' + E(label) + '">';
 }
+// A bill added from Bills from email: its invoice number and the file.
+function finFromEmail(r) {
+  if (!r.fromEmail) return "";
+  return '<span class="co-note">' + (r.invoiceNo ? "#" + E(r.invoiceNo) + " · " : "") + '<button type="button" class="text-button" data-fbm-file="' + E(r.fromEmail) + '">📎 from email</button></span>';
+}
 function finDel(list, r) { return r.source === "pentagon" ? "" : '<button type="button" class="del" data-fin-del="' + list + '" data-fid="' + E(r.id) + '" title="Delete" aria-label="Delete">×</button>'; }
 function finSect(title, note, list, label) {
   return '<div class="section-title"><div><h2>' + title + '</h2><span class="small-note">' + note + "</span></div>" +
@@ -120,10 +125,10 @@ function renderFinanceApprovals() {
     metric("Overdue bills", f.dailyPayments.filter(function (r) { return r.due && r.due < today; }).length, "Past their due date", f.dailyPayments.some(function (r) { return r.due && r.due < today; })) +
     metric("Reimbursements to check", finReimbCount(["submitted"]), "Sent by staff") +
     metric("Finance checked", finReimbCount(["checked"]), "Waiting to be approved to pay") + "</div>" +
-    pgNote(f) + finBanner() +
+    pgNote(f) + finBanner() + renderEmailBills() +
     finSect("Daily payments", "Bills due. A manager ticks Approve and the row moves to Transfers → Approved to pay.", "dailyPayments", "Add payment") + x.ui +
     finTable(["Vendor", "Amount", "Due", "Notes", "Approve", ""], x.list.map(function (r) {
-      return '<tr class="' + (r.due && r.due < today ? "overdue" : "") + '"><td>' + finCell("dailyPayments", r, "vendor", "text", "Vendor") + "</td><td>" + finCell("dailyPayments", r, "amount", "number", "0.00") + "</td><td>" + finCell("dailyPayments", r, "due", "date") +
+      return '<tr class="' + (r.due && r.due < today ? "overdue" : "") + '"><td>' + finCell("dailyPayments", r, "vendor", "text", "Vendor") + finFromEmail(r) + "</td><td>" + finCell("dailyPayments", r, "amount", "number", "0.00") + "</td><td>" + finCell("dailyPayments", r, "due", "date") +
         '</td><td class="notes-cell">' + finCell("dailyPayments", r, "notes", "textarea") + '</td><td class="center"><input class="check" type="checkbox" data-approve="' + E(r.id) + '"' + (mgr ? "" : " disabled") + ' aria-label="Approve payment to ' + E(r.vendor || "vendor") + '"></td><td>' + finDel("dailyPayments", r) + "</td></tr>";
     }), 6, f.dailyPayments.length ? "Nothing matches these filters." : "Nothing waiting for approval.") +
     finReimbSection("Reimbursements", "Staff send these from Finance → Staff-Facing with a receipt. Anyone in Finance marks them checked; a Finance manager approves them to pay (they move to Transfers) or rejects them with a reason the person sees.",
@@ -158,7 +163,7 @@ function renderFinanceTransfers() {
     pgNote(f) + finBanner() +
     finSect("Approved to pay", "Untick Approved to send a bill back to Approvals. Tick Paid once the transfer has gone.", "", "") + x.ui +
     finTable(["Vendor", "Amount", "Due", "Approved on", "Notes", "Approved", "Paid", ""], x.list.map(function (r) {
-      return '<tr class="' + (r.paid ? "done" : "") + '"><td>' + finCell("approvedToPay", r, "vendor", "text", "Vendor") + "</td><td>" + finCell("approvedToPay", r, "amount", "number", "0.00") + "</td><td>" + finCell("approvedToPay", r, "due", "date") +
+      return '<tr class="' + (r.paid ? "done" : "") + '"><td>' + finCell("approvedToPay", r, "vendor", "text", "Vendor") + finFromEmail(r) + "</td><td>" + finCell("approvedToPay", r, "amount", "number", "0.00") + "</td><td>" + finCell("approvedToPay", r, "due", "date") +
         '</td><td class="small-note">' + E(fmtTime(r.approvedAt)) + (r.approvedBy ? "<br>by " + E(r.approvedBy) : "") + '</td><td class="notes-cell">' + finCell("approvedToPay", r, "notes", "textarea") +
         '</td><td class="center"><input class="check" type="checkbox" checked data-unapprove="' + E(r.id) + '"' + (mgr ? "" : " disabled") + ' aria-label="Remove approval"></td><td class="center">' + finTick("approvedToPay", r, "paid", "Paid") + "</td><td>" + finDel("approvedToPay", r) + "</td></tr>";
     }), 8, f.approvedToPay.length ? "Nothing matches these filters." : "No approved payments yet.") +
@@ -208,3 +213,140 @@ function financeDefaults(list) {
   if (list === "dailyPayments") return { vendor: "", amount: 0, due: today, notes: "" };
   return { party: "", amount: 0, expected: today, received: false, notes: "" };
 }
+
+// ---- Bills from email (Approvals) ----
+// Invoice emails found in the mailboxes set at /admin.html → Bills from
+// email, read by Claude to fill in the details. Someone in Finance checks
+// each one, then adds it to Daily payments, keeps it as paid (records only)
+// or hides it. The emails and files stay in Outlook; Open file fetches the
+// attachment through the tracker.
+var fbm = { company: null, data: null, error: "", loading: false, timer: 0, busy: {} };
+function loadEmailBills() {
+  var co = activeCompany;
+  fbm.loading = true;
+  return api("/api/finance/email-bills?company=" + encodeURIComponent(co)).then(function (d) {
+    fbm = Object.assign(fbm, { company: co, data: d, error: "", loading: false });
+  }).catch(function (err) {
+    fbm = Object.assign(fbm, { company: co, data: null, error: err.message, loading: false });
+  }).then(function () {
+    clearTimeout(fbm.timer);
+    // Keep refreshing while the mailboxes are being checked or files read.
+    var d = fbm.data;
+    if (d && d.enabled && (d.scanning || d.items.some(function (i) { return i.read === "pending"; }))) {
+      fbm.timer = setTimeout(function () { if (page === "department" && activeCompany === co) loadEmailBills().then(requestRender); }, 5000);
+    }
+  });
+}
+function fbmAgo(iso) {
+  if (!iso) return "never";
+  var m = Math.round((Date.now() - Date.parse(iso)) / 60000);
+  return m < 1 ? "just now" : m < 60 ? m + " min ago" : m < 1440 ? Math.round(m / 60) + " h ago" : fmtDate(iso.slice(0, 10));
+}
+function fbmIn(i, b, key, type, ph) {
+  var v = b[key];
+  if (type === "number") v = v ? v : "";
+  return '<input class="fb-in' + (type === "number" ? " fb-num" : "") + '" type="' + type + '"' + (type === "number" ? ' step="0.01" min="0"' : "") +
+    ' data-fbm-in="' + E(i.id) + '" data-n="' + b.n + '" data-k="' + key + '" value="' + E(v) + '" placeholder="' + E(ph || "") + '" aria-label="' + E(ph || key) + '">';
+}
+function fbmBtn(i, b, op, label, cls) {
+  var busy = fbm.busy[i.id + ":" + b.n];
+  return '<button type="button" class="' + (cls || "") + ' fbm-btn" data-fbm-op="' + op + '" data-fbm-id="' + E(i.id) + '" data-n="' + b.n + '"' + (busy ? " disabled" : "") + ">" + label + "</button>";
+}
+function fbmSource(i) {
+  return '<span class="fbm-when">' + E(fmtTime(i.receivedAt)) + "</span>" +
+    '<b class="fbm-subj">' + E(i.subject) + "</b>" +
+    '<span class="co-note">' + E(i.from.name || i.from.email) + (i.from.name && i.from.email ? " · " + E(i.from.email) : "") + " · in " + E(i.mailbox.split("@")[0]) + "</span>" +
+    (i.file ? '<button type="button" class="text-button fbm-file" data-fbm-file="' + E(i.id) + '">📎 ' + E(i.file.name) + "</button>" : '<span class="co-note">List in the email text</span>');
+}
+function fbmKind(i) {
+  return { ap_list: "AP list", statement: "Statement", receipt: "Receipt", not_a_bill: "Not a bill?" }[i.kind] || "";
+}
+function renderEmailBills() {
+  if (activeCompany === ALL) return "";
+  if (fbm.company !== activeCompany && !fbm.loading) { loadEmailBills().then(requestRender); return ""; }
+  var d = fbm.data;
+  if (fbm.error) return finSect("Bills from email", "") + '<div class="banner">' + E(fbm.error) + "</div>";
+  if (!d || !d.enabled) return "";
+  var last = Object.keys(d.scans).map(function (k) { return d.scans[k]; }).sort().pop();
+  var errs = Object.keys(d.errors || {});
+  var rows = [], kept = [], hidden = [], added = [], reading = 0;
+  d.items.forEach(function (i) {
+    if (i.read === "pending") { reading++; return; }
+    var open = i.bills.filter(function (b) { return b.status === "new"; });
+    open.forEach(function (b, k) {
+      rows.push('<tr class="fbm-row' + (k === 0 ? " first" : "") + '">' +
+        '<td class="fbm-src">' + (k === 0 ? fbmSource(i) + (fbmKind(i) ? '<span class="badge fbm-kind">' + fbmKind(i) + (open.length > 1 ? " · " + open.length + " bills" : "") + "</span>" : "") +
+          (i.read === "error" ? '<span class="co-note warn">Couldn\'t read it automatically: ' + E(i.readError) + " Type the details in, or " + '<button type="button" class="text-button" data-fbm-op="reread" data-fbm-id="' + E(i.id) + '" data-n="0">try again</button>.</span>' : "") : "") + "</td>" +
+        "<td>" + fbmIn(i, b, "vendor", "text", "Vendor") + (b.dupe ? '<span class="co-note warn">⚠ ' + E(b.dupe) + "</span>" : "") + "</td>" +
+        "<td>" + fbmIn(i, b, "invoiceNo", "text", "Invoice #") + "</td>" +
+        "<td>" + fbmIn(i, b, "amount", "number", "0.00") + (b.currency && b.currency !== "USD" ? '<span class="co-note">' + E(b.currency) + "</span>" : "") + "</td>" +
+        "<td>" + fbmIn(i, b, "due", "date", "Due") + (b.invoiceDate ? '<span class="co-note">Invoice ' + E(fmtDate(b.invoiceDate)) + "</span>" : "") + "</td>" +
+        '<td class="fbm-acts">' + fbmBtn(i, b, "add", "Add to bills", "primary") + fbmBtn(i, b, "paid", b.paid ? "Paid already ✓" : "Paid already") + fbmBtn(i, b, "dismiss", "Not a bill") +
+          (k === open.length - 1 ? '<button type="button" class="text-button" data-fbm-op="addline" data-fbm-id="' + E(i.id) + '" data-n="0">+ another bill on this email</button>' : "") + "</td></tr>");
+    });
+    i.bills.forEach(function (b) {
+      var line = { i: i, b: b };
+      if (b.status === "paid") kept.push(line);
+      else if (b.status === "dismissed") hidden.push(line);
+      else if (b.status === "added") added.push(line);
+    });
+  });
+  var undo = function (x, label) { return '<button type="button" class="text-button" data-fbm-op="reopen" data-fbm-id="' + E(x.i.id) + '" data-n="' + x.b.n + '">' + label + "</button>"; };
+  var file = function (x) { return x.i.file ? '<button type="button" class="text-button" data-fbm-file="' + E(x.i.id) + '">📎 ' + E(x.i.file.name) + "</button>" : E(x.i.subject); };
+  var by = function (x) { return '<span class="co-note">' + E(x.b.by || "") + (x.b.at ? " · " + E(fmtDate(x.b.at.slice(0, 10))) : "") + "</span>"; };
+  var sub = function (title, list, head, row) {
+    if (!list.length) return "";
+    return '<details class="fbm-more"><summary>' + title + " (" + list.length + ")</summary>" +
+      finTable(head, list.map(row), head.length, "") + "</details>";
+  };
+  var note = "Found in " + d.mailboxes.join(", ") + " · checked " + fbmAgo(last) + (d.scanning ? " · checking now…" : "") + (reading ? " · reading " + reading + " file" + (reading === 1 ? "" : "s") + "…" : "") +
+    ". Claude fills in the details from the file — check them against the file, then add the bill or keep it as paid for the records.";
+  return '<div class="section-title"><div><h2>Bills from email</h2><span class="small-note">' + E(note) + "</span></div>" +
+      '<button type="button" data-fbm-scan="1"' + (d.scanning ? " disabled" : "") + ">" + (d.scanning ? "Checking…" : "Check now") + "</button></div>" +
+    (errs.length ? '<div class="banner">' + errs.map(function (m) { return "<b>" + E(m) + ":</b> " + E(d.errors[m]); }).join("<br>") + "</div>" : "") +
+    '<div class="table-wrap"><table class="narrow fbm-table"><thead><tr><th>Email</th><th>Vendor</th><th>Invoice #</th><th>Amount</th><th>Due</th><th></th></tr></thead><tbody>' +
+    (rows.length ? rows.join("") : '<tr><td colspan="6" class="empty">' + (reading || d.scanning ? "Looking for invoices…" : "No new invoice emails.") + "</td></tr>") + "</tbody></table></div>" +
+    sub("Kept as paid — for the records", kept, ["Vendor", "Invoice #", "Amount", "Invoice date", "File", "Marked by", ""], function (x) {
+      return "<tr><td>" + E(x.b.vendor || "—") + "</td><td>" + E(x.b.invoiceNo || "—") + '</td><td class="fb-num">' + E(money(x.b.amount)) + "</td><td>" + (x.b.invoiceDate ? E(fmtDate(x.b.invoiceDate)) : "—") + "</td><td>" + file(x) + "</td><td>" + by(x) + "</td><td>" + undo(x, "Undo") + "</td></tr>";
+    }) +
+    sub("Added to Daily payments", added, ["Vendor", "Invoice #", "Amount", "File", "Added by", ""], function (x) {
+      return "<tr><td>" + E(x.b.vendor || "—") + "</td><td>" + E(x.b.invoiceNo || "—") + '</td><td class="fb-num">' + E(money(x.b.amount)) + "</td><td>" + file(x) + "</td><td>" + by(x) + "</td><td>" + (x.b.rowGone ? undo(x, "Bring back") : '<span class="co-note">In Daily payments / Approved to pay</span>') + "</td></tr>";
+    }) +
+    sub("Hidden — not a bill", hidden, ["Email", "File", "Hidden by", ""], function (x) {
+      return "<tr><td>" + E(x.i.subject) + '<span class="co-note">' + E(x.i.from.email) + "</span></td><td>" + file(x) + "</td><td>" + (x.b.auto ? '<span class="co-note">Claude: not a bill</span>' : by(x)) + "</td><td>" + undo(x, "Bring back") + "</td></tr>";
+    });
+}
+function fbmOpenFile(id) {
+  var w = window.open("", "_blank");
+  fetch("/api/finance/email-bills/" + encodeURIComponent(id) + "/file", { headers: { Authorization: "Bearer " + token() } })
+    .then(function (r) { if (!r.ok) return r.json().then(function (x) { throw new Error(x.error || "Couldn't open the file"); }); return r.blob(); })
+    .then(function (b) { var u = URL.createObjectURL(b); if (w) w.location = u; else window.open(u, "_blank"); setTimeout(function () { URL.revokeObjectURL(u); }, 60000); })
+    .catch(function (err) { if (w) w.close(); toast(err.message, true); });
+}
+function fbmFields(id, n) {
+  var f = {};
+  document.querySelectorAll('[data-fbm-in="' + id + '"][data-n="' + n + '"]').forEach(function (el) { f[el.getAttribute("data-k")] = el.value; });
+  return f;
+}
+document.addEventListener("click", function (e) {
+  var t = e.target.closest("[data-fbm-scan],[data-fbm-file],[data-fbm-op]");
+  if (!t) return;
+  if (t.hasAttribute("data-fbm-scan")) {
+    if (fbm.data) fbm.data.scanning = true;
+    render();
+    api("/api/finance/email-bills/scan", { method: "POST", body: "{}" }).catch(function (err) { toast(err.message, true); })
+      .then(loadEmailBills).then(render);
+    return;
+  }
+  if (t.hasAttribute("data-fbm-file")) { fbmOpenFile(t.getAttribute("data-fbm-file")); return; }
+  var id = t.getAttribute("data-fbm-id"), n = Number(t.getAttribute("data-n")), op = t.getAttribute("data-fbm-op");
+  var key = id + ":" + n;
+  if (fbm.busy[key]) return;
+  var body = { op: op, n: n, fields: fbmFields(id, n) };
+  fbm.busy[key] = true;
+  var ok = { add: "Added to Daily payments", paid: "Kept as paid, for the records", dismiss: "Hidden", reopen: "Back in Bills from email", reread: "Reading it again…" }[op];
+  api("/api/finance/email-bills/" + encodeURIComponent(id), { method: "POST", body: JSON.stringify(body) })
+    .then(function () { if (ok) toast(ok); }, function (err) { toast(err.message, true); })
+    .then(function () { delete fbm.busy[key]; return Promise.all([loadEmailBills(), op === "add" || op === "reopen" ? loadFinance() : null]); })
+    .then(render);
+});
