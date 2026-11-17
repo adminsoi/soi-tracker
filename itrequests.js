@@ -340,5 +340,5 @@ function recordFromEmail(r) {
 
 module.exports = {
   itRequestsConfigured, fetchItRequests, isItRequestSubject, ticketRefOf, parseFields, IT_REQUESTS_MAILBOX: MAILBOX,
-  parseFormWorkbook, recordFromEmail, FormFileError, officeStamp,
+  parseFormWorkbook, recordFromEmail, FormFileError, officeStamp, readFirstSheet,
 };
