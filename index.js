@@ -3561,12 +3561,26 @@ app.post(
 // approves or declines — never their own. An approved change with a PDF
 // becomes the SOP's new version (a new SOP for "new"); without one it's
 // recorded and a department manager adds the PDF with "New version".
-function sopRequestView(r, user, doc) {
+// Pushed from a task ("needAll"): every Leadership login other than whoever
+// pushed it approves, each in turn; one decline stops it.
+async function leadershipNames() {
+  return (await getUsers()).map(normalizeUser).filter((u) => u.leadership).map((u) => u.username);
+}
+function sopNeeded(r, leaders) {
+  return (leaders || []).filter((n) => !sameUser(n, r.by));
+}
+function sopWaitingOn(r, leaders) {
+  const done = (r.approvals || []).map((a) => a.by);
+  return sopNeeded(r, leaders).filter((n) => !done.some((d) => sameUser(d, n)));
+}
+function sopRequestView(r, user, doc, leaders) {
   const sop = r.sopId && doc.sops.find((y) => y.id === r.sopId);
-  return Object.assign({}, r, {
+  const approvedByMe = (r.approvals || []).some((a) => sameUser(a.by, user.username));
+  const extra = r.needAll ? { needed: sopNeeded(r, leaders), waitingOn: r.status === "pending" ? sopWaitingOn(r, leaders) : [], approvedByMe } : {};
+  return Object.assign({}, r, extra, {
     sopLabel: sop ? [sop.code, sop.title].filter(Boolean).join(" · ") : r.sopLabel || "",
     mine: sameUser(r.by, user.username),
-    canDecide: r.status === "pending" && !!user.leadership && !sameUser(r.by, user.username),
+    canDecide: r.status === "pending" && !!user.leadership && !sameUser(r.by, user.username) && !approvedByMe,
   });
 }
 const sopRequestSeen = (r, user) => sameUser(r.by, user.username) || !!user.leadership;
@@ -3575,10 +3589,10 @@ app.get(
   "/api/sop-requests",
   authMiddleware,
   asyncHandler(async (req, res) => {
-    const doc = sopShape(await getSops());
+    const [doc, leaders] = [sopShape(await getSops()), await leadershipNames()];
     res.json({
       leadership: !!req.user.leadership,
-      requests: doc.requests.filter((r) => sopRequestSeen(r, req.user)).map((r) => sopRequestView(r, req.user, doc)).sort((a, b) => b.at - a.at),
+      requests: doc.requests.filter((r) => sopRequestSeen(r, req.user)).map((r) => sopRequestView(r, req.user, doc, leaders)).sort((a, b) => b.at - a.at),
     });
   })
 );
@@ -3652,6 +3666,13 @@ app.post(
       return { r: Object.assign({}, x) };
     });
     if (out.error) return res.status(out.status).json({ error: out.error });
+    if (out.r.fromTask) {
+      await withTasks((list) => {
+        const t = list.find((y) => y.id === out.r.fromTask.id);
+        const f = t && (t.files || []).find((y) => y.id === out.r.fromTask.fileId);
+        if (f && f.sopRequest === out.r.id) f.sopStatus = "withdrawn";
+      });
+    }
     res.json(out.r);
   })
 );
@@ -3665,6 +3686,7 @@ app.post(
     const approve = b.approve === true;
     const note = String(b.note == null ? "" : b.note).trim().slice(0, 2000);
     if (!approve && !note) return res.status(400).json({ error: "Say why it's declined" });
+    const leaders = await leadershipNames();
     // Claim the request first, so two approvals at once can't apply it twice.
     const claim = await withSops((d) => {
       const x = sopShape(d).requests.find((y) => y.id === req.params.id);
@@ -3672,13 +3694,27 @@ app.post(
       if (sameUser(x.by, req.user.username)) return { status: 403, error: "Someone else in Leadership has to decide your own request" };
       if (x.status !== "pending") return { status: 400, error: "That request has already been decided" };
       if (!approve) return { r0: Object.assign({}, x) };
+      // Needs everyone: record this approval; apply only once nobody is left.
+      if (x.needAll) {
+        x.approvals = Array.isArray(x.approvals) ? x.approvals : [];
+        if (x.approvals.some((a) => sameUser(a.by, req.user.username))) return { status: 400, error: "You've already approved this one" };
+        x.approvals.push({ by: req.user.username, at: Date.now() });
+        if (sopWaitingOn(x, leaders).length) return { partial: sopRequestView(x, req.user, d, leaders) };
+      }
       if (x.kind === "change" && x.file && !d.sops.some((y) => y.id === x.sopId)) return { status: 400, error: "That SOP has been removed since — decline the request" };
       x.status = "approving";
       return { r0: Object.assign({}, x) };
     });
     if (claim.error) return res.status(claim.status).json({ error: claim.error });
+    if (claim.partial) return res.json(claim.partial);
     const r0 = claim.r0;
-    const unclaim = () => withSops((d) => { const x = sopShape(d).requests.find((y) => y.id === r0.id); if (x && x.status === "approving") x.status = "pending"; });
+    const unclaim = () => withSops((d) => {
+      const x = sopShape(d).requests.find((y) => y.id === r0.id);
+      if (x && x.status === "approving") {
+        x.status = "pending";
+        if (x.needAll) x.approvals = (x.approvals || []).filter((a) => !sameUser(a.by, req.user.username));
+      }
+    });
     // Approved with a PDF: it becomes the SOP's new version, or a new SOP.
     let sopId = r0.sopId || "";
     if (approve && r0.file) {
@@ -3702,9 +3738,17 @@ app.post(
       if (!x || x.status !== (approve ? "approving" : "pending")) return null;
       Object.assign(x, { status: approve ? "approved" : "declined", decidedBy: req.user.username, decidedAt: Date.now(), note, applied: !!(approve && x.file) });
       if (sopId) x.sopId = sopId;
-      return sopRequestView(x, req.user, d);
+      return sopRequestView(x, req.user, d, leaders);
     });
     if (!out) return res.status(400).json({ error: "That request has already been decided" });
+    // A task's "Push to SOP": the task's document shows how it went.
+    if (r0.fromTask) {
+      await withTasks((list) => {
+        const t = list.find((y) => y.id === r0.fromTask.id);
+        const f = t && (t.files || []).find((y) => y.id === r0.fromTask.fileId);
+        if (f && f.sopRequest === r0.id) f.sopStatus = out.status;
+      });
+    }
     res.json(out);
   })
 );
@@ -6497,15 +6541,148 @@ app.delete(
     await withTasks((tasks) => {
       const t = tasks.find((x) => x.id === req.params.id);
       if (!t || !maySeeProject(req.user, t, tasks)) { problem = "404"; return; }
-      if (!canEdit(req.user, t)) { problem = "403"; return; }
       gone = (t.files || []).find((f) => f.id === req.params.fid);
       if (!gone) { problem = "404"; return; }
+      if (!canEdit(req.user, t) && !sameUser(gone.by, req.user.username)) { problem = "403"; return; }
       t.files = t.files.filter((f) => f !== gone);
     });
     if (problem === "404") return res.status(404).json({ error: "That document isn't here" });
-    if (problem === "403") return res.status(403).json({ error: "Only someone who can edit this project can remove its documents" });
+    if (problem === "403") return res.status(403).json({ error: "Only whoever added it, or someone who can edit the task, can remove it" });
     await deleteFile(`task_files/${req.params.id}/${gone.id}`);
     res.status(204).end();
+  })
+);
+
+// ---- Documents on any task (📎 Add document on the task tables) ----
+// Whoever sees a task can add a document to it (e.g. a quote). The task
+// keeps its copy under task_files/<task id>/<file id>, and a copy is filed
+// in Documents › <company> › <department> › Task uploads › <task name>, so
+// the department finds it there too. That folder is made by the tracker;
+// uploading to a task you can see is what allows it (no edit grant needed).
+// Legal's tasks are never copied: Legal's folders have their own access.
+const TASK_DOC_ROOT = "Task uploads";
+const TASK_DOC_MAX_FILES = 50;
+function taskDocSpace(t) {
+  const company = taskCompany(t);
+  if (!DEPARTMENTS.includes(t.department) || t.department === "Legal") return null;
+  if (!docSpaces({ companies: [company], departments: [t.department], fullAccess: false, leadership: false }).some((s) => s.id === docs.deptSpaceId(company, t.department))) return null;
+  return docs.deptSpaceId(company, t.department);
+}
+// The task's own folder (made if needed), found again by its task id even
+// after someone renames it. Runs inside withDocuments.
+function taskDocFolder(doc, space, t, by) {
+  const live = (f) => f && !docs.chain(doc, f.id).some((x) => x.archived);
+  let root = doc.folders.find((f) => f.space === space && !f.parent && f.taskRoot && live(f)) ||
+    doc.folders.find((f) => f.space === space && !f.parent && !f.archived && docs.sameName(f.name, TASK_DOC_ROOT));
+  if (!root) {
+    root = { id: newId(), space, parent: "", name: TASK_DOC_ROOT, at: Date.now(), by, taskRoot: true };
+    doc.folders.push(root);
+  }
+  let mine = doc.folders.find((f) => f.space === space && f.taskId === t.id && live(f));
+  if (!mine) {
+    let name = docs.cleanName(t.title || t.partNumber || "Untitled task") || "Untitled task";
+    if (doc.folders.some((f) => f.space === space && f.parent === root.id && !f.archived && docs.sameName(f.name, name))) name = docs.cleanName(`${name} (${t.id.slice(-5)})`);
+    mine = { id: newId(), space, parent: root.id, name, at: Date.now(), by, taskId: t.id };
+    doc.folders.push(mine);
+  }
+  return mine;
+}
+
+app.post(
+  "/api/tasks/:id/files",
+  authMiddleware,
+  express.raw({ type: () => true, limit: DOC_MAX }),
+  asyncHandler(async (req, res) => {
+    const { name, type } = boardFileMeta(req);
+    if (!type) return res.status(400).json({ error: "Add a PDF, image, Word, Excel, PowerPoint, text or email file" });
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "No file came through" });
+    const tasks = await getTasks();
+    const t0 = tasks.find((x) => x.id === req.params.id);
+    if (!t0 || !maySeeProject(req.user, t0, tasks)) return res.status(404).json({ error: "That task isn't here" });
+    if ((t0.files || []).length >= TASK_DOC_MAX_FILES) return res.status(400).json({ error: `A task holds up to ${TASK_DOC_MAX_FILES} documents` });
+    const by = req.user.username;
+    const meta = { id: newId(), name, type, size: req.body.length, at: Date.now(), by };
+    await putFile(`task_files/${t0.id}/${meta.id}`, req.body, type);
+
+    // The Documents copy (a new version if the task's folder has one by that name).
+    const space = taskDocSpace(t0);
+    if (space) {
+      const v = { id: newId(), at: meta.at, by, size: meta.size, type, name };
+      let fileId = newId();
+      await withDocuments((doc) => {
+        docs.shape(doc);
+        const folder = taskDocFolder(doc, space, t0, by);
+        const same = doc.files.find((f) => f.space === space && f.folder === folder.id && !f.archived && docs.sameName(f.name, name));
+        if (same) fileId = same.id;
+        meta.docFile = fileId;
+        meta.docPath = docs.pathLabel(doc, space, folder.id);
+        meta.docSpace = space;
+        meta.docFolder = folder.id;
+      });
+      await putFile(`documents_files/${fileId}/${v.id}`, req.body, type);
+      await withDocuments((doc) => {
+        docs.shape(doc);
+        let f = doc.files.find((x) => x.id === fileId);
+        if (!f) {
+          f = { id: fileId, space, folder: meta.docFolder, name, type, at: v.at, by, versions: [], history: [], fromTask: t0.id };
+          doc.files.push(f);
+        }
+        f.versions.push(v);
+        f.type = type;
+        docLog(f, by, f.versions.length > 1 ? `Uploaded version ${f.versions.length} from the task "${t0.title || "task"}"` : `Added from the task "${t0.title || "task"}"`);
+      });
+    }
+    let gone = false;
+    await withTasks((list) => {
+      const t = list.find((x) => x.id === t0.id);
+      if (!t) { gone = true; return; }
+      t.files = Array.isArray(t.files) ? t.files : [];
+      t.files.push(meta);
+    });
+    if (gone) return res.status(404).json({ error: "That task isn't here any more" });
+    res.status(201).json(Object.assign({}, meta, { docPath: meta.docPath || "" }));
+  })
+);
+
+// "Push to SOP": a task's PDF proposed as a new SOP for the task's
+// department. It needs every Leadership login (other than whoever pushed
+// it) to approve before it's added to that department's SOPs; one decline
+// stops it. It shows on SOP → Change requests and in Mentions of You.
+app.post(
+  "/api/tasks/:id/files/:fid/push-sop",
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const b = req.body || {};
+    const tasks = await getTasks();
+    const t = tasks.find((x) => x.id === req.params.id);
+    const meta = t && maySeeProject(req.user, t, tasks) && (t.files || []).find((f) => f.id === req.params.fid);
+    if (!meta) return res.status(404).json({ error: "That document isn't here" });
+    if (!DEPARTMENTS.includes(t.department) || !sopDeptOk(t.department)) return res.status(400).json({ error: "This task's department has no SOPs" });
+    const file = await getFile(`task_files/${t.id}/${meta.id}`);
+    if (!file) return res.status(404).json({ error: "The document is missing" });
+    if (!isPdf(file.body)) return res.status(400).json({ error: "SOPs are PDFs. Save it as a PDF, add that to the task, then push it." });
+    const title = sopText(b.title, 160) || sopText(meta.name.replace(/\.pdf$/i, ""), 160);
+    const doc = sopShape(await getSops());
+    if (doc.requests.some((r) => r.fromTask && r.fromTask.fileId === meta.id && ["pending", "approving"].includes(r.status))) {
+      return res.status(409).json({ error: "This document is already waiting for Leadership" });
+    }
+    const r = {
+      id: newId(), kind: "new", dept: t.department, title, code: sopText(b.code, 30),
+      sopLabel: [sopText(b.code, 30), title].filter(Boolean).join(" · "),
+      what: sopText(b.what, 5000) || `Add "${title}" to ${t.department}'s SOPs.`,
+      why: sopText(b.why, 3000) || `From the task "${t.title || "task"}".`,
+      status: "pending", by: req.user.username, at: Date.now(),
+      needAll: true, approvals: [], fromTask: { id: t.id, title: t.title || "", fileId: meta.id, company: taskCompany(t) },
+    };
+    await putFile(`sop_request_files/${r.id}`, file.body, "application/pdf");
+    r.file = { name: meta.name, size: file.body.length, at: Date.now() };
+    await withSops((d) => { sopShape(d).requests.push(r); });
+    await withTasks((list) => {
+      const x = list.find((y) => y.id === t.id);
+      const f = x && (x.files || []).find((y) => y.id === meta.id);
+      if (f) { f.sopRequest = r.id; f.sopStatus = "pending"; }
+    });
+    res.status(201).json(sopRequestView(r, req.user, doc, await leadershipNames()));
   })
 );
 
